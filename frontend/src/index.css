@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Hind Siliguri", ui-sans-serif, system-ui, sans-serif;
+  --color-navy-900: #141c4f;
+  --color-navy-800: #1e2761;
+  --color-brand: #00a896;
+  --color-brand-dark: #008577;
+}
