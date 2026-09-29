@@ -1,93 +1,78 @@
-import { createContext, useContext, useState } from 'react'
-
-// TEMPORARY mock users. They will be replaced by the backend (FastAPI + database).
-// To test real Google sign-in, add your own Gmail here with the role you want, e.g.
-// { email: 'your.name@gmail.com', password: 'unused123', name: 'Your Name', role: 'teacher' }
-const MOCK_USERS = [
-  { email: 'admin@kuet.ac.bd', password: 'admin123', name: 'System Admin', role: 'admin' },
-  { email: 'teacher@kuet.ac.bd', password: 'teacher123', name: 'Sk Md Masudul Ahsan', role: 'teacher' },
-  { email: 'student@kuet.ac.bd', password: 'student123', name: 'Tanha Islam Sinthi', role: 'student' },
-]
-
-// Never keep the password in app state or localStorage
-const toSafeUser = ({ email, name, role }) => ({ email, name, role })
-
-// Decode the payload of a JWT (handles base64url and UTF-8 names)
-function decodeJwtPayload(token) {
-  const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
-  const json = decodeURIComponent(
-    atob(base64)
-      .split('')
-      .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-      .join(''),
-  )
-  return JSON.parse(json)
-}
+import { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import api, { TOKEN_KEY, errorMessage } from '../lib/api'
 
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem('user'))
-    } catch {
-      return null
-    }
-  })
+  const queryClient = useQueryClient()
+  const [user, setUser] = useState(null)
+  // For students: which registration steps are done { profile, face, courses, complete }
+  const [onboarding, setOnboarding] = useState(null)
+  const [loading, setLoading] = useState(() => Boolean(localStorage.getItem(TOKEN_KEY)))
 
-  const persist = (nextUser) => {
-    setUser(nextUser)
-    localStorage.setItem('user', JSON.stringify(nextUser))
-    return nextUser
-  }
-
-  // Email + password login
-  const login = async (email, password) => {
-    // TODO: replace with
-    // const { data } = await axios.post('/api/auth/login', { email, password })
-    // and store the JWT returned by the backend.
-    const found = MOCK_USERS.find(
-      (u) => u.email === email.trim().toLowerCase() && u.password === password,
-    )
-    if (!found) throw new Error('Incorrect email or password.')
-    return persist(toSafeUser(found))
-  }
-
-  // Google login. `credential` is the Google ID token (a JWT).
-  const loginWithGoogle = async (credential) => {
-    // SECURITY: in production, send the ID token to the backend:
-    //   const { data } = await axios.post('/api/auth/google', { credential })
-    // The backend verifies the token signature with Google and returns the app's own JWT.
-    // The frontend must NOT trust the decoded token by itself. Decoding here is for the mock flow only.
-    let profile
-    try {
-      profile = decodeJwtPayload(credential)
-    } catch {
-      throw new Error('Invalid Google sign-in response. Please try again.')
-    }
-
-    if (!profile.email || profile.email_verified === false) {
-      throw new Error('This Google account has no verified email address.')
-    }
-
-    // Google login never creates accounts or assigns roles.
-    // Only emails already registered by an admin can sign in.
-    const found = MOCK_USERS.find((u) => u.email === profile.email.toLowerCase())
-    if (!found) {
-      throw new Error(
-        'This Google account is not registered in the system. Please contact the admin.',
-      )
-    }
-    return persist({ ...toSafeUser(found), picture: profile.picture })
-  }
-
-  const logout = () => {
+  const logout = useCallback(() => {
+    localStorage.removeItem(TOKEN_KEY)
     setUser(null)
-    localStorage.removeItem('user')
+    setOnboarding(null)
+    queryClient.clear()
+  }, [queryClient])
+
+  // On page load: if a token is saved, ask the backend who we are
+  useEffect(() => {
+    if (!localStorage.getItem(TOKEN_KEY)) return
+    api
+      .get('/auth/me')
+      .then(({ data }) => {
+        setUser(data.user)
+        setOnboarding(data.onboarding)
+      })
+      .catch(logout)
+      .finally(() => setLoading(false))
+  }, [logout])
+
+  // Token expired while using the app
+  useEffect(() => {
+    window.addEventListener('auth:expired', logout)
+    return () => window.removeEventListener('auth:expired', logout)
+  }, [logout])
+
+  const startSession = (data) => {
+    localStorage.setItem(TOKEN_KEY, data.access_token)
+    setUser(data.user)
+    setOnboarding(data.onboarding)
+    return { ...data.user, onboarding: data.onboarding }
+  }
+
+  const call = async (url, body) => {
+    try {
+      const { data } = await api.post(url, body)
+      return startSession(data)
+    } catch (error) {
+      throw new Error(errorMessage(error))
+    }
+  }
+
+  // Teachers and admins: email + password
+  const login = (email, password) => call('/auth/login', { email, password })
+
+  // Students: Google access token (from popup flow). The BACKEND verifies it with Google's userinfo API.
+  const loginWithGoogle = (credential) => call('/auth/google', { credential })
+
+  // Testing without Google (only works while DEV_LOGIN_ENABLED=true on the backend)
+  const devLogin = (email) => call('/auth/dev-login', { email })
+
+  // Re-read the user after changing the profile, e.g. new name
+  const refresh = async () => {
+    const { data } = await api.get('/auth/me')
+    setUser(data.user)
+    setOnboarding(data.onboarding)
   }
 
   return (
-    <AuthContext.Provider value={{ user, login, loginWithGoogle, logout }}>
+    <AuthContext.Provider
+      value={{ user, onboarding, loading, login, loginWithGoogle, devLogin, logout, refresh, setOnboarding }}
+    >
       {children}
     </AuthContext.Provider>
   )

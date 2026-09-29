@@ -3,7 +3,11 @@ import ProtectedRoute from './components/ProtectedRoute'
 import DashboardLayout from './layouts/DashboardLayout'
 import Login from './pages/auth/Login'
 import Placeholder from './pages/Placeholder'
+import Onboarding from './pages/student/Onboarding'
 import StudentDashboard from './pages/student/StudentDashboard'
+import MyAttendance from './pages/student/MyAttendance'
+import MyCourses from './pages/student/MyCourses'
+import MyProfile from './pages/student/MyProfile'
 
 export default function App() {
   return (
@@ -20,13 +24,18 @@ export default function App() {
         </Route>
       </Route>
 
-      {/* Student */}
+      {/* Student: first-time registration (profile -> face -> courses) */}
+      <Route element={<ProtectedRoute role="student" setupPage />}>
+        <Route path="/student/setup" element={<Onboarding />} />
+      </Route>
+
+      {/* Student: only after registration is complete */}
       <Route element={<ProtectedRoute role="student" />}>
         <Route path="/student" element={<DashboardLayout />}>
           <Route index element={<StudentDashboard />} />
-          <Route path="attendance" element={<Placeholder title="My Attendance" />} />
-          <Route path="courses" element={<Placeholder title="Courses" />} />
-          <Route path="face" element={<Placeholder title="Face Enrollment" />} />
+          <Route path="attendance" element={<MyAttendance />} />
+          <Route path="courses" element={<MyCourses />} />
+          <Route path="profile" element={<MyProfile />} />
         </Route>
       </Route>
 

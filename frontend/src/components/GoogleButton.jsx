@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
-import { GoogleLogin } from '@react-oauth/google'
+import { useState } from 'react'
+import { useGoogleLogin } from '@react-oauth/google'
+import { ArrowRight, Sparkles } from 'lucide-react'
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
 
@@ -14,74 +15,85 @@ function GoogleLogo() {
   )
 }
 
-// Real mode: Google's official button. Returns an ID token (credential).
+// Real mode: Opens a Google popup to sign in.
 function RealGoogleButton({ onCredential, onError, disabled }) {
-  const containerRef = useRef(null)
-  const [width, setWidth] = useState(0)
+  const [busy, setBusy] = useState(false)
 
-  // Google's button needs a pixel width (200-400), so match the container
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const update = () => setWidth(Math.min(Math.round(el.offsetWidth), 400))
-    update()
-    const observer = new ResizeObserver(update)
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
+  const googleLogin = useGoogleLogin({
+    onSuccess: (tokenResponse) => {
+      setBusy(false)
+      onCredential(tokenResponse.access_token)
+    },
+    onError: (errorResponse) => {
+      setBusy(false)
+      console.error('Google login error:', errorResponse)
+      onError('Google sign-in was cancelled or failed. Please try again.')
+    },
+    onNonOAuthError: (error) => {
+      setBusy(false)
+      console.error('Google non-OAuth error:', error)
+      if (error?.type === 'popup_closed') return
+      onError('Google sign-in popup was blocked. Please allow popups for this site.')
+    },
+  })
 
-  return (
-    <div
-      ref={containerRef}
-      className={`flex justify-center ${disabled ? 'pointer-events-none opacity-60' : ''}`}
-    >
-      {width > 0 && (
-        <GoogleLogin
-          onSuccess={(response) => onCredential(response.credential)}
-          onError={() => onError('Google sign-in was cancelled or failed. Please try again.')}
-          text="continue_with"
-          theme="outline"
-          size="large"
-          shape="rectangular"
-          logo_alignment="center"
-          width={String(width)}
-        />
-      )}
-    </div>
-  )
-}
-
-// Demo mode (no client ID): simulates a Google sign-in as student@kuet.ac.bd
-function DemoGoogleButton({ onCredential, disabled }) {
   const handleClick = () => {
-    const payload = {
-      email: 'student@kuet.ac.bd',
-      name: 'Demo Student',
-      email_verified: true,
-    }
-    // Unsigned fake token, only understood by the mock AuthContext
-    const fakeCredential = ['demo', btoa(JSON.stringify(payload)), 'demo'].join('.')
-    onCredential(fakeCredential)
+    setBusy(true)
+    googleLogin()
   }
 
   return (
-    <div>
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={disabled || busy}
+      className="group relative flex h-11 w-full items-center justify-center gap-3 rounded-xl border border-slate-300/90 bg-white font-display text-xs font-semibold text-slate-800 shadow-2xs transition-all duration-200 hover:border-slate-400 hover:bg-slate-50 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+    >
+      <GoogleLogo />
+      <span>{busy ? 'Signing in with Google…' : 'Continue with Google'}</span>
+    </button>
+  )
+}
+
+// Dev mode (no client ID)
+function DevLoginButton({ onDevLogin, disabled }) {
+  const [email, setEmail] = useState('')
+
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    onDevLogin(email.trim())
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-2.5">
+      <div className="relative">
+        <input
+          type="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="yourroll@stud.kuet.ac.bd"
+          aria-label="Student email for dev login"
+          className="h-10.5 w-full rounded-xl border border-teal-200 bg-white px-3.5 text-xs text-slate-900 shadow-2xs outline-none transition focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+        />
+      </div>
       <button
-        type="button"
-        onClick={handleClick}
+        type="submit"
         disabled={disabled}
-        className="flex h-11 w-full items-center justify-center gap-3 rounded-lg border border-slate-300 bg-white text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand disabled:cursor-not-allowed disabled:opacity-60"
+        className="flex h-10.5 w-full items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50/80 font-display text-xs font-semibold text-teal-800 transition hover:bg-teal-700 hover:text-white active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
       >
         <GoogleLogo />
-        Continue with Google
+        <span>Continue with Google (Dev Login)</span>
+        <ArrowRight size={14} />
       </button>
-      <p className="mt-2 text-center text-xs text-slate-400">
-        Demo mode: signs in as student@kuet.ac.bd (no Google client ID set).
-      </p>
-    </div>
+      <div className="flex items-center justify-center gap-1.5 text-[10px] text-slate-500">
+        <Sparkles size={11} className="text-amber-500" />
+        <span>Dev mode active · try entering <strong>demo@stud.kuet.ac.bd</strong></span>
+      </div>
+    </form>
   )
 }
 
 export default function GoogleButton(props) {
-  return CLIENT_ID ? <RealGoogleButton {...props} /> : <DemoGoogleButton {...props} />
+  return CLIENT_ID ? <RealGoogleButton {...props} /> : <DevLoginButton {...props} />
 }
