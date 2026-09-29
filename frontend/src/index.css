@@ -1,9 +1,134 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Hind Siliguri", ui-sans-serif, system-ui, sans-serif;
-  --color-navy-900: #141c4f;
-  --color-navy-800: #1e2761;
-  --color-brand: #00a896;
-  --color-brand-dark: #008577;
+  --font-sans: "Plus Jakarta Sans", "Inter", "Hind Siliguri", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", "Plus Jakarta Sans", sans-serif;
+  
+  /* Soothing Oceanic & Slate Palette */
+  --color-slate-850: #131c2e;
+  --color-slate-900: #0f172a;
+  --color-slate-950: #0a101d;
+
+  --color-teal-brand: #0d9488;
+  --color-teal-light: #14b8a6;
+  --color-teal-soft: #ccfbf1;
+  --color-teal-dark: #0f766e;
+  
+  --color-brand: #0f766e;
+  --color-brand-light: #14b8a6;
+  --color-brand-lighter: #99f6e4;
+  --color-brand-dark: #115e59;
+  --color-brand-darker: #134e4a;
+
+  --color-sage: #10b981;
+  --color-sand: #f59e0b;
+  --color-coral: #f43f5e;
+}
+
+/* ─── Base Styles ─── */
+body {
+  font-family: var(--font-sans);
+  background-color: #f8fafc;
+  color: #1e293b;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, .font-display {
+  font-family: var(--font-display);
+}
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ─── Animations & Keyframes ─── */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes progress-fill {
+  from { width: 0%; }
+}
+
+@keyframes scan-anim {
+  0% { top: 6%; opacity: 0.3; }
+  50% { opacity: 0.9; }
+  100% { top: 94%; opacity: 0.3; }
+}
+
+@keyframes pulse-gentle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.88; transform: scale(1.015); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-progress {
+  animation: progress-fill 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-scan {
+  animation: scan-anim 2.6s ease-in-out infinite alternate;
+}
+
+.animate-pulse-gentle {
+  animation: pulse-gentle 3.5s ease-in-out infinite;
+}
+
+/* ─── Soothing Glass & Surfaces ─── */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.glass-card-dark {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 100%);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.bg-soothing-mesh {
+  background-color: #0f1c2e;
+  background-image: 
+    radial-gradient(at 15% 15%, rgba(13, 148, 136, 0.18) 0px, transparent 50%),
+    radial-gradient(at 85% 85%, rgba(56, 189, 248, 0.12) 0px, transparent 50%);
+}
+
+.bg-radial-grid {
+  background-size: 24px 24px;
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
 }
