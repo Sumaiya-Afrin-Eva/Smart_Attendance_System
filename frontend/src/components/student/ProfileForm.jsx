@@ -77,7 +77,7 @@ export default function ProfileForm({ profile, onSaved, submitLabel = 'Save Prof
             id="email"
             value={user.email}
             disabled
-            className={`${inputClass} bg-slate-50 text-slate-500 font-medium`}
+            className={`${inputClass} bg-stone-100/60 text-stone-500 font-mono font-medium`}
           />
         </Field>
 
@@ -127,7 +127,7 @@ export default function ProfileForm({ profile, onSaved, submitLabel = 'Save Prof
 
       <ErrorBox>{Object.keys(errors).length ? null : error}</ErrorBox>
 
-      <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-4">
+      <div className="flex items-center justify-end gap-3 border-t border-[#f0eee6] pt-4">
         {saved && !onSaved && (
           <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 animate-fade-in">
             <Check size={14} /> Profile successfully saved!
