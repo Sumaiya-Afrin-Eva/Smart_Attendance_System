@@ -50,24 +50,24 @@ function StatCard({ icon: Icon, label, value, hint, variant = 'default', trend }
 
   return (
     <div
-      className={`group relative overflow-hidden rounded-2xl border p-5 transition-all duration-200 ${styles[variant]}`}
+      className={`group relative overflow-hidden rounded-2xl border p-5.5 transition-all duration-200 ${styles[variant]}`}
     >
       <div className="flex items-center justify-between">
-        <p className="text-[11px] font-bold uppercase tracking-wider text-stone-500">{label}</p>
-        <div className={`flex h-9.5 w-9.5 items-center justify-center rounded-xl transition-transform group-hover:scale-105 ${iconStyles[variant]}`}>
-          <Icon size={17} />
+        <p className="text-xs font-bold uppercase tracking-wider text-stone-500">{label}</p>
+        <div className={`flex h-10 w-10 items-center justify-center rounded-xl transition-transform group-hover:scale-105 ${iconStyles[variant]}`}>
+          <Icon size={19} />
         </div>
       </div>
-      <div className="mt-3 flex items-baseline gap-2">
-        <p className="font-display text-3xl font-extrabold tracking-tight text-stone-900">{value}</p>
+      <div className="mt-3.5 flex items-baseline gap-2.5">
+        <p className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight text-stone-900">{value}</p>
         {trend && (
-          <span className="flex items-center text-xs font-semibold text-emerald-700">
-            <TrendingUp size={13} className="mr-0.5" />
+          <span className="flex items-center text-xs sm:text-sm font-semibold text-emerald-700">
+            <TrendingUp size={14} className="mr-0.5" />
             {trend}
           </span>
         )}
       </div>
-      <p className="mt-1.5 text-xs text-stone-500 font-medium">{hint}</p>
+      <p className="mt-2 text-xs sm:text-sm text-stone-600 font-medium">{hint}</p>
     </div>
   )
 }
@@ -75,14 +75,14 @@ function StatCard({ icon: Icon, label, value, hint, variant = 'default', trend }
 function AttendanceBar({ course, rule }) {
   const pct = course.percent ?? 0
   return (
-    <div className="relative mt-2">
+    <div className="relative mt-2.5">
       <div
         role="progressbar"
         aria-label={`${course.title} attendance`}
         aria-valuenow={Math.round(pct)}
         aria-valuemin={0}
         aria-valuemax={100}
-        className="relative h-2 w-full overflow-hidden rounded-full bg-stone-100 border border-stone-200/60"
+        className="relative h-2.5 w-full overflow-hidden rounded-full bg-stone-100 border border-stone-200/60"
       >
         <div
           className="h-full rounded-full transition-all duration-500 shadow-2xs"
@@ -90,11 +90,11 @@ function AttendanceBar({ course, rule }) {
         />
       </div>
       {/* Threshold markers */}
-      <div className="absolute -top-1 inset-x-0 pointer-events-none h-4">
+      <div className="absolute -top-1 inset-x-0 pointer-events-none h-4.5">
         {[rule.incomplete_below, rule.full_at].map((mark) => (
           <span
             key={mark}
-            className="absolute top-0 h-4 w-0.5 -translate-x-1/2 bg-stone-400/50"
+            className="absolute top-0 h-4.5 w-0.5 -translate-x-1/2 bg-stone-400/50"
             style={{ left: `${mark}%` }}
             title={`Threshold: ${mark}%`}
           />
@@ -107,7 +107,7 @@ function AttendanceBar({ course, rule }) {
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null
   return (
-    <div className="rounded-xl border border-stone-700/60 bg-stone-900/90 p-3 text-xs text-white shadow-lg backdrop-blur-md">
+    <div className="rounded-xl border border-stone-700/60 bg-stone-900/90 p-3.5 text-xs sm:text-sm text-white shadow-lg backdrop-blur-md">
       <p className="mb-1.5 font-bold text-white">{label}</p>
       {payload.map((p) => (
         <div key={p.dataKey} className="flex items-center justify-between gap-3 text-stone-300">
@@ -139,23 +139,23 @@ export default function StudentDashboard() {
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-7">
       {/* Botanical Forest Welcome Banner */}
-      <div className="relative overflow-hidden rounded-3xl border border-emerald-900/20 bg-gradient-to-r from-[#0f3422] via-[#14422c] to-[#184d34] p-6 text-white shadow-sm lg:p-7">
+      <div className="relative overflow-hidden rounded-3xl border border-emerald-900/20 bg-gradient-to-r from-[#0f3422] via-[#14422c] to-[#184d34] p-7 text-white shadow-sm lg:p-8">
         {/* Soft glowing ambient orbs */}
         <div className="pointer-events-none absolute -right-12 -top-12 h-64 w-64 rounded-full bg-emerald-400/15 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-12 -left-12 h-64 w-64 rounded-full bg-amber-400/10 blur-3xl" />
 
         <div className="relative z-10 flex flex-wrap items-center justify-between gap-6">
           <div className="max-w-xl">
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-950/60 px-3.5 py-1 text-xs font-semibold text-emerald-200 shadow-2xs">
-              <Sparkles size={13} className="text-emerald-300" />
+            <div className="mb-3.5 inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-950/60 px-4 py-1.5 text-xs sm:text-sm font-semibold text-emerald-200 shadow-2xs">
+              <Sparkles size={14} className="text-emerald-300" />
               <span>KUET Computer Science &amp; Engineering</span>
             </div>
-            <h2 className="font-display text-2xl font-bold tracking-tight text-white lg:text-3xl">
+            <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-white lg:text-4xl">
               {greeting}, {firstName} 👋
             </h2>
-            <p className="mt-2 text-xs sm:text-sm text-emerald-100/90 leading-relaxed">
+            <p className="mt-2.5 text-sm sm:text-base text-emerald-100/90 leading-relaxed">
               Semester {data.semester} automated face recognition log tracker. You have attended{' '}
               <strong className="text-white">{s.attended}</strong> of{' '}
               <strong className="text-white">{s.held}</strong> scheduled lectures with an overall attendance of{' '}
@@ -163,10 +163,10 @@ export default function StudentDashboard() {
             </p>
           </div>
 
-          <div className="flex flex-col items-end gap-3">
+          <div className="flex flex-col items-end gap-3.5">
             <SemesterSelect value={semester} onChange={setSemester} />
-            <div className="flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-950/40 px-3 py-1 text-xs text-emerald-200 font-medium shadow-2xs">
-              <CheckCircle2 size={14} className="text-emerald-300" />
+            <div className="flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-950/40 px-3.5 py-1 text-xs sm:text-sm text-emerald-200 font-medium shadow-2xs">
+              <CheckCircle2 size={15} className="text-emerald-300" />
               <span>Face Recognition Active</span>
             </div>
           </div>
@@ -174,7 +174,7 @@ export default function StudentDashboard() {
       </div>
 
       {/* 4 Summary Stat Cards */}
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           icon={Percent}
           label="Overall Attendance"
@@ -214,9 +214,9 @@ export default function StudentDashboard() {
             action={
               <Link
                 to="/student/courses"
-                className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-800 to-teal-800 px-4 py-2 text-xs font-semibold text-white shadow-2xs hover:from-emerald-700 hover:to-teal-700"
+                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-800 to-teal-800 px-5 py-2.5 text-sm font-semibold text-white shadow-2xs hover:from-emerald-700 hover:to-teal-700"
               >
-                Register Courses <ChevronRight size={14} />
+                Register Courses <ChevronRight size={16} />
               </Link>
             }
           />
@@ -233,23 +233,23 @@ export default function StudentDashboard() {
               {courses.map((c) => (
                 <li
                   key={c.id}
-                  className="grid gap-4 px-6 py-4 transition-colors hover:bg-stone-50/70 sm:grid-cols-12 sm:items-center"
+                  className="grid gap-4 px-6 py-4.5 transition-colors hover:bg-stone-50/70 sm:grid-cols-12 sm:items-center"
                 >
                   <div className="min-w-0 sm:col-span-5">
-                    <div className="flex items-center gap-2">
-                      <p className="truncate font-display text-sm font-bold text-stone-900">{c.title}</p>
-                      <Badge tone={c.type === 'Lab' ? 'cyan' : 'slate'} className="text-[10px]">
+                    <div className="flex items-center gap-2.5">
+                      <p className="truncate font-display text-base font-bold text-stone-900">{c.title}</p>
+                      <Badge tone={c.type === 'Lab' ? 'cyan' : 'slate'} className="text-xs">
                         {c.type}
                       </Badge>
                     </div>
-                    <p className="mt-0.5 text-xs text-stone-500 font-medium">
-                      <span className="font-semibold text-stone-700">{c.code}</span> · {c.attended}/{c.held} lectures
-                      {c.late > 0 && <span className="text-amber-700 font-semibold"> · {c.late} late</span>}
+                    <p className="mt-1 text-xs sm:text-sm text-stone-600 font-medium">
+                      <span className="font-semibold text-stone-800">{c.code}</span> · {c.attended}/{c.held} lectures
+                      {c.late > 0 && <span className="text-amber-750 font-semibold"> · {c.late} late</span>}
                     </p>
                   </div>
 
                   <div className="sm:col-span-4">
-                    <div className="flex justify-between text-xs font-semibold">
+                    <div className="flex justify-between text-xs sm:text-sm font-semibold">
                       <span className="text-stone-500">Progress</span>
                       <span className="text-stone-900 font-mono">{formatPercent(c.percent)}</span>
                     </div>
@@ -257,7 +257,7 @@ export default function StudentDashboard() {
                   </div>
 
                   <div className="flex items-center justify-between gap-3 sm:col-span-3 sm:justify-end">
-                    <span className="font-display text-sm font-bold text-stone-900 font-mono">
+                    <span className="font-display text-base font-bold text-stone-900 font-mono">
                       {formatMarks(c, rule.full_marks)}
                     </span>
                     <Badge tone={GRADE_TONE[c.grade]} withDot>
@@ -274,15 +274,15 @@ export default function StudentDashboard() {
             {/* Trend Chart */}
             <Card title="Attendance Progression Trend" subtitle="Weekly vs Cumulative performance" icon={TrendingUp}>
               {trend.length ? (
-                <div className="h-64 px-2 py-4">
+                <div className="h-68 px-2 py-4">
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={trend} margin={{ top: 12, right: 20, bottom: 0, left: -10 }}>
+                    <LineChart data={trend} margin={{ top: 12, right: 20, bottom: 0, left: -5 }}>
                       <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="label" tick={{ fontSize: 11, fill: COLORS.axis }} tickLine={false} axisLine={false} />
+                      <XAxis dataKey="label" tick={{ fontSize: 12, fill: COLORS.axis }} tickLine={false} axisLine={false} />
                       <YAxis
                         domain={[0, 100]}
                         ticks={[0, 60, 90, 100]}
-                        tick={{ fontSize: 11, fill: COLORS.axis }}
+                        tick={{ fontSize: 12, fill: COLORS.axis }}
                         tickLine={false}
                         axisLine={false}
                         unit="%"
@@ -296,7 +296,7 @@ export default function StudentDashboard() {
                         name="Weekly Rate"
                         stroke="#a8a29e"
                         strokeWidth={2}
-                        dot={{ r: 3, fill: '#a8a29e' }}
+                        dot={{ r: 3.5, fill: '#a8a29e' }}
                       />
                       <Line
                         type="monotone"
@@ -304,8 +304,8 @@ export default function StudentDashboard() {
                         name="Cumulative Rate"
                         stroke={COLORS.emerald}
                         strokeWidth={2.5}
-                        dot={{ r: 4, fill: COLORS.emerald }}
-                        activeDot={{ r: 6, fill: COLORS.emeraldLight }}
+                        dot={{ r: 4.5, fill: COLORS.emerald }}
+                        activeDot={{ r: 6.5, fill: COLORS.emeraldLight }}
                       />
                     </LineChart>
                   </ResponsiveContainer>
@@ -313,12 +313,12 @@ export default function StudentDashboard() {
               ) : (
                 <EmptyState icon={CalendarX} title="No trend records yet" />
               )}
-              <div className="flex flex-wrap items-center gap-4 border-t border-[#f0eee6] px-5 py-3 text-xs text-stone-500">
-                <span className="flex items-center gap-1.5 font-medium text-stone-800">
-                  <span className="h-1 w-4 rounded-full bg-emerald-700" /> Cumulative
+              <div className="flex flex-wrap items-center gap-4 border-t border-[#f0eee6] px-6 py-3.5 text-xs sm:text-sm text-stone-600">
+                <span className="flex items-center gap-1.5 font-medium text-stone-900">
+                  <span className="h-1.5 w-4 rounded-full bg-emerald-700" /> Cumulative
                 </span>
                 <span className="flex items-center gap-1.5 font-medium text-stone-500">
-                  <span className="h-1 w-4 rounded-full bg-stone-400" /> Weekly
+                  <span className="h-1.5 w-4 rounded-full bg-stone-400" /> Weekly
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="w-4 border-t-2 border-dashed border-emerald-600" /> {rule.full_at}% Target
@@ -331,15 +331,15 @@ export default function StudentDashboard() {
 
             {/* By Course Bar Chart */}
             <Card title="Attendance By Course" subtitle="Comparison against marking benchmarks" icon={Award}>
-              <div className="h-64 px-2 py-4">
+              <div className="h-68 px-2 py-4">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={byCourse} margin={{ top: 12, right: 20, bottom: 0, left: -10 }}>
+                  <BarChart data={byCourse} margin={{ top: 12, right: 20, bottom: 0, left: -5 }}>
                     <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="name" tick={{ fontSize: 11, fill: COLORS.axis }} tickLine={false} axisLine={false} />
+                    <XAxis dataKey="name" tick={{ fontSize: 12, fill: COLORS.axis }} tickLine={false} axisLine={false} />
                     <YAxis
                       domain={[0, 100]}
                       ticks={[0, 60, 90, 100]}
-                      tick={{ fontSize: 11, fill: COLORS.axis }}
+                      tick={{ fontSize: 12, fill: COLORS.axis }}
                       tickLine={false}
                       axisLine={false}
                       unit="%"
@@ -347,7 +347,7 @@ export default function StudentDashboard() {
                     <ReferenceLine y={rule.full_at} stroke={COLORS.emerald} strokeDasharray="4 4" strokeOpacity={0.6} />
                     <ReferenceLine y={rule.incomplete_below} stroke={COLORS.rose} strokeDasharray="4 4" strokeOpacity={0.6} />
                     <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(28, 25, 23, 0.02)' }} />
-                    <Bar dataKey="percent" name="Attendance Rate" radius={[6, 6, 0, 0]} maxBarSize={38}>
+                    <Bar dataKey="percent" name="Attendance Rate" radius={[6, 6, 0, 0]} maxBarSize={40}>
                       {byCourse.map((c) => (
                         <Cell key={c.name} fill={GRADE_COLOR[c.grade]} />
                       ))}
@@ -355,14 +355,14 @@ export default function StudentDashboard() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-              <div className="flex flex-wrap items-center gap-4 border-t border-[#f0eee6] px-5 py-3 text-xs text-stone-500">
-                <span className="flex items-center gap-1.5 font-medium text-emerald-800">
+              <div className="flex flex-wrap items-center gap-4 border-t border-[#f0eee6] px-6 py-3.5 text-xs sm:text-sm text-stone-600">
+                <span className="flex items-center gap-1.5 font-medium text-emerald-850">
                   <span className="h-2.5 w-2.5 rounded-full bg-emerald-600" /> Full (≥90%)
                 </span>
-                <span className="flex items-center gap-1.5 font-medium text-amber-800">
+                <span className="flex items-center gap-1.5 font-medium text-amber-850">
                   <span className="h-2.5 w-2.5 rounded-full bg-amber-600" /> Partial (60-89%)
                 </span>
-                <span className="flex items-center gap-1.5 font-medium text-rose-800">
+                <span className="flex items-center gap-1.5 font-medium text-rose-850">
                   <span className="h-2.5 w-2.5 rounded-full bg-rose-600" /> Incomplete (&lt;60%)
                 </span>
               </div>
@@ -379,19 +379,19 @@ export default function StudentDashboard() {
               action={
                 <Link
                   to="/student/attendance"
-                  className="flex items-center gap-1 text-xs font-semibold text-emerald-800 hover:text-emerald-900"
+                  className="flex items-center gap-1 text-xs sm:text-sm font-semibold text-emerald-800 hover:text-emerald-900"
                 >
-                  View All History <ChevronRight size={14} />
+                  View All History <ChevronRight size={15} />
                 </Link>
               }
             >
               {recent.length ? (
                 <ul className="divide-y divide-[#f0eee6]">
                   {recent.map((r) => (
-                    <li key={r.session_id} className="flex items-center justify-between gap-4 px-6 py-3.5 transition-colors hover:bg-stone-50/60">
+                    <li key={r.session_id} className="flex items-center justify-between gap-4 px-6 py-4 transition-colors hover:bg-stone-50/60">
                       <div className="min-w-0">
-                        <p className="truncate font-display text-sm font-semibold text-stone-900">{r.course_title}</p>
-                        <p className="mt-0.5 text-xs text-stone-500">
+                        <p className="truncate font-display text-sm sm:text-base font-semibold text-stone-900">{r.course_title}</p>
+                        <p className="mt-0.5 text-xs sm:text-sm text-stone-500">
                           <span className="font-semibold text-stone-700">{r.course_code}</span> · {formatDate(r.start_at)} · {formatTime(r.start_at)}
                         </p>
                       </div>
@@ -410,17 +410,17 @@ export default function StudentDashboard() {
               {upcoming.length ? (
                 <ul className="divide-y divide-[#f0eee6]">
                   {upcoming.map((c) => (
-                    <li key={c.session_id} className="flex items-center gap-3.5 px-6 py-3.5 transition-colors hover:bg-stone-50/60">
-                      <div className="w-18 shrink-0 rounded-xl border border-emerald-200 bg-emerald-50/60 py-2 text-center shadow-2xs">
-                        <p className="font-display text-xs font-bold text-stone-900 font-mono">{formatTime(c.start_at)}</p>
-                        <p className="text-[10px] font-semibold text-emerald-800 uppercase tracking-wider">{relativeDay(c.start_at)}</p>
+                    <li key={c.session_id} className="flex items-center gap-3.5 px-6 py-4 transition-colors hover:bg-stone-50/60">
+                      <div className="w-20 shrink-0 rounded-xl border border-emerald-200 bg-emerald-50/60 py-2.5 text-center shadow-2xs">
+                        <p className="font-display text-xs sm:text-sm font-bold text-stone-900 font-mono">{formatTime(c.start_at)}</p>
+                        <p className="text-[11px] font-semibold text-emerald-800 uppercase tracking-wider">{relativeDay(c.start_at)}</p>
                       </div>
                       <div className="min-w-0">
-                        <p className="truncate font-display text-xs font-bold text-stone-900">{c.course_title}</p>
-                        <p className="mt-0.5 flex items-center gap-1.5 text-xs text-stone-500">
-                          <MapPin size={12} className="text-stone-400" />
+                        <p className="truncate font-display text-sm font-bold text-stone-900">{c.course_title}</p>
+                        <p className="mt-0.5 flex items-center gap-1.5 text-xs sm:text-sm text-stone-500">
+                          <MapPin size={13} className="text-stone-400" />
                           <span>{c.room ?? 'Room TBA'}</span>
-                          <span className="rounded bg-stone-100 px-1 text-[10px] font-semibold text-stone-600">{c.type}</span>
+                          <span className="rounded bg-stone-100 px-1.5 text-xs font-semibold text-stone-600">{c.type}</span>
                         </p>
                       </div>
                     </li>
@@ -435,13 +435,13 @@ export default function StudentDashboard() {
       )}
 
       {/* Marks Calculation Guide Banner */}
-      <div className="flex items-start gap-3.5 rounded-2xl border border-emerald-200/90 bg-gradient-to-r from-emerald-50/60 via-stone-50/50 to-white p-5 shadow-2xs">
-        <div className="flex h-9.5 w-9.5 shrink-0 items-center justify-center rounded-xl border border-emerald-300/80 bg-emerald-100 text-emerald-900 shadow-2xs">
-          <Info size={18} />
+      <div className="flex items-start gap-4 rounded-2xl border border-emerald-200/90 bg-gradient-to-r from-emerald-50/60 via-stone-50/50 to-white p-5.5 shadow-2xs">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-300/80 bg-emerald-100 text-emerald-900 shadow-2xs">
+          <Info size={20} />
         </div>
         <div className="space-y-1">
-          <p className="font-display text-xs font-bold text-stone-900">KUET Academic Attendance Marks Breakdown</p>
-          <p className="text-xs text-stone-600 leading-relaxed">
+          <p className="font-display text-sm font-bold text-stone-900">KUET Academic Attendance Marks Breakdown</p>
+          <p className="text-xs sm:text-sm text-stone-600 leading-relaxed">
             Attendance marks are evaluated per course: Students achieving <strong>≥{rule.full_at}%</strong> receive the maximum{' '}
             <strong className="text-emerald-800">{rule.full_marks} marks</strong>. Between <strong>{rule.incomplete_below}%–{rule.full_at}%</strong> marks are scaled proportionally.
             Falling below <strong>{rule.incomplete_below}%</strong> results in an <strong className="text-rose-700">Incomplete</strong> status with 0 attendance marks.

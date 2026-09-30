@@ -158,34 +158,34 @@ export default function FaceCapture({ onSaved, submitLabel = 'Save Face Photos' 
 
                 {/* Live Instruction Banner */}
                 {!done && (
-                  <div className="absolute inset-x-0 bottom-0 border-t border-white/10 bg-slate-950/80 p-3 text-center backdrop-blur-xs">
-                    <p className="font-display text-xs font-bold text-white">
+                  <div className="absolute inset-x-0 bottom-0 border-t border-white/10 bg-slate-950/80 p-3.5 text-center backdrop-blur-xs">
+                    <p className="font-display text-sm font-bold text-white">
                       Pose {photos.length + 1} of {POSES.length}: {currentPose.text}
                     </p>
-                    <p className="text-[11px] text-emerald-300 font-medium">{currentPose.hint}</p>
+                    <p className="text-xs sm:text-sm text-emerald-300 font-medium mt-0.5">{currentPose.hint}</p>
                   </div>
                 )}
               </>
             ) : (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-slate-400 p-6 text-center">
-                <div className="flex h-13 w-13 items-center justify-center rounded-2xl bg-slate-900 border border-slate-800 text-emerald-400 shadow-inner">
-                  <CameraOff size={24} />
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3.5 text-slate-400 p-6 text-center">
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-900 border border-slate-800 text-emerald-400 shadow-inner">
+                  <CameraOff size={26} />
                 </div>
                 <div>
-                  <p className="font-display text-sm font-bold text-white">Camera Standby</p>
-                  <p className="text-xs text-slate-400 mt-0.5">Start your webcam to begin 5-angle face calibration</p>
+                  <p className="font-display text-base font-bold text-white">Camera Standby</p>
+                  <p className="text-xs sm:text-sm text-slate-400 mt-1">Start your webcam to begin 5-angle face calibration</p>
                 </div>
                 <Button onClick={startCamera} className="mt-2 cursor-pointer">
-                  <Camera size={16} /> Activate Webcam
+                  <Camera size={18} /> Activate Webcam
                 </Button>
               </div>
             )}
           </div>
 
           {cameraOn && (
-            <div className="mt-3 flex flex-wrap items-center gap-2.5">
+            <div className="mt-3.5 flex flex-wrap items-center gap-3">
               <Button onClick={capture} disabled={done} className="cursor-pointer">
-                <Camera size={16} /> Capture Pose ({photos.length + 1}/{POSES.length})
+                <Camera size={17} /> Capture Pose ({photos.length + 1}/{POSES.length})
               </Button>
               <Button variant="secondary" onClick={stopCamera} className="cursor-pointer">
                 Turn Off Camera
@@ -195,44 +195,44 @@ export default function FaceCapture({ onSaved, submitLabel = 'Save Face Photos' 
         </div>
 
         {/* Pose Thumbnails & Requirements */}
-        <div className="space-y-4 lg:col-span-2">
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4 text-xs text-stone-700">
-            <p className="font-display text-xs font-bold text-emerald-900 flex items-center gap-1.5">
-              <Sparkles size={14} className="text-emerald-700" /> Face Calibration Guidelines
+        <div className="space-y-4.5 lg:col-span-2">
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4.5 text-sm text-stone-700">
+            <p className="font-display text-sm font-bold text-emerald-950 flex items-center gap-2">
+              <Sparkles size={16} className="text-emerald-700" /> Face Calibration Guidelines
             </p>
-            <ul className="mt-2 space-y-1.5 text-stone-600">
-              <li className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-700" /> Face the camera directly under good lighting
+            <ul className="mt-2.5 space-y-2 text-xs sm:text-sm text-stone-600">
+              <li className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-emerald-700" /> Face the camera directly under good lighting
               </li>
-              <li className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-700" /> Align face within the oval HUD guide
+              <li className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-emerald-700" /> Align face within the oval HUD guide
               </li>
-              <li className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-700" /> Remove face masks and dark sunglasses
+              <li className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-emerald-700" /> Remove face masks and dark sunglasses
               </li>
-              <li className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-700" /> Single person in the camera frame
+              <li className="flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-emerald-700" /> Single person in the camera frame
               </li>
             </ul>
           </div>
 
           <div>
-            <div className="mb-2 flex items-center justify-between">
-              <p className="font-display text-xs font-bold uppercase tracking-wider text-stone-700">
+            <div className="mb-2.5 flex items-center justify-between">
+              <p className="font-display text-xs sm:text-sm font-bold uppercase tracking-wider text-stone-700">
                 Captured Photos ({photos.length}/{POSES.length})
               </p>
               {photos.length > 0 && (
                 <button
                   type="button"
                   onClick={clearPhotos}
-                  className="flex items-center gap-1 text-xs font-semibold text-rose-600 hover:text-rose-700 cursor-pointer"
+                  className="flex items-center gap-1 text-xs sm:text-sm font-semibold text-rose-600 hover:text-rose-700 cursor-pointer"
                 >
-                  <RotateCcw size={12} /> Reset all
+                  <RotateCcw size={14} /> Reset all
                 </button>
               )}
             </div>
 
-            <div className="grid grid-cols-5 gap-2">
+            <div className="grid grid-cols-5 gap-2.5">
               {POSES.map((pose, i) => (
                 <div
                   key={pose.text}
@@ -249,26 +249,26 @@ export default function FaceCapture({ onSaved, submitLabel = 'Save Face Photos' 
                         type="button"
                         onClick={() => removePhoto(i)}
                         aria-label={`Remove photo ${i + 1}`}
-                        className="absolute right-1 top-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-black/70 text-white hover:bg-rose-600 transition cursor-pointer"
+                        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white hover:bg-rose-600 transition cursor-pointer"
                       >
-                        <X size={10} />
+                        <X size={12} />
                       </button>
-                      <span className="absolute bottom-1 left-1 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-600 text-white shadow-2xs">
-                        <Check size={10} strokeWidth={3} />
+                      <span className="absolute bottom-1 left-1 flex h-4.5 w-4.5 items-center justify-center rounded-full bg-emerald-600 text-white shadow-2xs">
+                        <Check size={12} strokeWidth={3} />
                       </span>
                     </>
                   ) : (
                     <div className="flex h-full flex-col items-center justify-center text-stone-400">
-                      <span className="font-display text-xs font-bold font-mono">{i + 1}</span>
+                      <span className="font-display text-sm font-bold font-mono">{i + 1}</span>
                     </div>
                   )}
                 </div>
               ))}
             </div>
 
-            <div className="mt-3">
-              <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-semibold text-emerald-800 hover:text-emerald-900">
-                <ImageUp size={14} /> Upload image files instead
+            <div className="mt-3.5">
+              <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs sm:text-sm font-semibold text-emerald-800 hover:text-emerald-900">
+                <ImageUp size={16} /> Upload image files instead
                 <input type="file" accept="image/jpeg,image/png" multiple onChange={addFiles} className="sr-only" />
               </label>
             </div>
@@ -277,14 +277,14 @@ export default function FaceCapture({ onSaved, submitLabel = 'Save Face Photos' 
       </div>
 
       {warning && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3 text-xs font-medium text-amber-800">
+        <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-3.5 text-sm font-medium text-amber-800">
           {warning}
         </div>
       )}
       <ErrorBox>{error}</ErrorBox>
 
-      <div className="flex items-center justify-between border-t border-[#f0eee6] pt-4">
-        <p className="text-xs text-stone-500">
+      <div className="flex items-center justify-between border-t border-[#f0eee6] pt-5">
+        <p className="text-xs sm:text-sm text-stone-500">
           Minimum 3 clear face angles required for face recognition matching.
         </p>
         <Button onClick={upload} loading={saving} disabled={photos.length < 3} size="md">
