@@ -11,7 +11,7 @@ export default function SemesterSelect({ value, onChange }) {
         aria-label="Filter by Semester"
         value={value ?? ''}
         onChange={(e) => onChange(e.target.value || undefined)}
-        className="h-10 rounded-xl border border-stone-300/80 bg-white px-3.5 pr-8 text-xs font-bold text-stone-800 shadow-2xs outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 cursor-pointer"
+        className="h-11 rounded-xl border border-stone-300/80 bg-white px-4 pr-9 text-sm font-bold text-stone-800 shadow-2xs outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15 cursor-pointer"
       >
         <option value="">Current Active Semester</option>
         {semesters.map((s) => (

@@ -34,42 +34,42 @@ export default function Onboarding() {
     <div className="min-h-screen bg-[#faf9f5]">
       {/* Top Header */}
       <header className="border-b border-[#e7e5e0] bg-white/90 backdrop-blur-md sticky top-0 z-30">
-        <div className="mx-auto flex h-16 max-w-4xl items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-emerald-200/80 bg-emerald-800 text-white shadow-2xs">
-              <GraduationCap size={22} />
+        <div className="mx-auto flex h-18 max-w-4xl items-center justify-between px-5 sm:px-8">
+          <div className="flex items-center gap-3.5">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-emerald-200/80 bg-emerald-800 text-white shadow-2xs">
+              <GraduationCap size={24} />
             </div>
             <div>
-              <p className="font-display text-sm font-bold text-stone-900">Smart Attendance</p>
-              <p className="text-[11px] font-medium text-stone-500">KUET Student Registration</p>
+              <p className="font-display text-base font-bold text-stone-900">Smart Attendance</p>
+              <p className="text-xs font-medium text-stone-500">KUET Student Registration</p>
             </div>
           </div>
           <button
             onClick={handleLogout}
-            className="flex items-center gap-1.5 rounded-xl border border-stone-200 bg-white px-3 py-1.5 text-xs font-semibold text-stone-600 shadow-2xs hover:bg-stone-50 hover:text-stone-900 cursor-pointer"
+            className="flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3.5 py-2 text-xs sm:text-sm font-semibold text-stone-600 shadow-2xs hover:bg-stone-50 hover:text-stone-900 cursor-pointer"
           >
-            <LogOut size={14} /> Sign Out
+            <LogOut size={16} /> Sign Out
           </button>
         </div>
       </header>
 
-      <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
+      <main className="mx-auto max-w-4xl px-5 py-9 sm:px-8">
         {/* Title */}
-        <div className="mb-6">
-          <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-800 border border-emerald-200">
-            <Sparkles size={13} className="text-emerald-700" />
+        <div className="mb-7">
+          <div className="mb-2.5 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3.5 py-1 text-xs sm:text-sm font-semibold text-emerald-800 border border-emerald-200">
+            <Sparkles size={14} className="text-emerald-700" />
             <span>One-Time Biometric Setup</span>
           </div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-stone-900 sm:text-3xl">
+          <h1 className="font-display text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-stone-900">
             Welcome to Smart Attendance
           </h1>
-          <p className="mt-1 text-xs sm:text-sm text-stone-500">
-            Signed in as <strong className="text-stone-800">{user?.email}</strong>. Complete these 3 steps to configure your face recognition profile.
+          <p className="mt-1.5 text-sm sm:text-base text-stone-600">
+            Signed in as <strong className="text-stone-900 font-semibold">{user?.email}</strong>. Complete these 3 steps to configure your face recognition profile.
           </p>
         </div>
 
         {/* Progress Bar */}
-        <div className="h-1.5 overflow-hidden rounded-full bg-stone-200">
+        <div className="h-2 overflow-hidden rounded-full bg-stone-200">
           <div
             className="h-full rounded-full bg-gradient-to-r from-emerald-800 to-teal-600 transition-all duration-500"
             style={{ width: `${(completedSteps / STEPS.length) * 100}%` }}
@@ -77,7 +77,7 @@ export default function Onboarding() {
         </div>
 
         {/* Stepper Card Buttons */}
-        <ol className="mt-5 grid gap-3 sm:grid-cols-3">
+        <ol className="mt-6 grid gap-3.5 sm:grid-cols-3">
           {STEPS.map((s, i) => {
             const done = onboarding?.[s.key]
             const active = i === step
@@ -89,7 +89,7 @@ export default function Onboarding() {
                   onClick={() => reachable && setStep(i)}
                   disabled={!reachable}
                   aria-current={active ? 'step' : undefined}
-                  className={`flex w-full items-center gap-3 rounded-2xl border p-4 text-left transition-all duration-200 cursor-pointer ${
+                  className={`flex w-full items-center gap-3.5 rounded-2xl border p-4.5 text-left transition-all duration-200 cursor-pointer ${
                     active
                       ? 'border-emerald-600 bg-white ring-2 ring-emerald-600/20 shadow-xs'
                       : done
@@ -98,7 +98,7 @@ export default function Onboarding() {
                   }`}
                 >
                   <span
-                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-bold transition-colors ${
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-sm font-bold transition-colors ${
                       done
                         ? 'bg-emerald-600 text-white shadow-2xs'
                         : active
@@ -106,11 +106,11 @@ export default function Onboarding() {
                         : 'bg-stone-100 text-stone-500'
                     }`}
                   >
-                    {done ? <Check size={16} strokeWidth={3} /> : i + 1}
+                    {done ? <Check size={18} strokeWidth={3} /> : i + 1}
                   </span>
                   <span className="min-w-0">
-                    <span className="block font-display text-xs font-bold text-stone-900">{s.title}</span>
-                    <span className="block truncate text-[11px] text-stone-500">{s.text}</span>
+                    <span className="block font-display text-sm font-bold text-stone-900">{s.title}</span>
+                    <span className="block truncate text-xs text-stone-500 mt-0.5">{s.text}</span>
                   </span>
                 </button>
               </li>
@@ -119,15 +119,15 @@ export default function Onboarding() {
         </ol>
 
         {/* Step Content Container */}
-        <section className="mt-6 rounded-2xl border border-stone-200/90 bg-white p-6 shadow-2xs sm:p-8">
-          <div className="mb-6 flex items-center justify-between border-b border-[#f0eee6] pb-4">
+        <section className="mt-7 rounded-2xl border border-stone-200/90 bg-white p-6 shadow-2xs sm:p-8">
+          <div className="mb-6 flex items-center justify-between border-b border-[#f0eee6] pb-4.5">
             <div>
-              <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-800">Step {step + 1} of 3</p>
-              <h2 className="font-display text-lg font-bold text-stone-900">
+              <p className="text-xs font-bold uppercase tracking-wider text-emerald-800">Step {step + 1} of 3</p>
+              <h2 className="font-display text-xl font-bold text-stone-900">
                 {STEPS[step].title}
               </h2>
             </div>
-            <span className="text-xs text-stone-500 font-medium">
+            <span className="text-xs sm:text-sm text-stone-500 font-medium">
               {STEPS[step].text}
             </span>
           </div>
