@@ -2,28 +2,29 @@ import { CircleAlert, Info, Loader2 } from 'lucide-react'
 
 export function Card({ title, subtitle, action, icon: Icon, children, className = '', hover = false, variant = 'default' }) {
   const variantStyles = {
-    default: 'bg-white border-slate-200/80 shadow-2xs',
-    glass: 'bg-white/90 backdrop-blur-md border-slate-200/70 shadow-2xs',
-    subtle: 'bg-slate-50/70 border-slate-200/60',
+    default: 'glass-card',
+    interactive: 'glass-card-interactive',
+    subtle: 'bg-[#f7f6f2] border border-[#e7e5e0]',
+    glow: 'bg-white border-emerald-300 shadow-[0_4px_20px_-2px_rgba(5,150,105,0.1)]',
   }
 
   return (
     <section
-      className={`rounded-2xl border transition-all duration-200 ${variantStyles[variant]} ${
-        hover ? 'hover:shadow-xs hover:border-slate-300' : ''
+      className={`rounded-2xl transition-all duration-200 ${variantStyles[variant] || variantStyles.default} ${
+        hover ? 'hover:border-emerald-300 hover:shadow-md' : ''
       } ${className}`}
     >
       {(title || action || Icon) && (
-        <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-5 py-4">
-          <div className="flex items-center gap-2.5">
+        <div className="flex items-center justify-between gap-4 border-b border-[#f0eee6] px-5 py-4">
+          <div className="flex items-center gap-3">
             {Icon && (
-              <div className="flex h-7.5 w-7.5 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-emerald-200/80 bg-emerald-50 text-emerald-800 shadow-2xs">
                 <Icon size={16} />
               </div>
             )}
             <div>
-              <h3 className="font-display text-sm font-semibold tracking-tight text-slate-900">{title}</h3>
-              {subtitle && <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p>}
+              <h3 className="font-display text-sm font-semibold tracking-tight text-stone-900">{title}</h3>
+              {subtitle && <p className="mt-0.5 text-xs text-stone-500">{subtitle}</p>}
             </div>
           </div>
           {action}
@@ -36,18 +37,18 @@ export function Card({ title, subtitle, action, icon: Icon, children, className 
 
 export function Spinner({ label = 'Loading…', className = '' }) {
   return (
-    <div className={`flex flex-col items-center justify-center gap-3 py-16 text-sm text-slate-500 ${className}`} role="status">
-      <div className="relative flex h-8 w-8 items-center justify-center">
-        <Loader2 size={24} className="animate-spin text-teal-600" />
+    <div className={`flex flex-col items-center justify-center gap-3 py-16 text-sm text-stone-500 ${className}`} role="status">
+      <div className="relative flex h-9 w-9 items-center justify-center">
+        <Loader2 size={24} className="animate-spin text-emerald-700" />
       </div>
-      <span className="text-xs font-medium text-slate-600">{label}</span>
+      <span className="text-xs font-medium text-stone-600">{label}</span>
     </div>
   )
 }
 
 export function FullPageSpinner() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50">
+    <div className="flex min-h-screen items-center justify-center bg-[#faf9f5]">
       <Spinner label="Loading application..." />
     </div>
   )
@@ -58,7 +59,7 @@ export function ErrorBox({ children, className = '' }) {
   return (
     <div
       role="alert"
-      className={`animate-fade-in flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/70 p-3.5 text-xs text-rose-800 shadow-2xs ${className}`}
+      className={`animate-fade-in flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50/80 p-3.5 text-xs text-rose-800 shadow-2xs ${className}`}
     >
       <CircleAlert size={16} className="mt-0.5 shrink-0 text-rose-600" />
       <div className="flex-1 font-medium leading-relaxed">{children}</div>
@@ -69,9 +70,9 @@ export function ErrorBox({ children, className = '' }) {
 export function InfoBox({ children, className = '' }) {
   if (!children) return null
   return (
-    <div className={`flex items-start gap-3 rounded-xl border border-teal-100 bg-teal-50/60 p-3.5 text-xs text-teal-900 shadow-2xs ${className}`} >
-      <Info size={16} className="mt-0.5 shrink-0 text-teal-600" />
-      <div className="flex-1 leading-relaxed text-teal-800">{children}</div>
+    <div className={`flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 text-xs text-emerald-900 shadow-2xs ${className}`} >
+      <Info size={16} className="mt-0.5 shrink-0 text-emerald-700" />
+      <div className="flex-1 leading-relaxed text-emerald-950">{children}</div>
     </div>
   )
 }
@@ -80,12 +81,12 @@ export function EmptyState({ icon: Icon, title, text, action }) {
   return (
     <div className="flex flex-col items-center px-6 py-14 text-center">
       {Icon && (
-        <div className="relative mb-3 flex h-13 w-13 items-center justify-center rounded-2xl bg-slate-100 text-slate-500">
-          <Icon size={22} className="text-slate-500" />
+        <div className="relative mb-3.5 flex h-14 w-14 items-center justify-center rounded-2xl border border-stone-200 bg-stone-100/70 text-stone-600 shadow-inner">
+          <Icon size={24} className="text-emerald-700" />
         </div>
       )}
-      <p className="font-display text-sm font-semibold text-slate-800">{title}</p>
-      {text && <p className="mt-1 max-w-sm text-xs text-slate-500 leading-relaxed">{text}</p>}
+      <p className="font-display text-sm font-semibold text-stone-900">{title}</p>
+      {text && <p className="mt-1 max-w-sm text-xs text-stone-500 leading-relaxed">{text}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>
   )
@@ -93,24 +94,32 @@ export function EmptyState({ icon: Icon, title, text, action }) {
 
 const BADGE_CONFIG = {
   green: {
-    bg: 'bg-emerald-50 text-emerald-700 border-emerald-200/70',
-    dot: 'bg-emerald-500',
+    bg: 'bg-emerald-50 text-emerald-800 border-emerald-200/80',
+    dot: 'bg-emerald-600',
   },
   amber: {
-    bg: 'bg-amber-50 text-amber-800 border-amber-200/70',
-    dot: 'bg-amber-500',
+    bg: 'bg-amber-50 text-amber-800 border-amber-200/80',
+    dot: 'bg-amber-600',
   },
   red: {
-    bg: 'bg-rose-50 text-rose-700 border-rose-200/70',
-    dot: 'bg-rose-500',
+    bg: 'bg-rose-50 text-rose-800 border-rose-200/80',
+    dot: 'bg-rose-600',
   },
   slate: {
-    bg: 'bg-slate-100 text-slate-700 border-slate-200',
-    dot: 'bg-slate-400',
+    bg: 'bg-stone-100 text-stone-700 border-stone-200',
+    dot: 'bg-stone-400',
   },
   brand: {
-    bg: 'bg-teal-50 text-teal-800 border-teal-200/70',
+    bg: 'bg-emerald-50 text-emerald-800 border-emerald-200/80',
+    dot: 'bg-emerald-600',
+  },
+  cyan: {
+    bg: 'bg-teal-50 text-teal-800 border-teal-200/80',
     dot: 'bg-teal-600',
+  },
+  violet: {
+    bg: 'bg-purple-50 text-purple-800 border-purple-200/80',
+    dot: 'bg-purple-600',
   },
 }
 
@@ -139,22 +148,22 @@ export function Button({ variant = 'primary', size = 'md', loading, children, cl
 
   const variantStyles = {
     primary:
-      'bg-teal-700 text-white shadow-2xs hover:bg-teal-800 active:scale-[0.99] border border-teal-600/30',
+      'bg-gradient-to-r from-emerald-800 via-emerald-700 to-teal-800 text-white font-semibold shadow-sm hover:from-emerald-700 hover:to-teal-700 active:scale-[0.98] border border-emerald-900/20',
     secondary:
-      'border border-slate-300/90 bg-white text-slate-700 shadow-2xs hover:bg-slate-50 hover:text-slate-900 active:scale-[0.99]',
+      'border border-stone-300/90 bg-white text-stone-800 shadow-2xs hover:bg-stone-50 hover:text-stone-950 active:scale-[0.98]',
     ghost:
-      'text-slate-600 hover:bg-slate-100 hover:text-slate-900 active:scale-[0.99]',
+      'text-stone-600 hover:bg-stone-100 hover:text-stone-900 active:scale-[0.98]',
     danger:
-      'bg-rose-600 text-white shadow-2xs hover:bg-rose-700 active:scale-[0.99]',
+      'bg-gradient-to-r from-rose-600 to-rose-700 text-white shadow-2xs hover:from-rose-500 hover:to-rose-600 active:scale-[0.98] border border-rose-700/20',
     outline:
-      'border border-teal-700 text-teal-700 hover:bg-teal-50 active:scale-[0.99]',
+      'border border-emerald-800 text-emerald-800 hover:bg-emerald-50 active:scale-[0.98]',
   }
 
   return (
     <button
       disabled={loading || props.disabled}
       {...props}
-      className={`inline-flex items-center justify-center rounded-xl transition-all focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer ${
+      className={`inline-flex items-center justify-center rounded-xl transition-all focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer ${
         sizeStyles[size]
       } ${variantStyles[variant]} ${className}`}
     >
@@ -165,22 +174,22 @@ export function Button({ variant = 'primary', size = 'md', loading, children, cl
 }
 
 export const inputClass =
-  'h-10 w-full rounded-xl border border-slate-300/80 bg-white px-3.5 text-xs text-slate-900 shadow-2xs ' +
-  'placeholder:text-slate-400 outline-none transition-all duration-150 ' +
-  'focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15 hover:border-slate-400 ' +
-  'disabled:bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed aria-[invalid=true]:border-rose-400 aria-[invalid=true]:focus:ring-rose-200'
+  'h-10 w-full rounded-xl border border-stone-300/80 bg-white px-3.5 text-xs text-stone-900 ' +
+  'placeholder:text-stone-400 outline-none transition-all duration-150 ' +
+  'focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-600/15 hover:border-stone-400 ' +
+  'disabled:bg-stone-100/60 disabled:text-stone-400 disabled:cursor-not-allowed aria-[invalid=true]:border-rose-400 aria-[invalid=true]:focus:ring-rose-200 shadow-2xs'
 
 export function Field({ label, htmlFor, error, hint, children }) {
   return (
     <div>
-      <label htmlFor={htmlFor} className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-600">
+      <label htmlFor={htmlFor} className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-stone-600">
         {label}
       </label>
       {children}
       {error ? (
         <p className="mt-1 text-xs font-medium text-rose-600 animate-fade-in">{error}</p>
       ) : (
-        hint && <p className="mt-1 text-[11px] text-slate-500">{hint}</p>
+        hint && <p className="mt-1 text-[11px] text-stone-500">{hint}</p>
       )}
     </div>
   )

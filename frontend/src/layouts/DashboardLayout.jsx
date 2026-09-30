@@ -30,9 +30,9 @@ export const NAV = {
 
 const ROLE_LABEL = { teacher: 'Faculty Member', student: 'Undergraduate Student', admin: 'System Administrator' }
 const ROLE_BADGE = {
-  teacher: 'bg-teal-500/20 text-teal-300 border-teal-500/30',
-  student: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
-  admin: 'bg-sky-500/20 text-sky-300 border-sky-500/30',
+  teacher: 'bg-emerald-50 text-emerald-800 border-emerald-200/80',
+  student: 'bg-teal-50 text-teal-800 border-teal-200/80',
+  admin: 'bg-purple-50 text-purple-800 border-purple-200/80',
 }
 
 function getInitials(name = '') {
@@ -58,18 +58,18 @@ function Avatar({ user, size = 'md' }) {
           src={user.picture}
           alt={user.name || 'User avatar'}
           referrerPolicy="no-referrer"
-          className={`${sizeClasses[size]} rounded-xl object-cover ring-2 ring-white/10 shadow-xs`}
+          className={`${sizeClasses[size]} rounded-xl object-cover ring-2 ring-emerald-600/20 shadow-2xs`}
         />
-        <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-teal-400 ring-2 ring-[#0f172a]" />
+        <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-white" />
       </div>
     )
   }
   return (
     <div className="relative">
-      <div className={`flex ${sizeClasses[size]} items-center justify-center rounded-xl bg-gradient-to-tr from-teal-800 to-teal-600 font-bold text-white shadow-xs`}>
+      <div className={`flex ${sizeClasses[size]} items-center justify-center rounded-xl bg-gradient-to-tr from-emerald-800 to-teal-700 font-bold text-white shadow-2xs`}>
         {getInitials(user?.name)}
       </div>
-      <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-teal-400 ring-2 ring-[#0f172a]" />
+      <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-white" />
     </div>
   )
 }
@@ -97,50 +97,50 @@ export default function DashboardLayout() {
   })
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f8fafc]">
+    <div className="flex h-screen overflow-hidden bg-[#faf9f5] bg-warm-mesh text-stone-900">
       {/* Mobile backdrop */}
       {open && (
         <div
-          className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-xs transition-opacity lg:hidden"
+          className="fixed inset-0 z-40 bg-stone-900/40 backdrop-blur-xs transition-opacity lg:hidden"
           onClick={() => setOpen(false)}
           aria-hidden="true"
         />
       )}
 
-      {/* Sidebar with soothing oceanic dark tone */}
+      {/* Modern Light Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r border-slate-800/80 bg-[#0f172a] text-white transition-all duration-300 lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r border-[#e7e5e0] bg-white transition-all duration-300 lg:static lg:translate-x-0 ${
           open ? 'translate-x-0' : '-translate-x-full'
         } ${collapsed ? 'w-20' : 'w-64'}`}
       >
         {/* Header Branding */}
-        <div className={`flex h-16 items-center border-b border-slate-800/80 px-4 ${collapsed ? 'justify-center' : 'justify-between'}`}>
+        <div className={`flex h-16 items-center border-b border-[#f0eee6] px-4 ${collapsed ? 'justify-center' : 'justify-between'}`}>
           <div className="flex items-center gap-3 overflow-hidden">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-teal-500/30 bg-teal-950/80 text-teal-300 shadow-xs">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-200/80 bg-emerald-50 text-emerald-800 shadow-2xs">
               <GraduationCap size={22} />
             </div>
             {!collapsed && (
               <div className="min-w-0 leading-tight">
-                <p className="font-display truncate text-sm font-bold tracking-tight text-white">Smart Attendance</p>
-                <p className="truncate text-[11px] font-medium text-slate-400">KUET CSE Portal</p>
+                <p className="font-display truncate text-sm font-bold tracking-tight text-stone-900">Smart Attendance</p>
+                <p className="truncate text-[11px] font-medium text-stone-500">KUET CSE Portal</p>
               </div>
             )}
           </div>
           <button
             onClick={() => setOpen(false)}
             aria-label="Close menu"
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-white/5 hover:text-white lg:hidden cursor-pointer"
+            className="rounded-lg p-1.5 text-stone-400 hover:bg-stone-100 hover:text-stone-700 lg:hidden cursor-pointer"
           >
             <X size={18} />
           </button>
         </div>
 
-        {/* Quick collapse button (Desktop) */}
+        {/* Quick collapse toggle (Desktop) */}
         <div className="hidden px-3 pt-3 lg:flex justify-end">
           <button
             onClick={() => setCollapsed(!collapsed)}
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            className="flex h-6 w-6 items-center justify-center rounded-lg border border-slate-800 bg-slate-900 text-slate-400 transition hover:border-slate-700 hover:bg-slate-800 hover:text-white cursor-pointer"
+            className="flex h-6 w-6 items-center justify-center rounded-lg border border-stone-200 bg-stone-50 text-stone-500 transition hover:border-stone-300 hover:bg-stone-100 hover:text-stone-800 cursor-pointer"
           >
             {collapsed ? <ChevronRight size={13} /> : <ChevronLeft size={13} />}
           </button>
@@ -149,12 +149,12 @@ export default function DashboardLayout() {
         {/* Section Label */}
         {!collapsed && (
           <div className="px-5 pt-3 pb-1">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Navigation</p>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">Navigation</p>
           </div>
         )}
 
         {/* Nav Links */}
-        <nav aria-label="Main navigation" className="mt-1 flex-1 space-y-1.5 px-3">
+        <nav aria-label="Main navigation" className="mt-1 flex-1 space-y-1 px-3">
           {navItems.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
@@ -163,10 +163,10 @@ export default function DashboardLayout() {
               onClick={() => setOpen(false)}
               title={collapsed ? label : undefined}
               className={({ isActive }) =>
-                `group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-xs font-semibold transition-all duration-200 ${
+                `group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-xs font-semibold transition-all duration-150 ${
                   isActive
-                    ? 'bg-teal-500/15 text-teal-200 border border-teal-500/30 shadow-2xs'
-                    : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
+                    ? 'bg-emerald-50 text-emerald-900 border border-emerald-200/80 shadow-2xs'
+                    : 'text-stone-600 hover:bg-stone-100/70 hover:text-stone-900 border border-transparent'
                 } ${collapsed ? 'justify-center px-2' : ''}`
               }
             >
@@ -174,7 +174,7 @@ export default function DashboardLayout() {
                 <>
                   <div
                     className={`flex h-7.5 w-7.5 shrink-0 items-center justify-center rounded-lg transition-colors ${
-                      isActive ? 'bg-teal-700 text-white shadow-2xs' : 'text-slate-400 group-hover:text-slate-200'
+                      isActive ? 'bg-emerald-800 text-white shadow-2xs' : 'text-stone-500 group-hover:text-stone-800'
                     }`}
                   >
                     <Icon size={16} />
@@ -183,7 +183,7 @@ export default function DashboardLayout() {
                     <span className="truncate text-xs">{label}</span>
                   )}
                   {isActive && !collapsed && (
-                    <span className="ml-auto h-1.5 w-1.5 rounded-full bg-teal-400" />
+                    <span className="ml-auto h-1.5 w-1.5 rounded-full bg-emerald-600" />
                   )}
                 </>
               )}
@@ -191,29 +191,29 @@ export default function DashboardLayout() {
           ))}
         </nav>
 
-        {/* System telemetry widget on desktop sidebar */}
+        {/* Telemetry Card */}
         {!collapsed && (
-          <div className="mx-3 mb-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
+          <div className="mx-3 mb-3 rounded-xl border border-emerald-100 bg-emerald-50/50 p-3 shadow-2xs">
             <div className="flex items-center justify-between text-[11px]">
-              <span className="flex items-center gap-1.5 text-slate-400">
-                <Wifi size={12} className="text-teal-400" /> Face Recognition Node
+              <span className="flex items-center gap-1.5 text-stone-600">
+                <Wifi size={12} className="text-emerald-700" /> Face Biometrics Node
               </span>
-              <span className="font-semibold text-teal-400">Online</span>
+              <span className="font-bold text-emerald-800">Online</span>
             </div>
-            <div className="mt-1.5 flex items-center justify-between text-[10px] text-slate-500">
-              <span>Sync Protocol</span>
-              <span>LAN Live</span>
+            <div className="mt-1.5 flex items-center justify-between text-[10px] text-stone-500">
+              <span>Edge Sync Protocol</span>
+              <span className="font-mono text-emerald-700 font-semibold">Active</span>
             </div>
           </div>
         )}
 
-        {/* Bottom: user profile card + logout */}
-        <div className="border-t border-slate-800/80 p-3">
+        {/* User Info & Logout */}
+        <div className="border-t border-[#f0eee6] p-3">
           {!collapsed ? (
-            <div className="mb-2 flex items-center gap-3 rounded-xl bg-white/[0.03] p-2.5 border border-white/[0.05]">
+            <div className="mb-2 flex items-center gap-3 rounded-xl bg-stone-50/70 p-2.5 border border-stone-200/70">
               <Avatar user={user} size="sm" />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-semibold text-white">{user?.name}</p>
+                <p className="truncate text-xs font-semibold text-stone-900">{user?.name}</p>
                 <div className="mt-0.5 flex items-center gap-1.5">
                   <span className={`inline-block rounded px-1.5 py-0.2 text-[9px] font-bold uppercase tracking-wider border ${ROLE_BADGE[user?.role]}`}>
                     {user?.role}
@@ -230,7 +230,7 @@ export default function DashboardLayout() {
           <button
             onClick={handleLogout}
             title={collapsed ? 'Logout' : undefined}
-            className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-medium text-slate-400 transition-all hover:bg-rose-500/10 hover:text-rose-300 hover:border-rose-500/20 border border-transparent cursor-pointer ${
+            className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-xs font-medium text-stone-500 transition-all hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 border border-transparent cursor-pointer ${
               collapsed ? 'justify-center px-2' : ''
             }`}
           >
@@ -241,20 +241,20 @@ export default function DashboardLayout() {
       </aside>
 
       {/* Main Content Area */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* Header */}
-        <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-between gap-4 border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur-md lg:px-8">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        {/* Sticky Frosted Header */}
+        <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center justify-between gap-4 border-b border-[#e7e5e0] bg-white/90 px-4 backdrop-blur-md lg:px-8">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setOpen(true)}
               aria-label="Open navigation menu"
-              className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-2xs hover:bg-slate-50 lg:hidden cursor-pointer"
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-700 shadow-2xs hover:bg-stone-50 lg:hidden cursor-pointer"
             >
               <Menu size={18} />
             </button>
 
             <div>
-              <h1 className="font-display text-base font-bold tracking-tight text-slate-800 lg:text-lg">
+              <h1 className="font-display text-base font-bold tracking-tight text-stone-900 lg:text-lg">
                 {pageTitle}
               </h1>
             </div>
@@ -262,35 +262,35 @@ export default function DashboardLayout() {
 
           {/* Right Header Badges */}
           <div className="flex items-center gap-3">
-            {/* Live Campus network status chip */}
-            <div className="hidden sm:flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-600 shadow-2xs">
-              <Clock size={13} className="text-slate-400" />
-              <span className="font-medium text-slate-700">{currentDateStr}</span>
+            {/* Campus Clock */}
+            <div className="hidden sm:flex items-center gap-2 rounded-full border border-stone-200 bg-stone-50 px-3.5 py-1 text-xs text-stone-600 shadow-2xs">
+              <Clock size={13} className="text-emerald-700" />
+              <span className="font-medium text-stone-700">{currentDateStr}</span>
             </div>
 
-            {/* Notification bell */}
+            {/* Notification Bell */}
             <button
               aria-label="System notifications"
-              className="relative flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 shadow-2xs transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 cursor-pointer"
+              className="relative flex h-9 w-9 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-600 shadow-2xs transition hover:border-stone-300 hover:bg-stone-50 hover:text-stone-900 cursor-pointer"
             >
               <Bell size={17} />
-              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-teal-600 ring-2 ring-white" />
+              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-emerald-600 ring-2 ring-white" />
             </button>
 
-            <div className="hidden sm:block h-6 w-px bg-slate-200" aria-hidden="true" />
+            <div className="hidden sm:block h-6 w-px bg-stone-200" aria-hidden="true" />
 
-            {/* User badge */}
+            {/* User Profile Info */}
             <div className="flex items-center gap-2.5 pl-1">
               <Avatar user={user} size="sm" />
               <div className="hidden leading-tight md:block">
-                <p className="text-xs font-semibold text-slate-800">{user?.name}</p>
-                <p className="text-[11px] text-slate-500 capitalize">{ROLE_LABEL[user?.role] || user?.role}</p>
+                <p className="text-xs font-semibold text-stone-900">{user?.name}</p>
+                <p className="text-[11px] text-stone-500 capitalize">{ROLE_LABEL[user?.role] || user?.role}</p>
               </div>
             </div>
           </div>
         </header>
 
-        {/* Page Viewport */}
+        {/* Page Main Content */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           <div className="mx-auto max-w-6xl animate-fade-in">
             <Outlet />

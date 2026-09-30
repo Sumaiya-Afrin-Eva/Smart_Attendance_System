@@ -47,7 +47,7 @@ function RealGoogleButton({ onCredential, onError, disabled }) {
       type="button"
       onClick={handleClick}
       disabled={disabled || busy}
-      className="group relative flex h-11 w-full items-center justify-center gap-3 rounded-xl border border-slate-300/90 bg-white font-display text-xs font-semibold text-slate-800 shadow-2xs transition-all duration-200 hover:border-slate-400 hover:bg-slate-50 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+      className="group relative flex h-11 w-full items-center justify-center gap-3 rounded-xl border border-stone-300/90 bg-white font-display text-xs font-semibold text-stone-800 shadow-2xs transition-all duration-200 hover:border-stone-400 hover:bg-stone-50 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
     >
       <GoogleLogo />
       <span>{busy ? 'Signing in with Google…' : 'Continue with Google'}</span>
@@ -74,21 +74,21 @@ function DevLoginButton({ onDevLogin, disabled }) {
           onChange={(e) => setEmail(e.target.value)}
           placeholder="yourroll@stud.kuet.ac.bd"
           aria-label="Student email for dev login"
-          className="h-10.5 w-full rounded-xl border border-teal-200 bg-white px-3.5 text-xs text-slate-900 shadow-2xs outline-none transition focus:border-teal-600 focus:ring-2 focus:ring-teal-500/15"
+          className="h-10.5 w-full rounded-xl border border-emerald-200 bg-white px-3.5 text-xs text-stone-900 shadow-2xs outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15"
         />
       </div>
       <button
         type="submit"
         disabled={disabled}
-        className="flex h-10.5 w-full items-center justify-center gap-2 rounded-xl border border-teal-200 bg-teal-50/80 font-display text-xs font-semibold text-teal-800 transition hover:bg-teal-700 hover:text-white active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+        className="flex h-10.5 w-full items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50/80 font-display text-xs font-semibold text-emerald-800 transition hover:bg-emerald-800 hover:text-white active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer shadow-2xs"
       >
         <GoogleLogo />
         <span>Continue with Google (Dev Login)</span>
         <ArrowRight size={14} />
       </button>
-      <div className="flex items-center justify-center gap-1.5 text-[10px] text-slate-500">
+      <div className="flex items-center justify-center gap-1.5 text-[10px] text-stone-500">
         <Sparkles size={11} className="text-amber-500" />
-        <span>Dev mode active · try entering <strong>demo@stud.kuet.ac.bd</strong></span>
+        <span>Dev mode active · try entering <strong className="text-stone-700">demo@stud.kuet.ac.bd</strong></span>
       </div>
     </form>
   )

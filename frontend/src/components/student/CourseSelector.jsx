@@ -56,7 +56,7 @@ export default function CourseSelector({ profile, initialSemester, lockSemester 
       {/* Semester & Select All Bar */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="w-64">
-          <label htmlFor="semester" className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-700">
+          <label htmlFor="semester" className="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-stone-700">
             Target Academic Semester
           </label>
           <select
@@ -78,9 +78,9 @@ export default function CourseSelector({ profile, initialSemester, lockSemester 
           <button
             type="button"
             onClick={() => setSelected(new Set(courses.map((c) => c.id)))}
-            className="flex items-center gap-1.5 rounded-xl border border-teal-200 bg-teal-50/70 px-3.5 py-2 text-xs font-bold text-teal-800 hover:bg-teal-100 transition cursor-pointer"
+            className="flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50/70 px-3.5 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-100 transition cursor-pointer shadow-2xs"
           >
-            <CheckSquare size={14} /> Select All Semester Courses
+            <CheckSquare size={14} className="text-emerald-700" /> Select All Semester Courses
           </button>
         )}
       </div>
@@ -104,26 +104,26 @@ export default function CourseSelector({ profile, initialSemester, lockSemester 
                   aria-pressed={on}
                   className={`flex w-full items-start gap-3.5 rounded-2xl border p-4 text-left transition-all duration-150 cursor-pointer ${
                     on
-                      ? 'border-teal-600 bg-gradient-to-r from-teal-50/80 to-teal-50/30 ring-2 ring-teal-600/20 shadow-2xs'
-                      : 'border-slate-200/90 bg-white hover:border-slate-300 hover:bg-slate-50/50'
+                      ? 'border-emerald-600 bg-gradient-to-r from-emerald-50/90 to-emerald-50/40 ring-2 ring-emerald-600/20 shadow-2xs'
+                      : 'border-stone-200/90 bg-white hover:border-stone-300 hover:bg-stone-50/50'
                   }`}
                 >
                   <span
                     className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-lg border transition-colors ${
-                      on ? 'border-teal-700 bg-teal-700 text-white shadow-2xs' : 'border-slate-300 bg-white'
+                      on ? 'border-emerald-700 bg-emerald-700 text-white shadow-2xs' : 'border-stone-300 bg-white'
                     }`}
                   >
                     {on && <Check size={14} strokeWidth={3} />}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center justify-between gap-2">
-                      <span className="font-display text-xs font-bold text-slate-900">{c.code}</span>
-                      <Badge tone={c.type === 'Lab' ? 'brand' : 'slate'} className="text-[10px]">
+                      <span className="font-display text-xs font-bold text-stone-900 font-mono">{c.code}</span>
+                      <Badge tone={c.type === 'Lab' ? 'cyan' : 'slate'} className="text-[10px]">
                         {c.type}
                       </Badge>
                     </span>
-                    <span className="mt-1 block font-display text-sm font-semibold text-slate-800 leading-snug">{c.title}</span>
-                    <span className="mt-1 block text-xs font-medium text-slate-500">{c.credit} Credit Units</span>
+                    <span className="mt-1 block font-display text-sm font-semibold text-stone-800 leading-snug">{c.title}</span>
+                    <span className="mt-1 block text-xs font-medium text-stone-500 font-mono">{c.credit} Credit Units</span>
                   </span>
                 </button>
               </li>
@@ -135,10 +135,10 @@ export default function CourseSelector({ profile, initialSemester, lockSemester 
       <ErrorBox>{error}</ErrorBox>
 
       {/* Summary Footer */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
-        <div className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-1.5 text-xs text-slate-600">
-          Selected: <strong className="text-slate-900 font-bold">{selected.size}</strong> courses · Total{' '}
-          <strong className="text-teal-800 font-bold">{credits}</strong> credits
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#f0eee6] pt-4">
+        <div className="rounded-xl border border-stone-200 bg-stone-50 px-3.5 py-1.5 text-xs text-stone-600">
+          Selected: <strong className="text-stone-900 font-bold font-mono">{selected.size}</strong> courses · Total{' '}
+          <strong className="text-emerald-800 font-bold font-mono">{credits}</strong> credits
         </div>
         <Button onClick={save} loading={saving} disabled={!selected.size} size="md">
           {submitLabel}

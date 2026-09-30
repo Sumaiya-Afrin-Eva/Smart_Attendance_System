@@ -16,9 +16,9 @@ export default function MyCourses() {
       {/* Header Info */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h2 className="font-display text-xl font-bold tracking-tight text-slate-800">Enrolled Courses</h2>
-          <p className="mt-0.5 text-xs text-slate-500 font-medium">
-            {profile?.department} Department · Registered Semester {profile?.current_semester}
+          <h2 className="font-display text-xl font-bold tracking-tight text-stone-900">Enrolled Courses</h2>
+          <p className="mt-0.5 text-xs text-stone-500 font-medium">
+            {profile?.department} Department · Active Semester {profile?.current_semester}
           </p>
         </div>
         {!editing && (
@@ -41,7 +41,7 @@ export default function MyCourses() {
               <button
                 type="button"
                 onClick={() => setEditing(null)}
-                className="flex items-center gap-1.5 rounded-xl border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                className="flex items-center gap-1.5 rounded-xl border border-stone-300 px-4 py-2 text-xs font-semibold text-stone-700 hover:bg-stone-50 cursor-pointer"
               >
                 <X size={14} /> Cancel Selection
               </button>
@@ -65,7 +65,7 @@ export default function MyCourses() {
                   !editing && (
                     <button
                       onClick={() => setEditing(semester)}
-                      className="flex items-center gap-1 text-xs font-bold text-teal-700 hover:text-teal-800 cursor-pointer"
+                      className="flex items-center gap-1 text-xs font-bold text-emerald-800 hover:text-emerald-900 cursor-pointer"
                     >
                       <Pencil size={12} /> Edit
                     </button>
@@ -76,17 +76,17 @@ export default function MyCourses() {
                   {courses.map((c) => (
                     <div
                       key={c.id}
-                      className="flex items-start justify-between gap-3 rounded-xl border border-slate-200/80 bg-slate-50/40 p-4 transition-all duration-150 hover:border-teal-300 hover:bg-teal-50/20 hover:shadow-2xs"
+                      className="flex items-start justify-between gap-3 rounded-xl border border-stone-200/80 bg-stone-50/40 p-4 transition-all duration-150 hover:border-emerald-300 hover:bg-emerald-50/20 hover:shadow-2xs"
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="font-display text-xs font-bold text-slate-900">{c.code}</span>
-                          <Badge tone={c.type === 'Lab' ? 'brand' : 'slate'} className="text-[10px]">
+                          <span className="font-display text-xs font-bold text-stone-900 font-mono">{c.code}</span>
+                          <Badge tone={c.type === 'Lab' ? 'cyan' : 'slate'} className="text-[10px]">
                             {c.type}
                           </Badge>
                         </div>
-                        <p className="mt-1 font-display text-sm font-semibold text-slate-800 leading-snug">{c.title}</p>
-                        <p className="mt-1 text-xs font-medium text-slate-500">{c.credit} Credit Units</p>
+                        <p className="mt-1 font-display text-sm font-semibold text-stone-800 leading-snug">{c.title}</p>
+                        <p className="mt-1 text-xs font-medium text-stone-500 font-mono">{c.credit} Credit Units</p>
                       </div>
                     </div>
                   ))}
