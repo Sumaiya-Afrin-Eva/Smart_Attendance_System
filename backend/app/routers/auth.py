@@ -51,6 +51,28 @@ def _login_or_register_student(db: Session, email: str, name: str, picture: str 
     return user
 
 
+def _login_or_register_staff(db: Session, email: str, name: str, picture: str | None) -> User:
+    """Allow staff (teacher/admin) to sign in via Google, but ONLY if their
+    account was pre-created by the admin. We do NOT auto-register new teachers.
+    """
+    email = email.lower()
+    user = db.scalar(select(User).where(User.email == email))
+    if not user:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Your account has not been registered by the admin yet. "
+            "Contact the system administrator to get access.",
+        )
+    if not user.is_active:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been disabled. Contact the admin.")
+    if user.role not in {"teacher", "admin"}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This login method is for faculty and staff only.")
+    if picture and user.picture != picture:
+        user.picture = picture
+        db.commit()
+    return user
+
+
 def _verify_google_access_token(access_token: str) -> dict:
     """Exchange a Google OAuth2 access token for user info via Google's userinfo API.
 
@@ -127,7 +149,17 @@ def google_login(body: GoogleLoginIn, db: Session = Depends(get_db)):
         # New: access token from the useGoogleLogin popup flow
         info = _verify_google_access_token(credential)
 
-    user = _login_or_register_student(db, info["email"], info.get("name", ""), info.get("picture"))
+    email = info["email"].lower()
+    if email.endswith("@" + settings.student_email_domain.lower()):
+        user = _login_or_register_student(db, email, info.get("name", ""), info.get("picture"))
+    elif email.endswith("@kuet.ac.bd"):
+        user = _login_or_register_staff(db, email, info.get("name", ""), info.get("picture"))
+    else:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only KUET academic emails or student emails are allowed to sign in.",
+        )
+
     return _session_response(db, user)
 
 
@@ -142,12 +174,29 @@ def dev_login(body: DevLoginIn, db: Session = Depends(get_db)):
 
 @router.post("/login")
 def password_login(body: PasswordLoginIn, db: Session = Depends(get_db)):
-    """Email + password, for teachers and admins. Students must use Google."""
+    """Email + password login — for teachers and admins only.
+    The account must:
+      1. Exist in the database (pre-created by admin).
+      2. Have role 'teacher' or 'admin'.
+      3. Have a password set (admin must have assigned one).
+      4. Match the stored bcrypt hash exactly.
+    """
     user = db.scalar(select(User).where(User.email == body.email.lower()))
-    if not user or not verify_password(body.password, user.password_hash):
+
+    # Reject if account doesn't exist, wrong role, no password set, or wrong password.
+    # We deliberately use the same generic error for all cases to prevent
+    # user-enumeration attacks.
+    if (
+        not user
+        or user.role not in {"teacher", "admin"}
+        or not user.password_hash
+        or not verify_password(body.password, user.password_hash)
+    ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password.")
+
     if not user.is_active:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been disabled.")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been disabled. Contact the admin.")
+
     return _session_response(db, user)
 
 

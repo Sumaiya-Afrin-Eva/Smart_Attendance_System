@@ -48,4 +48,6 @@ def course_out(course: Course) -> dict:
         "department": course.department,
         "semester": course.semester,
         "type": course.course_type,
+        "session": course.session,
+        "section": course.section,
     }
