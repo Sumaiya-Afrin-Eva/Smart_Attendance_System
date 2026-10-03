@@ -10,9 +10,11 @@ import { useAuth } from '../context/AuthContext'
 export const NAV = {
   teacher: [
     { to: '/teacher', label: 'Dashboard', icon: LayoutDashboard, end: true },
-    { to: '/teacher/courses', label: 'Courses & Classes', icon: BookOpen },
-    { to: '/teacher/live', label: 'Live Roster', icon: Radio },
-    { to: '/teacher/reports', label: 'Reports & Export', icon: FileText },
+    { to: '/teacher/my-courses', label: 'Your courses', icon: BookOpen },
+    { to: '/teacher/courses', label: 'Manage Classes', icon: FileText },
+    { to: '/teacher/history', label: 'Class History', icon: FileText },
+    { to: '/teacher/analytics', label: 'Analytics', icon: Radio },
+    { to: '/teacher/settings', label: 'Settings', icon: Settings },
   ],
   student: [
     { to: '/student', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -22,8 +24,10 @@ export const NAV = {
   ],
   admin: [
     { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true },
-    { to: '/admin/users', label: 'User Directory', icon: Users },
-    { to: '/admin/alerts', label: 'Security & Spoofs', icon: ShieldAlert },
+    { to: '/admin/courses', label: 'Course Management', icon: BookOpen },
+    { to: '/admin/teachers', label: 'Teacher Management', icon: Users },
+    { to: '/admin/students', label: 'Student Management', icon: GraduationCap },
+    { to: '/admin/alerts', label: 'Security Alerts', icon: ShieldAlert },
     { to: '/admin/settings', label: 'System Settings', icon: Settings },
   ],
 }
@@ -204,30 +208,12 @@ export default function DashboardLayout() {
           </div>
         )}
 
-        {/* User Info & Logout */}
-        <div className="border-t border-[#f0eee6] p-3.5">
-          {!collapsed ? (
-            <div className="mb-2.5 flex items-center gap-3 rounded-xl bg-stone-50/80 p-3 border border-stone-200/80">
-              <Avatar user={user} size="sm" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-stone-900">{user?.name}</p>
-                <div className="mt-0.5 flex items-center gap-1.5">
-                  <span className={`inline-block rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border ${ROLE_BADGE[user?.role]}`}>
-                    {user?.role}
-                  </span>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="mb-2.5 flex justify-center">
-              <Avatar user={user} size="sm" />
-            </div>
-          )}
-
+        {/* Logout Button (Replaced User Info) */}
+        <div className="border-t border-[#f0eee6] p-3.5 mt-auto">
           <button
             onClick={handleLogout}
             title={collapsed ? 'Logout' : undefined}
-            className={`flex w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm font-medium text-stone-600 transition-all hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 border border-transparent cursor-pointer ${collapsed ? 'justify-center px-2' : ''
+            className={`flex w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-sm font-medium text-rose-600 transition-all hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 border border-rose-100 cursor-pointer ${collapsed ? 'justify-center px-2' : ''
               }`}
           >
             <LogOut size={17} />

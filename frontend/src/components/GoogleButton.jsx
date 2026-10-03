@@ -16,7 +16,7 @@ function GoogleLogo() {
 }
 
 // Real mode: Opens a Google popup to sign in.
-function RealGoogleButton({ onCredential, onError, disabled }) {
+function RealGoogleButton({ onCredential, onError, disabled, label = 'Continue with Google' }) {
   const [busy, setBusy] = useState(false)
 
   const googleLogin = useGoogleLogin({
@@ -50,7 +50,7 @@ function RealGoogleButton({ onCredential, onError, disabled }) {
       className="group relative flex h-11.5 w-full items-center justify-center gap-3 rounded-xl border border-stone-300/90 bg-white font-display text-sm font-semibold text-stone-800 shadow-2xs transition-all duration-200 hover:border-stone-400 hover:bg-stone-50 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
     >
       <GoogleLogo />
-      <span>{busy ? 'Signing in with Google…' : 'Continue with Google'}</span>
+      <span>{busy ? 'Signing in with Google…' : label}</span>
     </button>
   )
 }
@@ -94,6 +94,23 @@ function DevLoginButton({ onDevLogin, disabled }) {
   )
 }
 
-export default function GoogleButton(props) {
-  return CLIENT_ID ? <RealGoogleButton {...props} /> : <DevLoginButton {...props} />
+export default function GoogleButton({ variant = 'student', onDevLogin = () => {}, ...props }) {
+  if (!CLIENT_ID) {
+    if (variant === 'staff') {
+      return (
+        <button
+          type="button"
+          disabled={props.disabled}
+          onClick={() => props.onError?.('Google OAuth is not configured for this environment.')}
+          className="group relative flex h-11.5 w-full items-center justify-center gap-3 rounded-xl border border-stone-300/90 bg-white font-display text-sm font-semibold text-stone-800 shadow-2xs opacity-80 cursor-not-allowed"
+        >
+          <GoogleLogo />
+          <span>Continue with Google</span>
+        </button>
+      )
+    }
+    return <DevLoginButton onDevLogin={onDevLogin} {...props} />
+  }
+
+  return <RealGoogleButton label="Continue with Google" {...props} />
 }
