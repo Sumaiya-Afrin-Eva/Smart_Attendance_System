@@ -594,12 +594,12 @@ async def bulk_upload_courses(
                 }
                 if data["code"]:
                     extracted_data.append(data)
-        except Exception as e:
+        except Exception:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Error parsing spreadsheet: {str(e)}")
     else:
         try:
             extracted_data = await run_in_threadpool(extract_courses_from_file, file_content, mime_type)
-        except Exception as e:
+        except Exception:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
         
     if not extracted_data:
@@ -671,9 +671,9 @@ async def bulk_upload_courses(
         try:
             # Validate via Pydantic
             body = CourseCreateIn(**norm)
-        except Exception as e:
+        except Exception:
             skipped += 1
-            skipped_items.append({"data": norm, "reason": f"validation_error: {e}"})
+            skipped_items.append({"data": norm, "reason": "validation_error"})
             continue
 
         # Check for duplicate in current batch or DB
@@ -698,10 +698,10 @@ async def bulk_upload_courses(
         try:
             db.flush()
             added += 1
-        except Exception as e:
+        except Exception:
             db.rollback()
             skipped += 1
-            skipped_items.append({"data": norm, "reason": f"db_error: {e}"})
+            skipped_items.append({"data": norm, "reason": "db_error"})
             continue
 
     db.commit()
@@ -900,7 +900,7 @@ async def bulk_upload_teachers(
         except Exception as e:
             db.rollback()
             skipped += 1
-            skipped_items.append({"data": data, "reason": f"db_error: {e}"})
+            skipped_items.append({"data": data, "reason": "db_error"})
             continue
 
     db.commit()
