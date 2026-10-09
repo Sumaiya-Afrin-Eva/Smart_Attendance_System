@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 720
     admin_access_code: str = ""
     google_client_id: str = ""
+    gemini_api_key: str = ""
     student_email_domain: str = "stud.kuet.ac.bd"
     dev_login_enabled: bool = True
     frontend_origin: str = "http://localhost:5173"

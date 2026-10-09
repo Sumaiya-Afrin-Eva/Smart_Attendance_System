@@ -5,6 +5,7 @@ os.environ['DATABASE_URL'] = 'sqlite:///./test_attendance.db'
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app import ai_extraction
 from app.database import SessionLocal, Base, engine
 from app.main import app, ensure_seed_settings
 from app.models import Attendance, ClassSession, Course, CourseRosterAssignment, Enrollment, FaceSample, StudentProfile, StudentRoster, User
@@ -37,6 +38,48 @@ def get_admin_token():
     with SessionLocal() as db:
         user = db.scalar(select(User).where(User.email == 'admin@kuet.ac.bd'))
         return create_token(user)
+
+
+def test_extract_courses_uses_valid_multimodal_input_for_images(monkeypatch):
+    seen = {}
+
+    class FakeModel:
+        def __init__(self, name):
+            seen['model'] = name
+
+        def generate_content(self, contents, generation_config=None):
+            seen['contents'] = contents
+            seen['generation_config'] = generation_config
+            return type('Resp', (), {'text': '[{"code":"CSE 3101","title":"Data Structures","credit":3.0,"department":"CSE","semester":"3-2","course_type":"Theory","session":"2025-2026"}]'})()
+
+    monkeypatch.setattr(ai_extraction.settings, 'gemini_api_key', 'fake-key')
+    monkeypatch.setattr(ai_extraction.genai, 'configure', lambda api_key: seen.setdefault('key', api_key))
+    monkeypatch.setattr(ai_extraction.genai, 'GenerativeModel', FakeModel)
+
+    result = ai_extraction.extract_courses_from_file(b'img-bytes', 'image/png')
+
+    assert result[0]['code'] == 'CSE 3101'
+    assert seen['key'] == 'fake-key'
+    assert seen['model'] == 'gemini-3.8-flash'
+    assert seen['contents'][1] == {'inline_data': {'mime_type': 'image/png', 'data': b'img-bytes'}}
+
+
+def test_fallback_parser_extracts_courses_from_text_content():
+    text = (
+        "1st Year 1st Term\n"
+        "CSE 1101 Structured Programming 3-3 hrs/wk 3-1.5 Credit\n"
+        "EEE 2107 Analog Electronics 3-3 hrs/wk 3-1.5 Credit\n"
+        "2nd Year 1st Term\n"
+        "CSE 2201 Digital Logic Design 3-3 hrs/wk 3-1.5 Credit\n"
+        "EEE 2207 Fundamentals of Electronics Laboratory 3-3 hrs/wk 3-1.5 Credit"
+    )
+    result = ai_extraction._extract_courses_from_text(text)
+    assert len(result) == 4
+    values = {item["code"]: item for item in result}
+    assert values["CSE 1101"]["semester"] == "1-1"
+    assert values["EEE 2107"]["department"] == "EEE"
+    assert values["EEE 2207"]["course_type"] == "Lab"
+    assert values["CSE 2201"]["credit"] == 1.5
 
 
 def test_admin_can_create_and_list_courses():

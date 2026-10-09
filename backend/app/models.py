@@ -47,8 +47,14 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20))  # student | teacher | admin
     department: Mapped[str | None] = mapped_column(String(40), default=None)
     designation: Mapped[str | None] = mapped_column(String(60), default=None)  # Lecturer | Assistant Professor | Professor
+    education: Mapped[str | None] = mapped_column(String(500), default=None)
+    professional_membership: Mapped[str | None] = mapped_column(String(500), default=None)
+    research_fields: Mapped[str | None] = mapped_column(String(500), default=None)
+    pabx_ext: Mapped[str | None] = mapped_column(String(20), default=None)
+    phone: Mapped[str | None] = mapped_column(String(20), default=None)
+    website: Mapped[str | None] = mapped_column(String(200), default=None)
     teacher_status: Mapped[str | None] = mapped_column(String(20), default=None)  # Active | On leave | Pending | Disabled
-    picture: Mapped[str | None] = mapped_column(String(500))
+    picture: Mapped[str | None] = mapped_column(String(500), default=None)
     password_hash: Mapped[str | None] = mapped_column(String(200))  # staff only
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
@@ -129,10 +135,20 @@ class Course(Base):
     department: Mapped[str] = mapped_column(String(40), index=True)
     semester: Mapped[str] = mapped_column(String(5), index=True)  # "3-2"
     course_type: Mapped[str] = mapped_column(String(10), default="Theory")  # Theory | Lab
-    session: Mapped[str] = mapped_column(String(20), default="2025-2026") # "2025-2026"
+    session: Mapped[str] = mapped_column(String(20), default="Default") # "2025-2026" or "Default"
     section: Mapped[str] = mapped_column(String(10), default="A") # "A", "B", etc.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     teacher_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    status: Mapped[str] = mapped_column(String(20), default="Active") # "Active" or "Inactive"
+
+class CourseStatusLog(Base):
+    __tablename__ = "course_status_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    course_code: Mapped[str] = mapped_column(String(20), index=True)
+    status: Mapped[str] = mapped_column(String(20))
+    timestamp: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
+
 
 
 class Enrollment(Base):

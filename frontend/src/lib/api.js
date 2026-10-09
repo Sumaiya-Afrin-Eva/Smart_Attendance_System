@@ -6,7 +6,7 @@ export const TOKEN_KEY = 'token'
 // to FastAPI by the Vite proxy (see vite.config.js).
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
-  timeout: 12000,
+  timeout: 180000,
 })
 
 // Attach the login token to every request

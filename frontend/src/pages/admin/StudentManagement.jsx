@@ -7,6 +7,7 @@ import {
 import api, { errorMessage } from '../../lib/api'
 
 const semesters = ['1-1', '1-2', '2-1', '2-2', '3-1', '3-2', '4-1', '4-2']
+const DEPARTMENTS = ['CSE', 'EEE', 'ECE', 'ME', 'CE', 'IEM', 'BME', 'MSE', 'URP', 'ARCH', 'BECM', 'LE', 'TE', 'ChE', 'MTE', 'PHY', 'CHEM', 'MATH', 'HUM']
 
 export default function StudentManagement() {
   const navigate = useNavigate()
@@ -107,10 +108,7 @@ export default function StudentManagement() {
           <div className="mt-5 flex flex-wrap gap-2">
             <select value={department} onChange={(event) => setDepartment(event.target.value)} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 outline-none">
               <option value="All">All departments</option>
-              <option value="CSE">CSE</option>
-              <option value="EEE">EEE</option>
-              <option value="ECE">ECE</option>
-              <option value="ME">ME</option>
+              {DEPARTMENTS.map(dept => <option key={dept} value={dept}>{dept}</option>)}
             </select>
             <select value={semester} onChange={(event) => setSemester(event.target.value)} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 outline-none">
               <option value="All">All semesters</option>
