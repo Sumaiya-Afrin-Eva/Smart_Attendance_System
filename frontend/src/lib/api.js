@@ -36,7 +36,7 @@ api.interceptors.response.use(
     // We do NOT retry on actual HTTP error responses (4xx, 5xx).
     const isNetworkError = !error.response
     const maxRetries = 3
-    if (isNetworkError && config && config._retryCount < maxRetries) {
+    if (isNetworkError && config && !config.skipNetworkRetry && config._retryCount < maxRetries) {
       config._retryCount += 1
       await new Promise((resolve) => setTimeout(resolve, 700))
       return api(config)

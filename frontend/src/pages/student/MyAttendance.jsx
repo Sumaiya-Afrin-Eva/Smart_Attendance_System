@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   BookOpen, Calendar, CalendarX,
-  MapPin, ScanFace, UserCheck, ShieldCheck,
+  ScanFace, UserCheck, ShieldCheck,
 } from 'lucide-react'
 import { useAttendanceHistory, useDashboard } from '../../lib/queries'
 import { errorMessage } from '../../lib/api'
@@ -130,12 +130,11 @@ export default function MyAttendance() {
       <Card>
         {rows.length ? (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[700px] text-left text-sm">
+            <table className="w-full min-w-[600px] text-left text-sm">
               <thead className="border-b border-[#f0eee6] bg-stone-50/70 text-xs font-bold uppercase tracking-wider text-stone-500">
                 <tr>
                   <th className="px-6 py-4">Date &amp; Schedule</th>
                   <th className="px-6 py-4">Course Name</th>
-                  <th className="px-6 py-4">Classroom</th>
                   <th className="px-6 py-4">Status</th>
                   <th className="px-6 py-4">Verification Method</th>
                 </tr>
@@ -163,13 +162,6 @@ export default function MyAttendance() {
                       <td className="px-6 py-4.5">
                         <p className="font-display text-sm sm:text-base font-bold text-stone-900">{r.course_title}</p>
                         <p className="text-xs sm:text-sm text-stone-500 font-medium">{r.course_code}</p>
-                      </td>
-
-                      <td className="whitespace-nowrap px-6 py-4.5 text-sm font-medium text-stone-600">
-                        <span className="inline-flex items-center gap-1.5">
-                          <MapPin size={14} className="text-stone-400" />
-                          {r.room ?? 'Room TBA'}
-                        </span>
                       </td>
 
                       <td className="px-6 py-4.5">

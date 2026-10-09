@@ -5,6 +5,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 
 DEPARTMENTS = ["CSE", "EEE", "ECE", "ME", "CE", "IEM", "BME", "MSE", "URP", "ARCH", "BECM", "LE", "TE", "ChE", "MTE", "PHY", "CHEM", "MATH", "HUM"]
 SEMESTERS = [f"{y}-{t}" for y in range(1, 5) for t in (1, 2)]
+ACADEMIC_SESSIONS = [f"{year}-{year + 1}" for year in range(2022, 2027)]
 
 
 class GoogleLoginIn(BaseModel):
@@ -19,6 +20,19 @@ class DevLoginIn(BaseModel):
 class PasswordLoginIn(BaseModel):
     email: EmailStr
     password: str
+    access_code: str | None = None
+
+
+class AdminBootstrapIn(BaseModel):
+    email: EmailStr
+    name: str = Field(min_length=3, max_length=120)
+    password: str = Field(min_length=12, max_length=128)
+    access_code: str = Field(min_length=1, max_length=256)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, v: str) -> str:
+        return " ".join(v.split())
 
 
 class ProfileIn(BaseModel):
@@ -26,9 +40,8 @@ class ProfileIn(BaseModel):
     roll: str
     department: str
     series: str
-    section: str | None = None
+    session: str
     current_semester: str
-    phone: str | None = None
 
     @field_validator("full_name")
     @classmethod
@@ -58,13 +71,16 @@ class ProfileIn(BaseModel):
             raise ValueError("Series must be a year, e.g. 2021")
         return v
 
-    @field_validator("section")
+    @field_validator("session")
     @classmethod
-    def check_section(cls, v: str | None) -> str | None:
-        v = (v or "").strip().upper()
-        if v and not re.fullmatch(r"[A-Z]", v):
-            raise ValueError("Section must be a single letter, e.g. A")
-        return v or None
+    def check_session(cls, v: str) -> str:
+        v = v.strip()
+        if not re.fullmatch(r"20\d{2}-20\d{2}", v):
+            raise ValueError("Session must look like 2021-2022")
+        start, end = (int(part) for part in v.split("-"))
+        if end != start + 1:
+            raise ValueError("Session years must be consecutive")
+        return v
 
     @field_validator("current_semester")
     @classmethod
@@ -72,15 +88,6 @@ class ProfileIn(BaseModel):
         if v not in SEMESTERS:
             raise ValueError("Semester must look like 3-2")
         return v
-
-    @field_validator("phone")
-    @classmethod
-    def check_phone(cls, v: str | None) -> str | None:
-        v = (v or "").strip().replace(" ", "")
-        if v and not re.fullmatch(r"(\+?88)?01\d{9}", v):
-            raise ValueError("Enter a valid Bangladeshi mobile number")
-        return v or None
-
 
 class EnrollmentIn(BaseModel):
     semester: str
@@ -151,6 +158,17 @@ class CourseCreateIn(BaseModel):
             raise ValueError("Credit should be between 0.5 and 6.0")
         return v
 
+    @field_validator("session")
+    @classmethod
+    def check_session(cls, v: str) -> str:
+        value = v.strip()
+        if not re.fullmatch(r"20\d{2}-20\d{2}", value):
+            raise ValueError("Session must look like 2021-2022")
+        start, end = (int(part) for part in value.split("-"))
+        if end != start + 1:
+            raise ValueError("Session years must be consecutive")
+        return value
+
 
 class CourseTeacherAssignmentIn(BaseModel):
     teacher_id: int | None = None
@@ -170,12 +188,25 @@ class StudentCourseEnrollmentIn(BaseModel):
         return v
 
 
+class CourseStudentsIn(BaseModel):
+    semester: str
+    roll_input: str = Field(max_length=2000)
+
+    @field_validator("semester")
+    @classmethod
+    def check_semester(cls, v: str) -> str:
+        if v not in SEMESTERS:
+            raise ValueError("Semester must look like 3-2")
+        return v
+
+
 class AdminStudentCreateIn(BaseModel):
     name: str = Field(min_length=3, max_length=120)
     roll: str
     email: EmailStr
     session: str
     department: str
+    phone: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -203,7 +234,23 @@ class AdminStudentCreateIn(BaseModel):
         value = v.strip()
         if not re.fullmatch(r"\d{4}-\d{4}", value):
             raise ValueError("Session must look like 2021-2022")
+        start, end = (int(part) for part in value.split("-"))
+        if end != start + 1:
+            raise ValueError("Session years must be consecutive")
         return value
+
+    @field_validator("phone")
+    @classmethod
+    def check_phone(cls, v: str | None) -> str | None:
+        value = (v or "").strip().replace(" ", "")
+        if value and not re.fullmatch(r"(\+?88)?01\d{9}", value):
+            raise ValueError("Enter a valid Bangladeshi mobile number")
+        return value or None
+
+
+class AdminStudentUpdateIn(AdminStudentCreateIn):
+    pass
+
 
 class ClassSessionCreateIn(BaseModel):
     course_id: int

@@ -18,9 +18,8 @@ export default function ProfileForm({ profile, onSaved, submitLabel = 'Save Prof
     roll: profile?.roll ?? rollFromEmail(user.email),
     department: profile?.department ?? 'CSE',
     series: profile?.series ?? '',
-    section: profile?.section ?? '',
+    session: profile?.session ?? '',
     current_semester: profile?.current_semester ?? '',
-    phone: profile?.phone ?? '',
   })
   const [errors, setErrors] = useState({})
   const [error, setError] = useState('')
@@ -28,7 +27,12 @@ export default function ProfileForm({ profile, onSaved, submitLabel = 'Save Prof
   const [saved, setSaved] = useState(false)
 
   const set = (name) => (e) => {
-    setForm({ ...form, [name]: e.target.value })
+    const value = e.target.value
+    setForm({
+      ...form,
+      [name]: value,
+      ...(name === 'session' ? { series: value.slice(0, 4) } : {}),
+    })
     setErrors({ ...errors, [name]: undefined })
     setSaved(false)
   }
@@ -93,8 +97,19 @@ export default function ProfileForm({ profile, onSaved, submitLabel = 'Save Prof
           </select>
         </Field>
 
-        <Field label="Series / Admission Batch" htmlFor="series" error={errors.series} hint="4 digits (e.g. 2021)">
-          {input('series', { required: true, inputMode: 'numeric', maxLength: 4, placeholder: '2021' })}
+        <Field label="Academic Session" htmlFor="session" error={errors.session} hint="Must match the admin-approved roster">
+          <select
+            id="session"
+            value={form.session}
+            onChange={set('session')}
+            className={inputClass}
+            required
+          >
+            <option value="" disabled>Select your session</option>
+            {(meta?.sessions ?? []).map((session) => (
+              <option key={session} value={session}>{session}</option>
+            ))}
+          </select>
         </Field>
 
         <Field label="Current Semester" htmlFor="current_semester" error={errors.current_semester}>
@@ -114,15 +129,6 @@ export default function ProfileForm({ profile, onSaved, submitLabel = 'Save Prof
           </select>
         </Field>
 
-        <Field label="Section (Optional)" htmlFor="section" error={errors.section} hint="Section A or B">
-          {input('section', { maxLength: 1, placeholder: 'A' })}
-        </Field>
-
-        <div className="sm:col-span-2">
-          <Field label="Contact Mobile Number (Optional)" htmlFor="phone" error={errors.phone} hint="For emergency notices">
-            {input('phone', { type: 'tel', placeholder: '01XXXXXXXXX', autoComplete: 'tel' })}
-          </Field>
-        </div>
       </div>
 
       <ErrorBox>{Object.keys(errors).length ? null : error}</ErrorBox>
