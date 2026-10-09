@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   BookOpen,
   CalendarRange,
@@ -12,6 +13,7 @@ import {
   Users,
   Clock3,
   X,
+  UploadCloud,
 } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
 
@@ -24,7 +26,7 @@ const emptyCourseForm = {
   semester: '1-1',
   course_type: 'Theory',
   credit: '3',
-  session: '2025-2026',
+  session: '',
 }
 
 export default function AdminCourses() {
@@ -36,13 +38,16 @@ export default function AdminCourses() {
   const [form, setForm] = useState(emptyCourseForm)
   const [studentFilter, setStudentFilter] = useState({ department: 'CSE', semester: '3-2', section: '', q: '' })
   const [selectedCourseId, setSelectedCourseId] = useState('')
-  const [selectedTeacherId, setSelectedTeacherId] = useState('')
-  const [selectedSection, setSelectedSection] = useState('A')
   const [selectedStudentIds, setSelectedStudentIds] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [savedAssignment, setSavedAssignment] = useState(false)
   const [notice, setNotice] = useState('')
+  const [recentlyAddedCourses, setRecentlyAddedCourses] = useState([])
+  
+  // Bulk Upload state
+  const [entryMode, setEntryMode] = useState('manual') // 'manual' | 'bulk'
+  const [uploadFile, setUploadFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
 
   const summary = useMemo(() => [
     { label: 'Total courses', value: String(courses.length), tone: 'emerald' },
@@ -75,7 +80,6 @@ export default function AdminCourses() {
         setTeachers(teacherData)
         if (courseData.length) {
           setSelectedCourseId(String(courseData[0].id))
-          setSelectedTeacherId(courseData[0].teacher_id ? String(courseData[0].teacher_id) : '')
         }
       } catch (error) {
         setNotice(errorMessage(error, 'Failed to load course data.'))
@@ -106,6 +110,16 @@ export default function AdminCourses() {
     loadStudents()
   }, [studentFilter])
 
+  useEffect(() => {
+    if (notice) {
+      const timer = setTimeout(() => {
+        setNotice('')
+      }, 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [notice])
+
+
   const handleSubmit = async (event) => {
     event.preventDefault()
     setSaving(true)
@@ -117,35 +131,41 @@ export default function AdminCourses() {
       }
       const { data } = await api.post('/admin/courses', payload)
       setCourses((current) => [data, ...current])
+      setRecentlyAddedCourses((prev) => [data, ...prev])
       setForm(emptyCourseForm)
       setSelectedCourseId(String(data.id))
       setNotice(`Course ${data.code} saved to the database.`)
     } catch (error) {
       setNotice(errorMessage(error, 'Course could not be saved.'))
+      setForm(emptyCourseForm)
     } finally {
       setSaving(false)
     }
   }
 
-  const handleTeacherAssignment = async () => {
-    if (!selectedCourseId) return
+  const handleBulkUpload = async (e) => {
+    e.preventDefault()
+    if (!uploadFile) return
+    setUploading(true)
     setNotice('')
+    
     try {
-      const { data } = await api.patch(`/admin/courses/${selectedCourseId}/teacher`, {
-        teacher_id: selectedTeacherId ? Number(selectedTeacherId) : null,
-        section: selectedSection,
-      })
-      setCourses((current) => current.map((course) => String(course.id) === String(data.id) ? data : course))
+      const formData = new FormData()
+      formData.append('file', uploadFile)
       
-      setSavedAssignment(true)
-      setTimeout(() => {
-        setSavedAssignment(false)
-        setSelectedCourseId('')
-        setSelectedTeacherId('')
-        setSelectedSection('A')
-      }, 2000)
+      const { data } = await api.post('/admin/courses/bulk-upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      })
+      
+      setNotice(`Successfully added ${data.added} courses. Skipped ${data.skipped} items (duplicates or errors).`)
+      setUploadFile(null)
+      // Re-fetch courses to get the newly added ones
+      const { data: newCourses } = await api.get('/admin/courses')
+      setCourses(newCourses)
     } catch (error) {
-      setNotice(errorMessage(error, 'Teacher assignment failed.'))
+      setNotice(errorMessage(error, 'Bulk upload failed.'))
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -166,6 +186,18 @@ export default function AdminCourses() {
     }
   }
 
+  const handleToggleCourseStatus = async (courseId, currentStatus) => {
+    setNotice('')
+    try {
+      const newStatus = currentStatus === 'Inactive' ? 'Active' : 'Inactive'
+      const { data } = await api.patch(`/admin/courses/${courseId}/status`, { status: newStatus })
+      setCourses(courses.map(c => String(c.id) === String(courseId) ? { ...c, status: data.status } : c))
+      setNotice(`Course ${data.code} marked as ${data.status}.`)
+    } catch (error) {
+      setNotice(errorMessage(error, 'Failed to update course status.'))
+    }
+  }
+
   const handleRemoveCourse = async (id, code) => {
     if (!window.confirm(`Are you sure you want to permanently delete ${code}? This will remove all enrollments and class sessions associated with it.`)) return
     setNotice('')
@@ -176,6 +208,19 @@ export default function AdminCourses() {
         setSelectedCourseId('')
       }
       setNotice(`Course ${code} permanently deleted.`)
+    } catch (error) {
+      setNotice(errorMessage(error, 'Course deletion failed.'))
+    }
+  }
+
+  const handleDeleteAllCourses = async () => {
+    if (!window.confirm(`Are you sure you want to permanently delete all courses? This will remove all enrollments and class sessions associated with them.`)) return
+    setNotice('')
+    try {
+      await api.delete(`/admin/courses/all`)
+      setCourses([])
+      setSelectedCourseId('')
+      setNotice(`All courses permanently deleted.`)
     } catch (error) {
       setNotice(errorMessage(error, 'Course deletion failed.'))
     }
@@ -223,16 +268,18 @@ export default function AdminCourses() {
         ))}
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
+      <section className="grid gap-6">
         <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-stone-100 pb-4">
             <h3 className="font-display text-2xl font-bold text-stone-900">Add new course</h3>
-            <span className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">
-              <Plus size={14} /> Database-backed
-            </span>
+            <div className="flex bg-stone-100 p-1 rounded-xl">
+              <button onClick={() => setEntryMode('manual')} className={`px-4 py-1.5 text-sm font-semibold rounded-lg transition-colors ${entryMode === 'manual' ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}>Manual Entry</button>
+              <button onClick={() => setEntryMode('bulk')} className={`px-4 py-1.5 text-sm font-semibold rounded-lg transition-colors ${entryMode === 'bulk' ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}>Bulk Upload (AI)</button>
+            </div>
           </div>
 
-          <form className="grid gap-4 md:grid-cols-2" onSubmit={handleSubmit}>
+          {entryMode === 'manual' ? (
+            <form className="grid gap-4 md:grid-cols-2" onSubmit={handleSubmit}>
             <label className="space-y-1.5">
               <span className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Course code</span>
               <input value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400" placeholder="CSE 3101" required />
@@ -267,8 +314,8 @@ export default function AdminCourses() {
               </select>
             </label>
             <label className="space-y-1.5">
-              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Session</span>
-              <input value={form.session} onChange={(event) => setForm({ ...form, session: event.target.value })} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400" placeholder="2025-2026" required />
+              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Starting session (Optional)</span>
+              <input value={form.session} onChange={(event) => setForm({ ...form, session: event.target.value })} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400" placeholder="e.g. 2025-2026" />
             </label>
             <div className="md:col-span-2 flex gap-3 justify-end">
               <button type="button" onClick={() => setForm(emptyCourseForm)} className="inline-flex items-center justify-center gap-2 rounded-xl border border-stone-300 bg-white px-4 py-2.5 text-sm font-semibold text-stone-700 hover:bg-stone-50">
@@ -280,50 +327,66 @@ export default function AdminCourses() {
               </button>
             </div>
           </form>
-        </div>
+          ) : (
+          <form onSubmit={handleBulkUpload} className="py-4">
+            <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-stone-300 bg-stone-50 p-8 text-center hover:bg-stone-100 transition-colors cursor-pointer relative">
+              <UploadCloud size={40} className="mb-3 text-stone-400" />
+              <p className="text-sm font-semibold text-stone-700 mb-1">Click to upload a document or spreadsheet</p>
+              <p className="text-xs text-stone-500 mb-4">Supports Excel (.xlsx, .csv), PDF, PNG, JPG, or PPTX containing course details</p>
+              
+              <input type="file" onChange={(e) => setUploadFile(e.target.files[0])} accept=".pdf,.png,.jpg,.jpeg,.pptx,.xlsx,.xls,.csv" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" required />
+              
+              {uploadFile && (
+                <div className="bg-white px-4 py-2 rounded-lg shadow-sm border border-stone-200 inline-flex items-center gap-2">
+                  <span className="text-sm font-medium text-emerald-700 truncate max-w-[200px]">{uploadFile.name}</span>
+                  <X size={14} className="text-stone-400 hover:text-stone-600 z-10 cursor-pointer" onClick={(e) => { e.preventDefault(); setUploadFile(null); }} />
+                </div>
+              )}
+            </div>
+            
+            <div className="mt-5 flex justify-end">
+              <button type="submit" disabled={uploading || !uploadFile} className="inline-flex items-center justify-center gap-2 rounded-xl bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-70">
+                {uploading ? (
+                  <>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white"></div>
+                    Extracting data...
+                  </>
+                ) : (
+                  <>
+                    <UploadCloud size={16} /> Process & Upload
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+          )}
 
-        <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
-          <div className="mb-4 flex items-center justify-between gap-2">
-            <h3 className="font-display text-2xl font-bold text-stone-900">Assignments</h3>
-            <span className="rounded-full bg-sky-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-sky-700 ring-1 ring-sky-200">Live</span>
-          </div>
-
-          <div className="space-y-4">
-            <label className="space-y-1.5">
-              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Course</span>
-              <select value={selectedCourseId} onChange={(event) => {
-                const value = event.target.value
-                setSelectedCourseId(value)
-                const course = courses.find((item) => String(item.id) === String(value))
-                setSelectedTeacherId(course?.teacher_id ? String(course.teacher_id) : '')
-              }} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
-                {courses.length === 0 ? <option value="">No courses yet</option> : courses.map((course) => <option key={course.id} value={course.id}>{course.code} - {course.title}</option>)}
-              </select>
-            </label>
-
-            <label className="space-y-1.5">
-              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Section</span>
-              <select value={selectedSection} onChange={(event) => setSelectedSection(event.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
-                <option value="A">A</option>
-                <option value="B">B</option>
-                <option value="Both">Both</option>
-              </select>
-            </label>
-
-            <label className="space-y-1.5">
-              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Teacher</span>
-              <select value={selectedTeacherId} onChange={(event) => setSelectedTeacherId(event.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
-                <option value="">Unassign</option>
-                {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}
-              </select>
-            </label>
-
-            <button onClick={handleTeacherAssignment} className={`mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-200 ${savedAssignment ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-stone-900 hover:bg-stone-700'}`}>
-              <Check size={16} /> {savedAssignment ? 'Saved!' : 'Save teacher assignment'}
-            </button>
-          </div>
+          {recentlyAddedCourses.length > 0 && entryMode === 'manual' && (
+            <div className="mt-8 border-t border-stone-200 pt-6">
+              <h4 className="mb-3 text-xs font-bold uppercase tracking-[0.2em] text-stone-500">Recently Added</h4>
+              <ul className="space-y-2">
+                {recentlyAddedCourses.map((rc, i) => {
+                  const [y, t] = rc.semester.split('-')
+                  return (
+                    <li key={i} className="flex items-center justify-between rounded-xl bg-emerald-50 px-4 py-3 border border-emerald-100">
+                      <Link to={`/admin/assignments?courseId=${rc.id}&dept=${rc.department}&year=${y}&term=${t}&session=${rc.session}`} className="text-sm font-semibold text-blue-600 underline hover:text-blue-800 transition-colors">
+                        Assign teacher to {rc.code} - {rc.title}
+                      </Link>
+                      <button type="button" onClick={() => setRecentlyAddedCourses(prev => prev.filter((_, idx) => idx !== i))} className="text-emerald-600 hover:text-emerald-900 transition-colors" title="Remove from list">
+                        <X size={18} />
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
         </div>
       </section>
+
+      {notice && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 shadow-sm">{notice}</div>
+      )}
 
       <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -390,12 +453,20 @@ export default function AdminCourses() {
             <input value={search} onChange={(event) => setSearch(event.target.value)} type="text" placeholder="Search course code, title or teacher..." className="w-full bg-transparent text-sm text-stone-700 outline-none placeholder:text-stone-400" />
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-100">
-              <Filter size={15} /> Department
-            </button>
-            <button type="button" className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-100">
-              <CalendarRange size={15} /> Semester
+          <div className="flex flex-wrap gap-2 items-center justify-between w-full lg:w-auto">
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-100">
+                <Filter size={15} /> Department
+              </button>
+              <button type="button" className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-100">
+                <CalendarRange size={15} /> Semester
+              </button>
+            </div>
+            <button 
+              onClick={handleDeleteAllCourses} 
+              className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-rose-700 active:scale-95"
+            >
+              <X size={16} /> Delete All
             </button>
           </div>
         </div>
@@ -416,12 +487,13 @@ export default function AdminCourses() {
                       <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700 ring-1 ring-emerald-200">{course.semester}</span>
                       <span className="rounded-full bg-sky-50 px-2.5 py-1 text-sky-700 ring-1 ring-sky-200">{course.type}</span>
                       <span className="rounded-full bg-amber-50 px-2.5 py-1 text-amber-700 ring-1 ring-amber-200">{course.department}</span>
-                      <span className="rounded-full bg-purple-50 px-2.5 py-1 text-purple-700 ring-1 ring-purple-200">Sec {course.section}</span>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 self-start xl:self-center">
-                    <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200">Active</span>
+                    <button type="button" onClick={() => handleToggleCourseStatus(course.id, course.status)} className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 transition-colors cursor-pointer ${course.status === 'Inactive' ? 'bg-rose-50 text-rose-700 ring-rose-200 hover:bg-rose-100' : 'bg-emerald-50 text-emerald-700 ring-emerald-200 hover:bg-emerald-100'}`}>
+                      {course.status || 'Active'}
+                    </button>
                   </div>
                 </div>
 
@@ -461,10 +533,6 @@ export default function AdminCourses() {
           )}
         </div>
       </section>
-
-      {notice && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{notice}</div>
-      )}
     </div>
   )
 }
