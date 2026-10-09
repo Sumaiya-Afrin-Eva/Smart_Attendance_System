@@ -50,4 +50,5 @@ def course_out(course: Course) -> dict:
         "type": course.course_type,
         "session": course.session,
         "section": course.section,
+        "status": getattr(course, "status", "Active"),
     }

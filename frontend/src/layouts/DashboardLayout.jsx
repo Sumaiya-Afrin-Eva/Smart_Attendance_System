@@ -25,6 +25,7 @@ export const NAV = {
   admin: [
     { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true },
     { to: '/admin/courses', label: 'Course Management', icon: BookOpen },
+    { to: '/admin/assignments', label: 'Teacher Assignment', icon: ClipboardCheck },
     { to: '/admin/teachers', label: 'Teacher Management', icon: Users },
     { to: '/admin/students', label: 'Student Management', icon: GraduationCap },
     { to: '/admin/alerts', label: 'Security Alerts', icon: ShieldAlert },
@@ -114,7 +115,7 @@ export default function DashboardLayout() {
       {/* Modern Light Sidebar */}
       <aside
         className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r border-[#e7e5e0] bg-white transition-all duration-300 lg:static lg:translate-x-0 ${open ? 'translate-x-0' : '-translate-x-full'
-          } ${collapsed ? 'w-20' : 'w-68'}`}
+          } ${collapsed ? 'w-20' : 'w-72'}`}
       >
         {/* Header Branding */}
         <div className={`flex h-18 items-center border-b border-[#f0eee6] px-5 ${collapsed ? 'justify-center' : 'justify-between'}`}>

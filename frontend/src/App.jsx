@@ -16,6 +16,7 @@ import TeacherAnalytics from './pages/teacher/TeacherAnalytics'
 import TeacherSettings from './pages/teacher/TeacherSettings'
 import AdminDashboard from './pages/admin/AdminDashboard'
 import AdminCourses from './pages/admin/AdminCourses'
+import AdminTeacherAssignment from './pages/admin/AdminTeacherAssignment'
 import TeacherManagement from './pages/admin/TeacherManagement'
 import StudentManagement from './pages/admin/StudentManagement'
 import SecurityAlerts from './pages/admin/SecurityAlerts'
@@ -59,6 +60,7 @@ export default function App() {
         <Route path="/admin" element={<DashboardLayout />}>
           <Route index element={<AdminDashboard />} />
           <Route path="courses" element={<AdminCourses />} />
+          <Route path="assignments" element={<AdminTeacherAssignment />} />
           <Route path="teachers" element={<TeacherManagement />} />
           <Route path="students" element={<StudentManagement />} />
           <Route path="users" element={<TeacherManagement />} />

@@ -22,6 +22,9 @@ const statusColors = {
   Pending: 'bg-sky-50 text-sky-700 ring-sky-200',
 }
 
+const DEPARTMENTS = ["CSE", "EEE", "ECE", "ME", "CE", "IEM", "BME", "MSE", "URP", "ARCH", "BECM", "LE", "TE", "ChE", "MTE", "PHY", "CHEM", "MATH", "HUM"];
+
+
 const riskColors = {
   Low: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   Medium: 'bg-amber-50 text-amber-700 ring-amber-200',
@@ -173,10 +176,7 @@ export default function StudentManagement() {
           <div className="mt-5 flex flex-wrap gap-2">
             <select value={department} onChange={(event) => setDepartment(event.target.value)} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 outline-none">
               <option value="All">All departments</option>
-              <option value="CSE">CSE</option>
-              <option value="EEE">EEE</option>
-              <option value="ECE">ECE</option>
-              <option value="ME">ME</option>
+              {DEPARTMENTS.map(dept => <option key={dept} value={dept}>{dept}</option>)}
             </select>
             <select value={semester} onChange={(event) => setSemester(event.target.value)} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 outline-none">
               <option value="All">All semesters</option>
@@ -314,11 +314,7 @@ export default function StudentManagement() {
               <label className="block space-y-1.5">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-stone-500">Department</span>
                 <select value={form.department} onChange={(event) => setForm({ ...form, department: event.target.value })} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
-                  <option value="CSE">CSE</option>
-                  <option value="EEE">EEE</option>
-                  <option value="ECE">ECE</option>
-                  <option value="ME">ME</option>
-                  <option value="CE">CE</option>
+                  {DEPARTMENTS.map(dept => <option key={dept} value={dept}>{dept}</option>)}
                 </select>
               </label>
             </div>

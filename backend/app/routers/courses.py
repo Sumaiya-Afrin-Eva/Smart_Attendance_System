@@ -10,8 +10,9 @@ from ..database import get_db
 from ..marks import RULE
 from ..models import (
     Attendance, ClassSession, Course, Enrollment, FaceSample, StudentProfile,
-    AdminSetting, User,
+    AdminSetting, User, CourseStatusLog,
 )
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from ..schemas import (
     AdminStudentCreateIn,
     CourseCreateIn,
@@ -21,6 +22,10 @@ from ..schemas import (
     SEMESTERS,
     StudentCourseEnrollmentIn,
 )
+from pydantic import BaseModel
+
+class CourseStatusUpdateIn(BaseModel):
+    status: str
 from ..security import get_current_user, hash_password, require_role
 from ..services import course_out
 
@@ -330,7 +335,7 @@ def delete_teacher_session(session_id: int, db: Session = Depends(get_db), user:
 
 @router.get("/admin/courses")
 def admin_list_courses(db: Session = Depends(get_db), _: User = Depends(admin_only)):
-    courses = db.scalars(select(Course).order_by(Course.department, Course.semester, Course.code)).all()
+    courses = db.scalars(select(Course).order_by(Course.code)).all()
     return [_admin_course_out(db, course) for course in courses]
 
 
@@ -354,6 +359,198 @@ def create_course(body: CourseCreateIn, db: Session = Depends(get_db), _: User =
     return _admin_course_out(db, course)
 
 
+@router.patch("/admin/courses/{course_id}/status")
+def update_course_status(
+    course_id: int,
+    body: CourseStatusUpdateIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    course = db.get(Course, course_id)
+    if not course:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found.")
+    
+    course.status = body.status
+    log = CourseStatusLog(course_code=course.code, status=body.status)
+    db.add(log)
+    db.commit()
+    db.refresh(course)
+    return _admin_course_out(db, course)
+
+
+@router.post("/admin/courses/bulk-upload")
+async def bulk_upload_courses(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    from ..ai_extraction import extract_courses_from_file
+    from starlette.concurrency import run_in_threadpool
+    import re
+    from ..ai_extraction import _semester_from_heading
+    
+    file_content = await file.read()
+    mime_type = file.content_type
+    
+    is_spreadsheet = mime_type in [
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "text/csv"
+    ] or file.filename.lower().endswith(('.xlsx', '.xls', '.csv'))
+    
+    if is_spreadsheet:
+        import pandas as pd
+        import io
+        try:
+            if file.filename.lower().endswith('.csv') or mime_type == "text/csv":
+                df = pd.read_csv(io.BytesIO(file_content))
+            else:
+                df = pd.read_excel(io.BytesIO(file_content))
+            
+            extracted_data = []
+            for _, row in df.iterrows():
+                def get_val(keys, default=None):
+                    for k in keys:
+                        for col in df.columns:
+                            if col.lower().strip() == k.lower():
+                                v = row[col]
+                                return str(v) if pd.notna(v) else default
+                    return default
+                    
+                data = {
+                    "code": get_val(["code", "course code", "course_code", "coursecode"]),
+                    "title": get_val(["title", "course title", "course_title", "name"]),
+                    "credit": get_val(["credit", "credits"]),
+                    "department": get_val(["department", "dept"]),
+                    "semester": get_val(["semester", "sem"]),
+                    "course_type": get_val(["course_type", "type", "course type"]),
+                    "session": get_val(["session"])
+                }
+                if data["code"]:
+                    extracted_data.append(data)
+        except Exception as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Error parsing spreadsheet: {str(e)}")
+    else:
+        try:
+            extracted_data = await run_in_threadpool(extract_courses_from_file, file_content, mime_type)
+        except Exception as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+        
+    if not extracted_data:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No courses were extracted from the document.")
+
+    added = 0
+    skipped = 0
+    skipped_items: list[dict] = []
+
+    def _normalize_course(d: dict) -> dict:
+        out = dict(d)
+        # Normalize code: ensure space between letters and numbers and uppercase letters
+        code = out.get('code') or out.get('Code')
+        if code:
+            code = re.sub(r"([A-Za-z]+)\s*([0-9])", r"\1 \2", str(code))
+            code = re.sub(r"\s+", " ", code).strip().upper()
+            out['code'] = code
+
+        # Normalize title
+        title = out.get('title') or out.get('Title')
+        if title:
+            out['title'] = str(title).strip()
+
+        # Normalize credit to float
+        credit = out.get('credit')
+        if credit is not None:
+            try:
+                out['credit'] = float(str(credit).strip())
+            except Exception:
+                # try to extract number
+                m = re.search(r"(\d+(?:\.\d+)?)", str(credit))
+                out['credit'] = float(m.group(1)) if m else 3.0
+        else:
+            out['credit'] = 3.0
+
+        # Department mapping
+        dept = out.get('department')
+        if dept:
+            dept_str = str(dept).strip()
+            # Try to match case-insensitively with DEPARTMENTS
+            matched_dept = next((d for d in DEPARTMENTS if d.lower() == dept_str.lower()), dept_str.upper())
+            out['department'] = matched_dept
+
+        # Semester normalization
+        sem = out.get('semester')
+        if sem:
+            sem_s = str(sem).strip()
+            m = re.search(r"(\d)\s*[-/]\s*(\d)", sem_s)
+            if m:
+                out['semester'] = f"{m.group(1)}-{m.group(2)}"
+            else:
+                out['semester'] = _semester_from_heading(sem_s)
+
+        # Course type
+        ctype = out.get('course_type') or out.get('type')
+        if ctype:
+            s = str(ctype).strip().lower()
+            out['course_type'] = 'Lab' if re.search(r"lab|sessional|laboratory|project|design", s) else 'Theory'
+
+        # Session default
+        if not out.get('session'):
+            out['session'] = 'Default'
+
+        return out
+
+    seen_codes = set()
+    for data in extracted_data:
+        norm = _normalize_course(data)
+        try:
+            # Validate via Pydantic
+            body = CourseCreateIn(**norm)
+        except Exception as e:
+            skipped += 1
+            skipped_items.append({"data": norm, "reason": f"validation_error: {e}"})
+            continue
+
+        # Check for duplicate in current batch or DB
+        if body.code in seen_codes or db.scalar(select(Course).where(Course.code == body.code)):
+            skipped += 1
+            skipped_items.append({"data": norm, "reason": "duplicate_code"})
+            continue
+
+        seen_codes.add(body.code)
+        
+        course = Course(
+            code=body.code,
+            title=body.title,
+            department=body.department,
+            semester=body.semester,
+            course_type=body.course_type,
+            credit=body.credit,
+            session=body.session,
+            status='Active'
+        )
+        db.add(course)
+        try:
+            db.flush()
+            added += 1
+        except Exception as e:
+            db.rollback()
+            skipped += 1
+            skipped_items.append({"data": norm, "reason": f"db_error: {e}"})
+            continue
+
+    db.commit()
+
+    if skipped > 0:
+        print("SKIPPED ITEMS:", skipped_items)
+
+    return {
+        "detail": "Bulk upload completed.",
+        "added": added,
+        "skipped": skipped,
+        "total": len(extracted_data),
+        "skipped_items": skipped_items,
+    }
+
 @router.patch("/admin/courses/{course_id}/teacher")
 def assign_course_teacher(
     course_id: int,
@@ -376,6 +573,17 @@ def assign_course_teacher(
     db.commit()
     db.refresh(course)
     return _admin_course_out(db, course)
+
+
+@router.delete("/admin/courses/all")
+def delete_all_courses(db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    db.query(Enrollment).delete()
+    db.query(Attendance).delete(synchronize_session=False)
+    db.query(ClassSession).delete(synchronize_session=False)
+    db.query(CourseStatusLog).delete(synchronize_session=False)
+    db.query(Course).delete(synchronize_session=False)
+    db.commit()
+    return {"success": True}
 
 
 @router.delete("/admin/courses/{course_id}")
@@ -421,6 +629,13 @@ def list_teachers(db: Session = Depends(get_db), _: User = Depends(admin_only)):
             "role": user.role,
             "department": department_name,
             "designation": user.designation or ("Administrator" if user.role == "admin" else "Lecturer"),
+            "education": user.education,
+            "professionalMembership": user.professional_membership,
+            "researchFields": user.research_fields,
+            "pabxExt": user.pabx_ext,
+            "phone": user.phone,
+            "website": user.website,
+            "picture": user.picture,
             "courses": len(courses),
             "students": len(set(student_ids)),
             "status": display_status,
@@ -429,12 +644,144 @@ def list_teachers(db: Session = Depends(get_db), _: User = Depends(admin_only)):
     return payload
 
 
+@router.post("/admin/teachers/bulk-upload")
+async def bulk_upload_teachers(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    import io
+    import pandas as pd
+    
+    file_content = await file.read()
+    mime_type = file.content_type
+    
+    is_spreadsheet = mime_type in [
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+        "text/csv"
+    ] or file.filename.lower().endswith(('.xlsx', '.xls', '.csv'))
+    
+    if not is_spreadsheet:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Please upload a valid Excel or CSV file for teachers.")
+        
+    try:
+        if file.filename.lower().endswith('.csv') or mime_type == "text/csv":
+            df = pd.read_csv(io.BytesIO(file_content))
+        else:
+            df = pd.read_excel(io.BytesIO(file_content))
+    except Exception as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Error parsing spreadsheet: {str(e)}")
+        
+    extracted_data = []
+    for _, row in df.iterrows():
+        def get_val(keys, default=None):
+            for k in keys:
+                for col in df.columns:
+                    if col.lower().strip() == k.lower():
+                        v = row[col]
+                        return str(v) if pd.notna(v) else default
+            return default
+            
+        data = {
+            "name": get_val(["name", "full name", "teacher name"]),
+            "email": get_val(["email", "academic email"]),
+            "department": get_val(["department", "dept"]),
+            "designation": get_val(["designation", "title", "position"]),
+            "education": get_val(["education", "degree", "qualifications"]),
+            "professional_membership": get_val(["professional membership", "membership"]),
+            "research_fields": get_val(["research fields", "research field", "research"]),
+            "pabx_ext": get_val(["pabx ext", "pabx", "ext", "extension"]),
+            "phone": get_val(["phone", "mobile", "contact", "mobile number"]),
+            "website": get_val(["website", "web", "url", "link"]),
+            "picture": get_val(["picture", "image", "photo", "image link", "photo link"]),
+        }
+        if data["name"] and data["email"]:
+            extracted_data.append(data)
+            
+    if not extracted_data:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No valid teacher records found in the document. Ensure 'Name' and 'Email' columns exist.")
+
+    added = 0
+    skipped = 0
+    skipped_items = []
+
+    seen_emails = set()
+    for data in extracted_data:
+        email = data["email"].strip().lower()
+        name = data["name"].strip()
+        dept = (data["department"] or "General").strip().upper()
+        designation = (data["designation"] or "Lecturer").strip()
+        
+        if email in seen_emails or db.scalar(select(User).where(User.email == email)):
+            skipped += 1
+            skipped_items.append({"data": data, "reason": "duplicate_email"})
+            continue
+            
+        seen_emails.add(email)
+        
+        user = User(
+            email=email,
+            name=name,
+            role="teacher",
+            department=dept,
+            designation=designation,
+            education=data.get("education") or None,
+            professional_membership=data.get("professional_membership") or None,
+            research_fields=data.get("research_fields") or None,
+            pabx_ext=data.get("pabx_ext") or None,
+            phone=data.get("phone") or None,
+            website=data.get("website") or None,
+            picture=data.get("picture") or None,
+            teacher_status="Active",
+            password_hash=None, # password can be set later or use default
+            is_active=True,
+        )
+        db.add(user)
+        try:
+            db.flush()
+            added += 1
+        except Exception as e:
+            db.rollback()
+            skipped += 1
+            skipped_items.append({"data": data, "reason": f"db_error: {e}"})
+            continue
+
+    db.commit()
+
+    return {
+        "detail": "Bulk upload completed.",
+        "added": added,
+        "skipped": skipped,
+        "total": len(extracted_data),
+        "skipped_items": skipped_items,
+    }
+
+
+@router.delete("/admin/teachers/all")
+def delete_all_teachers(db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    teachers = db.scalars(select(User).where(User.role == "teacher")).all()
+    for teacher in teachers:
+        courses = db.scalars(select(Course).where(Course.teacher_id == teacher.id)).all()
+        for course in courses:
+            course.teacher_id = None
+        db.delete(teacher)
+    db.commit()
+    return {"detail": "All teachers deleted successfully."}
+
+
 @router.post("/admin/teachers")
 def create_teacher(body: dict, db: Session = Depends(get_db), _: User = Depends(admin_only)):
     email = (body.get("email") or "").strip().lower()
     name = (body.get("name") or "").strip()
     department = (body.get("department") or "").strip().upper()
     designation = (body.get("designation") or "").strip()
+    education = (body.get("education") or "").strip()
+    professional_membership = (body.get("professionalMembership") or "").strip()
+    research_fields = (body.get("researchFields") or "").strip()
+    pabx_ext = (body.get("pabxExt") or "").strip()
+    phone = (body.get("phone") or "").strip()
+    website = (body.get("website") or "").strip()
     password = (body.get("password") or "").strip()
     if not email or not name:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Teacher email and name are required.")
@@ -448,6 +795,12 @@ def create_teacher(body: dict, db: Session = Depends(get_db), _: User = Depends(
         role="teacher",
         department=department or None,
         designation=designation or None,
+        education=education or None,
+        professional_membership=professional_membership or None,
+        research_fields=research_fields or None,
+        pabx_ext=pabx_ext or None,
+        phone=phone or None,
+        website=website or None,
         teacher_status="Active",
         password_hash=hash_password(password) if password else None,
         is_active=True,
@@ -462,6 +815,12 @@ def create_teacher(body: dict, db: Session = Depends(get_db), _: User = Depends(
         "role": user.role,
         "department": user.department,
         "designation": user.designation,
+        "education": user.education,
+        "professionalMembership": user.professional_membership,
+        "researchFields": user.research_fields,
+        "pabxExt": user.pabx_ext,
+        "phone": user.phone,
+        "website": user.website,
         "status": "Active",
     }
 
@@ -481,6 +840,12 @@ def update_teacher(
     name = (body.get("name") or "").strip()
     department = (body.get("department") or "").strip().upper()
     designation = (body.get("designation") or "").strip()
+    education = (body.get("education") or "").strip()
+    professional_membership = (body.get("professionalMembership") or "").strip()
+    research_fields = (body.get("researchFields") or "").strip()
+    pabx_ext = (body.get("pabxExt") or "").strip()
+    phone = (body.get("phone") or "").strip()
+    website = (body.get("website") or "").strip()
     password = (body.get("password") or "").strip()
     if not email or not name:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Teacher email and name are required.")
@@ -492,8 +857,14 @@ def update_teacher(
     teacher.email = email
     if department:
         teacher.department = department
-    if designation:
-        teacher.designation = designation
+    teacher.designation = designation or None
+    teacher.education = education or None
+    teacher.professional_membership = professional_membership or None
+    teacher.research_fields = research_fields or None
+    teacher.pabx_ext = pabx_ext or None
+    teacher.phone = phone or None
+    teacher.website = website or None
+    
     if password:
         teacher.password_hash = hash_password(password)
     db.commit()
@@ -510,6 +881,11 @@ def update_teacher(
         "role": teacher.role,
         "department": teacher.department,
         "designation": teacher.designation,
+        "education": teacher.education,
+        "researchFields": teacher.research_fields,
+        "pabxExt": teacher.pabx_ext,
+        "phone": teacher.phone,
+        "website": teacher.website,
         "status": display_status,
     }
 

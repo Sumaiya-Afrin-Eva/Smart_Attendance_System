@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
-DEPARTMENTS = ["CSE", "EEE", "ECE", "ME", "CE", "IEM", "BME", "MSE", "URP", "ARCH", "BECM", "LE", "TE", "ChE", "MTE"]
+DEPARTMENTS = ["CSE", "EEE", "ECE", "ME", "CE", "IEM", "BME", "MSE", "URP", "ARCH", "BECM", "LE", "TE", "ChE", "MTE", "PHY", "CHEM", "MATH", "HUM"]
 SEMESTERS = [f"{y}-{t}" for y in range(1, 5) for t in (1, 2)]
 
 
@@ -101,7 +101,13 @@ class CourseCreateIn(BaseModel):
     semester: str
     course_type: str = "Theory"
     credit: float = 3.0
-    session: str = Field(min_length=9, max_length=20, default="2025-2026")
+    session: str = "Default"
+
+    @field_validator("session", mode="before")
+    @classmethod
+    def default_session(cls, v: str | None) -> str:
+        v = (v or "").strip()
+        return v if v else "Default"
 
     @field_validator("code")
     @classmethod
