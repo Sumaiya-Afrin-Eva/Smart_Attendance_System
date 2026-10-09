@@ -88,7 +88,7 @@ function DevLoginButton({ onDevLogin, disabled }) {
       </button>
       <div className="flex items-center justify-center gap-1.5 text-xs text-stone-500">
         <Sparkles size={13} className="text-amber-500" />
-        <span>Dev mode active · try entering <strong className="text-stone-800">demo@stud.kuet.ac.bd</strong></span>
+        <span>Dev mode active · use an admin-approved student email</span>
       </div>
     </form>
   )

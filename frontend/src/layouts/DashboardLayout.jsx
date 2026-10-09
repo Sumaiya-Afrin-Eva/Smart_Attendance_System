@@ -3,13 +3,14 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Bell, BookOpen, ChevronLeft, ChevronRight, ClipboardCheck, FileText,
   GraduationCap, LayoutDashboard, LogOut, Menu, Radio, Settings,
-  ShieldAlert, UserRound, Users, X, Clock, Wifi,
+  UserRound, Users, X, Clock, Wifi, Scan,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
 export const NAV = {
   teacher: [
     { to: '/teacher', label: 'Dashboard', icon: LayoutDashboard, end: true },
+    { to: '/teacher/biometrics', label: 'Classroom Kiosk', icon: Scan },
     { to: '/teacher/my-courses', label: 'Your courses', icon: BookOpen },
     { to: '/teacher/courses', label: 'Manage Classes', icon: FileText },
     { to: '/teacher/history', label: 'Class History', icon: FileText },
@@ -23,16 +24,14 @@ export const NAV = {
     { to: '/student/profile', label: 'Academic Profile', icon: UserRound },
   ],
   admin: [
-    { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true },
-    { to: '/admin/courses', label: 'Course Management', icon: BookOpen },
-    { to: '/admin/teachers', label: 'Teacher Management', icon: Users },
-    { to: '/admin/students', label: 'Student Management', icon: GraduationCap },
-    { to: '/admin/alerts', label: 'Security Alerts', icon: ShieldAlert },
-    { to: '/admin/settings', label: 'System Settings', icon: Settings },
+    { to: '/admin/students', label: 'Student Records', icon: GraduationCap, end: true },
+    { to: '/admin/students/new', label: 'Add Student', icon: UserRound, end: true },
+    { to: '/admin/courses', label: 'Student Courses & Terms', icon: BookOpen },
+    { to: '/admin/course-assignments', label: 'Course Assignments', icon: Users },
   ],
 }
 
-const ROLE_LABEL = { teacher: 'Faculty Member', student: 'Undergraduate Student', admin: 'System Administrator' }
+const ROLE_LABEL = { teacher: 'Faculty Member', student: 'Undergraduate Student', admin: 'Student Administrator' }
 const ROLE_BADGE = {
   teacher: 'bg-emerald-50 text-emerald-800 border-emerald-200/80',
   student: 'bg-teal-50 text-teal-800 border-teal-200/80',
@@ -87,7 +86,10 @@ export default function DashboardLayout() {
 
   const navItems = NAV[user?.role] || []
   const activeItem = navItems.find((item) => item.to === pathname)
-  const pageTitle = activeItem?.label ?? 'Dashboard'
+    ?? (pathname.startsWith('/admin/students/') ? navItems.find((item) => item.to === '/admin/students/new') : undefined)
+  const pageTitle = pathname.endsWith('/edit') && pathname.startsWith('/admin/students/')
+    ? 'Edit Student'
+    : activeItem?.label ?? 'Dashboard'
 
   const handleLogout = () => {
     logout()
@@ -195,16 +197,30 @@ export default function DashboardLayout() {
         {/* Telemetry Card */}
         {!collapsed && (
           <div className="mx-3.5 mb-3.5 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5 shadow-2xs">
-            <div className="flex items-center justify-between text-xs">
-              <span className="flex items-center gap-1.5 text-stone-700 font-medium">
-                <Wifi size={13} className="text-emerald-700" /> Face Biometrics Node
-              </span>
-              <span className="font-bold text-emerald-800">Online</span>
-            </div>
-            <div className="mt-1.5 flex items-center justify-between text-xs text-stone-500">
-              <span>Edge Sync Protocol</span>
-              <span className="font-mono text-emerald-800 font-semibold">Active</span>
-            </div>
+            {user?.role === 'admin' ? (
+              <>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="flex items-center gap-1.5 text-stone-700 font-medium">
+                    <GraduationCap size={13} className="text-emerald-700" /> Student database
+                  </span>
+                  <span className="font-bold text-emerald-800">Active</span>
+                </div>
+                <p className="mt-1.5 text-xs text-stone-500">Admin-approved student roster</p>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="flex items-center gap-1.5 text-stone-700 font-medium">
+                    <Wifi size={13} className="text-emerald-700" /> Face Biometrics Node
+                  </span>
+                  <span className="font-bold text-emerald-800">Online</span>
+                </div>
+                <div className="mt-1.5 flex items-center justify-between text-xs text-stone-500">
+                  <span>Edge Sync Protocol</span>
+                  <span className="font-mono text-emerald-800 font-semibold">Active</span>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -251,13 +267,13 @@ export default function DashboardLayout() {
             </div>
 
             {/* Notification Bell */}
-            <button
+            {user?.role !== 'admin' && <button
               aria-label="System notifications"
               className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-700 shadow-2xs transition hover:border-stone-300 hover:bg-stone-50 hover:text-stone-900 cursor-pointer"
             >
               <Bell size={18} />
               <span className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-emerald-600 ring-2 ring-white" />
-            </button>
+            </button>}
 
             <div className="hidden sm:block h-7 w-px bg-stone-200" aria-hidden="true" />
 

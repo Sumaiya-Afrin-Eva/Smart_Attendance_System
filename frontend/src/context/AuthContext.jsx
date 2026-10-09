@@ -54,7 +54,9 @@ export function AuthProvider({ children }) {
   }
 
   // Teachers and admins: email + password
-  const login = (email, password) => call('/auth/login', { email, password })
+  const login = (email, password, access_code) => call('/auth/login', { email, password, access_code })
+  const bootstrapAdmin = (email, name, password, access_code) =>
+    call('/auth/bootstrap-admin', { email, name, password, access_code })
 
   // Students: Google access token (from popup flow). The BACKEND verifies it with Google's userinfo API.
   const loginWithGoogle = (credential) => call('/auth/google', { credential })
@@ -71,7 +73,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, onboarding, loading, login, loginWithGoogle, devLogin, logout, refresh, setOnboarding }}
+      value={{ user, onboarding, loading, login, bootstrapAdmin, loginWithGoogle, devLogin, logout, refresh, setOnboarding }}
     >
       {children}
     </AuthContext.Provider>

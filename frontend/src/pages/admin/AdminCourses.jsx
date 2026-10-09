@@ -93,18 +93,20 @@ export default function AdminCourses() {
           params: {
             department: studentFilter.department || undefined,
             semester: studentFilter.semester || undefined,
+            session: selectedCourse?.session || undefined,
             section: studentFilter.section || undefined,
             q: studentFilter.q || undefined,
           },
         })
-        setStudents(data)
-        setSelectedStudentIds((current) => current.filter((id) => data.some((student) => String(student.id) === String(id))))
+        const registered = data.filter((student) => student.user_id)
+        setStudents(registered)
+        setSelectedStudentIds((current) => current.filter((id) => registered.some((student) => String(student.user_id) === String(id))))
       } catch (error) {
         setNotice(errorMessage(error, 'Failed to load student list.'))
       }
     }
     loadStudents()
-  }, [studentFilter])
+  }, [studentFilter, selectedCourseId, selectedCourse?.session])
 
   const handleSubmit = async (event) => {
     event.preventDefault()
@@ -368,9 +370,9 @@ export default function AdminCourses() {
             <div className="bg-white p-6 text-sm text-stone-500">No students matched these filters.</div>
           ) : (
             students.map((student) => (
-              <div key={student.id} className="grid gap-px bg-stone-200 md:grid-cols-6">
+              <div key={student.user_id} className="grid gap-px bg-stone-200 md:grid-cols-6">
                 <div className="bg-white px-4 py-3">
-                  <input type="checkbox" checked={selectedStudentIds.includes(student.id)} onChange={() => toggleStudent(student.id)} className="h-4 w-4 rounded border-stone-300 text-emerald-700 focus:ring-emerald-500" />
+                  <input type="checkbox" checked={selectedStudentIds.includes(student.user_id)} onChange={() => toggleStudent(student.user_id)} className="h-4 w-4 rounded border-stone-300 text-emerald-700 focus:ring-emerald-500" />
                 </div>
                 <div className="bg-white px-4 py-3 text-sm font-semibold text-stone-900">{student.roll}</div>
                 <div className="bg-white px-4 py-3 text-sm text-stone-900">{student.full_name}</div>

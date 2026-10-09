@@ -1,7 +1,10 @@
 import shutil
+import re
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -9,16 +12,19 @@ from ..config import settings
 from ..database import get_db
 from ..marks import RULE
 from ..models import (
-    Attendance, ClassSession, Course, Enrollment, FaceSample, StudentProfile,
-    AdminSetting, User,
+    Attendance, ClassSession, Course, CourseRosterAssignment, Enrollment, FaceSample, StudentProfile,
+    AdminSetting, StudentRoster, User,
 )
 from ..schemas import (
     AdminStudentCreateIn,
+    AdminStudentUpdateIn,
     CourseCreateIn,
     CourseTeacherAssignmentIn,
     ClassSessionCreateIn,
+    ACADEMIC_SESSIONS,
     DEPARTMENTS,
     SEMESTERS,
+    CourseStudentsIn,
     StudentCourseEnrollmentIn,
 )
 from ..security import get_current_user, hash_password, require_role
@@ -26,71 +32,12 @@ from ..services import course_out
 
 router = APIRouter(prefix="/api", tags=["courses"])
 admin_only = require_role("admin")
-teacher_only = require_role("teacher", "admin")
+system_admin_only = require_role("system_admin")
+teacher_only = require_role("teacher")
 
 
-def _attendance_percentage(db: Session, student_id: int) -> int:
-    student_enrollments = db.scalars(select(Enrollment).where(Enrollment.student_id == student_id)).all()
-    if not student_enrollments:
-        return 0
-
-    course_ids = [enrollment.course_id for enrollment in student_enrollments]
-    if not course_ids:
-        return 0
-
-    sessions = db.scalars(select(ClassSession).where(ClassSession.course_id.in_(course_ids))).all()
-    if not sessions:
-        return 0
-
-    session_ids = [session.id for session in sessions]
-    total_sessions = len(session_ids)
-    if total_sessions == 0:
-        return 0
-
-    present_count = db.scalar(
-        select(Attendance.id).where(
-            Attendance.student_id == student_id,
-            Attendance.session_id.in_(session_ids),
-            Attendance.status.in_(["present", "late"]),
-        )
-    )
-    if present_count is None:
-        return 0
-
-    present_total = db.query(Attendance).filter(
-        Attendance.student_id == student_id,
-        Attendance.session_id.in_(session_ids),
-        Attendance.status.in_(["present", "late"]),
-    ).count()
-    return min(100, max(0, round((present_total / total_sessions) * 100)))
-
-
-def _student_risk(attendance: int) -> str:
-    if attendance >= 85:
-        return "Low"
-    if attendance >= 70:
-        return "Medium"
-    return "High"
-
-
-def _student_status(profile: StudentProfile | None) -> str:
-    if not profile:
-        return "Pending"
-    if profile.face_status == "approved":
-        return "Verified"
-    if profile.face_status == "submitted":
-        return "Review"
-    return "Pending"
-
-
-def _admin_course_out(db: Session, course: Course) -> dict:
-    teacher = db.get(User, course.teacher_id) if course.teacher_id else None
-    return {
-        **course_out(course),
-        "teacher_id": course.teacher_id,
-        "teacher_name": teacher.name if teacher else None,
-        "teacher_email": teacher.email if teacher else None,
-    }
+def _admin_course_out(course: Course) -> dict:
+    return course_out(course)
 
 
 @router.get("/meta")
@@ -99,10 +46,10 @@ def meta(db: Session = Depends(get_db)):
     inst_config = {}
     for s in settings_rows:
         inst_config[s.key] = s.value
-        
     return {
         "departments": DEPARTMENTS,
         "semesters": SEMESTERS,
+        "sessions": ACADEMIC_SESSIONS,
         "marking_rule": RULE,
         "institution": inst_config
     }
@@ -112,14 +59,17 @@ def meta(db: Session = Depends(get_db)):
 def list_courses(
     department: str | None = None,
     semester: str | None = None,
+    session: str | None = None,
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    query = select(Course).order_by(Course.code)
+    query = select(Course).where(Course.is_active.is_(True)).order_by(Course.code)
     if department:
         query = query.where(Course.department == department)
     if semester:
         query = query.where(Course.semester == semester)
+    if session:
+        query = query.where(Course.session == session)
     return [course_out(c) for c in db.scalars(query)]
 
 
@@ -225,7 +175,9 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
 
 @router.get("/teacher/courses")
 def teacher_courses(db: Session = Depends(get_db), user: User = Depends(teacher_only)):
-    courses = db.scalars(select(Course).where(Course.teacher_id == user.id).order_by(Course.semester, Course.code)).all()
+    courses = db.scalars(
+        select(Course).where(Course.teacher_id == user.id, Course.is_active.is_(True)).order_by(Course.semester, Course.code)
+    ).all()
     # We'll use the existing course_out but add extra info if needed by the frontend like section, room etc if they existed.
     # The frontend expects id, code, title, semester, section, room, day, time, students, session, rollStart, rollEnd
     # For now, we populate what we have in the DB.
@@ -255,7 +207,7 @@ def teacher_courses(db: Session = Depends(get_db), user: User = Depends(teacher_
 @router.post("/teacher/sessions")
 def create_teacher_session(body: ClassSessionCreateIn, db: Session = Depends(get_db), user: User = Depends(teacher_only)):
     course = db.get(Course, body.course_id)
-    if not course or course.teacher_id != user.id:
+    if not course or not course.is_active or course.teacher_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found or not assigned to you.")
         
     session = ClassSession(
@@ -329,15 +281,30 @@ def delete_teacher_session(session_id: int, db: Session = Depends(get_db), user:
 
 
 @router.get("/admin/courses")
-def admin_list_courses(db: Session = Depends(get_db), _: User = Depends(admin_only)):
-    courses = db.scalars(select(Course).order_by(Course.department, Course.semester, Course.code)).all()
-    return [_admin_course_out(db, course) for course in courses]
+def admin_list_courses(
+    include_archived: bool = False,
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    query = select(Course)
+    if not include_archived:
+        query = query.where(Course.is_active.is_(True))
+    courses = db.scalars(query.order_by(Course.is_active.desc(), Course.department, Course.semester, Course.code)).all()
+    return [_admin_course_out(course) for course in courses]
 
 
 @router.post("/admin/courses")
 def create_course(body: CourseCreateIn, db: Session = Depends(get_db), _: User = Depends(admin_only)):
-    if db.scalar(select(Course).where(Course.code == body.code)):
-        raise HTTPException(status.HTTP_409_CONFLICT, "A course with this code already exists.")
+    existing = db.scalar(
+        select(Course).where(
+            Course.code == body.code,
+            Course.session == body.session,
+            Course.department == body.department,
+            Course.semester == body.semester,
+        )
+    )
+    if existing:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This course offering already exists.")
 
     course = Course(
         code=body.code,
@@ -347,11 +314,211 @@ def create_course(body: CourseCreateIn, db: Session = Depends(get_db), _: User =
         course_type=body.course_type,
         credit=body.credit,
         session=body.session,
+        is_active=True,
     )
     db.add(course)
     db.commit()
     db.refresh(course)
-    return _admin_course_out(db, course)
+    return _admin_course_out(course)
+
+
+@router.put("/admin/courses/{course_id}")
+def update_course(
+    course_id: int,
+    body: CourseCreateIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    course = db.get(Course, course_id)
+    if not course:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found.")
+    duplicate = db.scalar(
+        select(Course.id).where(
+            Course.id != course_id,
+            Course.code == body.code,
+            Course.session == body.session,
+            Course.department == body.department,
+            Course.semester == body.semester,
+        )
+    )
+    if duplicate:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This course offering already exists.")
+
+    course.code = body.code
+    course.title = body.title
+    course.department = body.department
+    course.semester = body.semester
+    course.course_type = body.course_type
+    course.credit = body.credit
+    course.session = body.session
+    db.commit()
+    db.refresh(course)
+    return _admin_course_out(course)
+
+
+@router.get("/admin/courses/{course_id}/students")
+def list_course_students(
+    course_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    course = db.get(Course, course_id)
+    if not course:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found.")
+    enrollment_ids = set(db.scalars(select(Enrollment.student_id).where(Enrollment.course_id == course.id)).all())
+    assigned_roster_ids = set(
+        db.scalars(
+            select(CourseRosterAssignment.roster_id).where(CourseRosterAssignment.course_id == course.id)
+        ).all()
+    )
+    roster_rows = db.scalars(
+        select(StudentRoster).where(
+            StudentRoster.is_active.is_(True),
+            StudentRoster.department == course.department,
+            StudentRoster.session == course.session,
+        ).order_by(StudentRoster.roll)
+    ).all()
+    return [
+        {
+            "roster_id": roster.id,
+            "roll": roster.roll,
+            "enrolled": (
+                roster.id in assigned_roster_ids
+                or bool(roster.profile and roster.profile.user_id in enrollment_ids)
+            ),
+        }
+        for roster in roster_rows
+        if (
+            roster.profile is None
+            or (
+                roster.profile.current_semester == course.semester
+                and roster.profile.department == course.department
+                and roster.profile.session == course.session
+            )
+        )
+    ]
+
+
+@router.put("/admin/courses/{course_id}/students")
+def update_course_students(
+    course_id: int,
+    body: CourseStudentsIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    course = db.get(Course, course_id)
+    if not course:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found.")
+    if not course.is_active:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Archived courses cannot be assigned to students.")
+    if body.semester != course.semester:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This course is not offered in the selected semester.")
+
+    requested_rolls: set[str] = set()
+    roll_ranges: list[tuple[str, str]] = []
+    entries = [entry.strip() for entry in re.split(r"[,;]+", body.roll_input.strip()) if entry.strip()]
+    for entry in entries:
+        match = re.fullmatch(r"(\d{7})(?:\s*-\s*(\d{7}))?", entry)
+        if not match:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"Invalid roll or range '{entry}'. Use a 7-digit roll or range such as 2207001-2207023.",
+            )
+        first, last = match.groups()
+        if last is None:
+            requested_rolls.add(first)
+        elif int(first) > int(last):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"Range '{entry}' must start with a roll less than or equal to its ending roll.",
+            )
+        else:
+            roll_ranges.append((first, last))
+    if not requested_rolls and not roll_ranges:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Enter a student roll or roll range before saving.",
+        )
+    all_eligible_rosters = db.scalars(
+        select(StudentRoster).where(
+            StudentRoster.is_active.is_(True),
+            StudentRoster.department == course.department,
+            StudentRoster.session == course.session,
+        )
+    ).all()
+    eligible_rosters = {
+        roster.roll: roster
+        for roster in all_eligible_rosters
+        if (
+            roster.profile is None
+            or (
+                roster.profile.user.is_active
+                and roster.profile.department == course.department
+                and roster.profile.session == course.session
+                and roster.profile.current_semester == course.semester
+            )
+        )
+    }
+    invalid_rolls = sorted(requested_rolls - eligible_rosters.keys())
+    if invalid_rolls:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"These rolls are not active in the admin-approved roster for this course: {', '.join(invalid_rolls)}.",
+        )
+    for roll in eligible_rosters:
+        if any(first <= roll <= last for first, last in roll_ranges):
+            requested_rolls.add(roll)
+
+    existing_assignments = db.scalars(
+        select(CourseRosterAssignment).where(CourseRosterAssignment.course_id == course.id)
+    ).all()
+    existing_roster_ids = {assignment.roster_id for assignment in existing_assignments}
+    added = 0
+    for roll in requested_rolls:
+        roster = eligible_rosters[roll]
+        if roster.id not in existing_roster_ids:
+            db.add(CourseRosterAssignment(course_id=course.id, roster_id=roster.id))
+            added += 1
+
+    for roll in requested_rolls:
+        roster = eligible_rosters[roll]
+        if not roster.profile:
+            continue
+        student_id = roster.profile.user_id
+        enrollment = db.scalar(
+            select(Enrollment).where(Enrollment.course_id == course.id, Enrollment.student_id == student_id)
+        )
+        if not enrollment:
+            db.add(Enrollment(student_id=student_id, course_id=course.id, semester=course.semester))
+
+    db.commit()
+    return {
+        "saved": len(requested_rolls),
+        "added": added,
+        "rolls": sorted(requested_rolls),
+        "course_id": course.id,
+        "semester": course.semester,
+    }
+
+
+@router.delete("/admin/courses")
+def archive_all_courses(db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    courses = db.scalars(select(Course).where(Course.is_active.is_(True))).all()
+    for course in courses:
+        course.is_active = False
+    db.commit()
+    return {"archived": len(courses), "history_preserved": True}
+
+
+@router.patch("/admin/courses/{course_id}/restore")
+def restore_course(course_id: int, db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    course = db.get(Course, course_id)
+    if not course:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found.")
+    course.is_active = True
+    db.commit()
+    db.refresh(course)
+    return _admin_course_out(course)
 
 
 @router.patch("/admin/courses/{course_id}/teacher")
@@ -359,7 +526,7 @@ def assign_course_teacher(
     course_id: int,
     body: CourseTeacherAssignmentIn,
     db: Session = Depends(get_db),
-    _: User = Depends(admin_only),
+    _: User = Depends(system_admin_only),
 ):
     course = db.get(Course, course_id)
     if not course:
@@ -375,7 +542,7 @@ def assign_course_teacher(
         course.section = body.section
     db.commit()
     db.refresh(course)
-    return _admin_course_out(db, course)
+    return _admin_course_out(course)
 
 
 @router.delete("/admin/courses/{course_id}")
@@ -383,23 +550,13 @@ def delete_course(course_id: int, db: Session = Depends(get_db), _: User = Depen
     course = db.get(Course, course_id)
     if not course:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found.")
-
-    # Cascading deletes
-    db.query(Enrollment).filter(Enrollment.course_id == course.id).delete()
-    
-    sessions = db.scalars(select(ClassSession).where(ClassSession.course_id == course.id)).all()
-    session_ids = [s.id for s in sessions]
-    if session_ids:
-        db.query(Attendance).filter(Attendance.session_id.in_(session_ids)).delete(synchronize_session=False)
-        db.query(ClassSession).filter(ClassSession.course_id == course.id).delete(synchronize_session=False)
-        
-    db.delete(course)
+    course.is_active = False
     db.commit()
-    return {"success": True}
+    return {"archived": True, "history_preserved": True}
 
 
 @router.get("/admin/teachers")
-def list_teachers(db: Session = Depends(get_db), _: User = Depends(admin_only)):
+def list_teachers(db: Session = Depends(get_db), _: User = Depends(system_admin_only)):
     rows = db.scalars(select(User).where(User.role.in_(["teacher", "admin"])).order_by(User.name)).all()
     payload = []
     for user in rows:
@@ -430,7 +587,7 @@ def list_teachers(db: Session = Depends(get_db), _: User = Depends(admin_only)):
 
 
 @router.post("/admin/teachers")
-def create_teacher(body: dict, db: Session = Depends(get_db), _: User = Depends(admin_only)):
+def create_teacher(body: dict, db: Session = Depends(get_db), _: User = Depends(system_admin_only)):
     email = (body.get("email") or "").strip().lower()
     name = (body.get("name") or "").strip()
     department = (body.get("department") or "").strip().upper()
@@ -471,7 +628,7 @@ def update_teacher(
     teacher_id: int,
     body: dict,
     db: Session = Depends(get_db),
-    _: User = Depends(admin_only),
+    _: User = Depends(system_admin_only),
 ):
     teacher = db.get(User, teacher_id)
     if not teacher:
@@ -519,7 +676,7 @@ def update_teacher_status(
     teacher_id: int,
     body: dict,
     db: Session = Depends(get_db),
-    _: User = Depends(admin_only),
+    _: User = Depends(system_admin_only),
 ):
     teacher = db.get(User, teacher_id)
     if not teacher:
@@ -542,43 +699,43 @@ def create_student(
     db: Session = Depends(get_db),
     _: User = Depends(admin_only),
 ):
-    if db.scalar(select(User).where(User.email == body.email.lower())):
-        raise HTTPException(status.HTTP_409_CONFLICT, "A student with this email already exists.")
-    if db.scalar(select(StudentProfile).where(StudentProfile.roll == body.roll)):
-        raise HTTPException(status.HTTP_409_CONFLICT, "This roll number is already registered.")
+    email = str(body.email).lower()
+    if not email.endswith("@" + settings.student_email_domain.lower()):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Student email must use the @{settings.student_email_domain} domain.",
+        )
+    if db.scalar(select(StudentRoster.id).where(StudentRoster.roll == body.roll)):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This roll number is already in the student roster.")
+    if db.scalar(select(StudentRoster.id).where(StudentRoster.email == email)):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This email is already linked to a roster record.")
 
-    user = User(
-        email=body.email.lower(),
-        name=body.name,
-        role="student",
-        password_hash=None,
-        is_active=True,
-    )
-    db.add(user)
-    db.flush()
+    linked_user = db.scalar(select(User).where(User.email == email))
+    if linked_user and linked_user.role != "student":
+        raise HTTPException(status.HTTP_409_CONFLICT, "This email is already used by a staff account.")
 
-    start_year = body.session.split("-")[0]
-    profile = StudentProfile(
-        user_id=user.id,
+    roster = StudentRoster(
         full_name=body.name,
         roll=body.roll,
+        email=email,
         department=body.department,
-        series=start_year,
-        section="A",
-        current_semester="1-1",
-        face_status="none",
+        session=body.session,
+        phone=body.phone,
+        is_active=True,
     )
-    db.add(profile)
+    db.add(roster)
     db.commit()
-    db.refresh(user)
+    db.refresh(roster)
     return {
-        "id": user.id,
-        "name": user.name,
-        "email": user.email,
-        "roll": profile.roll,
-        "department": profile.department,
-        "session": body.session,
-        "status": "Pending",
+        "id": roster.id,
+        "name": roster.full_name,
+        "email": roster.email,
+        "roll": roster.roll,
+        "department": roster.department,
+        "session": roster.session,
+        "phone": roster.phone,
+        "photo_available": False,
+        "status": "Needs photo",
     }
 
 
@@ -589,125 +746,252 @@ async def upload_student_photo(
     db: Session = Depends(get_db),
     _: User = Depends(admin_only),
 ):
-    user = db.get(User, student_id)
-    if not user or user.role != "student":
+    roster = db.get(StudentRoster, student_id)
+    if not roster:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Student not found.")
 
     content = await photo.read()
-    if not photo.content_type or "image" not in photo.content_type.lower():
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only image files are allowed.")
+    if photo.content_type not in {"image/jpeg", "image/png"}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only JPEG or PNG images are allowed.")
     if len(content) > 3 * 1024 * 1024:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Each photo must be under 3 MB.")
-    if not (content.startswith(b"\xff\xd8") or content.startswith(b"\x89PNG")):
+    if content.startswith(b"\x89PNG"):
+        mime_type = "image/png"
+    elif content.startswith(b"\xff\xd8"):
+        mime_type = "image/jpeg"
+    else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Photos must be JPEG or PNG images.")
-
-    folder = settings.storage_dir / "faces" / str(user.id)
-    shutil.rmtree(folder, ignore_errors=True)
-    folder.mkdir(parents=True, exist_ok=True)
-    db.execute(delete(FaceSample).where(FaceSample.student_id == user.id))
-
-    path = folder / "01.jpg"
-    path.write_bytes(content)
-    db.add(FaceSample(student_id=user.id, file_path=str(path)))
-
-    if user.profile is not None:
-        user.profile.face_status = "submitted"
+    roster.photo_data = content
+    roster.photo_mime_type = mime_type
+    if roster.profile:
+        student_id = roster.profile.user_id
+        db.execute(delete(FaceSample).where(FaceSample.student_id == student_id))
+        face_folder = settings.storage_dir / "faces" / str(student_id)
+        if face_folder.exists():
+            shutil.rmtree(face_folder)
     db.commit()
-    return {"status": "submitted", "count": 1, "path": str(path)}
+    return {"status": "submitted", "count": 1, "stored_in": "student_roster.photo_data"}
+
+
+@router.get("/admin/students/{student_id}/photo")
+def get_roster_photo(student_id: int, db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    roster = db.get(StudentRoster, student_id)
+    if not roster or not roster.photo_data:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Official student photo not found.")
+    return Response(content=roster.photo_data, media_type=roster.photo_mime_type or "image/jpeg")
+
+
+@router.put("/admin/students/{student_id}")
+def update_student_roster(
+    student_id: int,
+    body: AdminStudentUpdateIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    roster = db.get(StudentRoster, student_id)
+    if not roster:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Student roster record not found.")
+    email = str(body.email).lower()
+    if not email.endswith("@" + settings.student_email_domain.lower()):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f"Student email must use the @{settings.student_email_domain} domain.",
+        )
+    duplicate_roll = db.scalar(
+        select(StudentRoster.id).where(StudentRoster.roll == body.roll, StudentRoster.id != student_id)
+    )
+    duplicate_email = db.scalar(
+        select(StudentRoster.id).where(StudentRoster.email == email, StudentRoster.id != student_id)
+    )
+    if duplicate_roll:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This roll number is already in the student roster.")
+    if duplicate_email:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This email is already linked to another roster record.")
+    linked_user = db.scalar(select(User).where(User.email == email))
+    if linked_user and linked_user.role != "student":
+        raise HTTPException(status.HTTP_409_CONFLICT, "This email is already used by a staff account.")
+    if roster.profile and linked_user and linked_user.id != roster.profile.user_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This email is already linked to another student account.")
+
+    roster.full_name = body.name
+    roster.roll = body.roll
+    roster.email = email
+    roster.department = body.department
+    roster.session = body.session
+    roster.phone = body.phone
+    if roster.profile:
+        roster.profile.full_name = body.name
+        roster.profile.roll = body.roll
+        roster.profile.department = body.department
+        roster.profile.series = body.session[:4]
+        roster.profile.session = body.session
+        roster.profile.phone = body.phone
+        roster.profile.section = None
+        roster.profile.user.name = body.name
+        roster.profile.user.email = email
+        roster.profile.user.is_active = True
+    roster.is_active = True
+    db.commit()
+    return {
+        "id": roster.id,
+        "name": roster.full_name,
+        "email": roster.email,
+        "roll": roster.roll,
+        "department": roster.department,
+        "session": roster.session,
+        "phone": roster.phone,
+        "photo_available": bool(roster.photo_data),
+    }
+
+
+@router.delete("/admin/students/{student_id}")
+def delete_student_roster(student_id: int, db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    roster = db.get(StudentRoster, student_id)
+    if not roster:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Student roster record not found.")
+
+    if roster.profile:
+        roster.is_active = False
+        roster.profile.user.is_active = False
+        db.commit()
+        return {"deleted": False, "disabled": True}
+
+    if roster.email:
+        waiting_user = db.scalar(select(User).where(User.email == roster.email, User.role == "student"))
+        if waiting_user:
+            waiting_user.is_active = False
+    db.delete(roster)
+    db.commit()
+    return {"deleted": True, "disabled": False}
+
+
+@router.delete("/admin/legacy-students/{user_id}")
+def delete_legacy_student(user_id: int, db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    user = db.get(User, user_id)
+    if not user or user.role != "student" or not user.profile:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Legacy student account not found.")
+    if user.profile.roster_id is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This student is linked to an approved roster record. Delete or disable that roster entry instead.",
+        )
+
+    face_samples = db.scalars(select(FaceSample).where(FaceSample.student_id == user.id)).all()
+    face_paths = [Path(sample.file_path) for sample in face_samples]
+    db.execute(delete(Attendance).where(Attendance.student_id == user.id))
+    db.execute(delete(Enrollment).where(Enrollment.student_id == user.id))
+    db.execute(delete(FaceSample).where(FaceSample.student_id == user.id))
+    db.delete(user.profile)
+    db.delete(user)
+    db.commit()
+
+    for face_path in face_paths:
+        face_path.unlink(missing_ok=True)
+    return {"deleted": True, "user_id": user_id}
 
 
 @router.get("/admin/students")
 def list_students(
     department: str | None = None,
     semester: str | None = None,
+    session: str | None = None,
     section: str | None = None,
     q: str | None = None,
     db: Session = Depends(get_db),
     _: User = Depends(admin_only),
 ):
-    query = select(User).join(StudentProfile).where(User.role == "student")
+    query = select(StudentRoster)
     if department:
-        query = query.where(StudentProfile.department == department)
-    if semester:
-        query = query.where(StudentProfile.current_semester == semester)
+        query = query.where(StudentRoster.department == department)
+    if session:
+        query = query.where(StudentRoster.session == session)
     if section:
-        query = query.where(StudentProfile.section == section)
+        query = query.join(StudentProfile, StudentProfile.roster_id == StudentRoster.id).where(
+            StudentProfile.section == section
+        )
     if q:
         search = f"%{q.strip()}%"
         query = query.where(
-            (User.name.ilike(search)) |
-            (StudentProfile.full_name.ilike(search)) |
-            (StudentProfile.roll.ilike(search))
+            (StudentRoster.full_name.ilike(search))
+            | (StudentRoster.roll.ilike(search))
+            | (StudentRoster.email.ilike(search))
         )
-    rows = db.scalars(query.order_by(StudentProfile.roll)).all()
+    rows = db.scalars(query.order_by(StudentRoster.roll)).all()
     payload = []
-    for user in rows:
-        profile = user.profile
-        attendance = _attendance_percentage(db, user.id)
-        status = _student_status(profile)
+    registered_user_ids = set()
+    for roster in rows:
+        profile = roster.profile
+        user = profile.user if profile else db.scalar(select(User).where(User.email == roster.email)) if roster.email else None
+        if semester and (not profile or profile.current_semester != semester):
+            continue
         payload.append({
-            "id": user.id,
-            "name": user.name,
-            "full_name": profile.full_name if profile else user.name,
-            "roll": profile.roll if profile else None,
-            "department": profile.department if profile else None,
+            "id": roster.id,
+            "user_id": user.id if user else None,
+            "name": roster.full_name,
+            "full_name": roster.full_name,
+            "roll": roster.roll,
+            "department": roster.department,
+            "session": roster.session,
+            "phone": roster.phone,
             "current_semester": profile.current_semester if profile else None,
             "semester": profile.current_semester if profile else None,
             "section": profile.section if profile else None,
+            "email": roster.email,
+        })
+        if user:
+            registered_user_ids.add(user.id)
+
+    legacy_query = select(User).join(StudentProfile).where(
+        User.role == "student",
+        StudentProfile.roster_id.is_(None),
+    )
+    if department:
+        legacy_query = legacy_query.where(StudentProfile.department == department)
+    if session:
+        legacy_query = legacy_query.where(StudentProfile.session == session)
+    if semester:
+        legacy_query = legacy_query.where(StudentProfile.current_semester == semester)
+    if section:
+        legacy_query = legacy_query.where(StudentProfile.section == section)
+    if q:
+        search = f"%{q.strip()}%"
+        legacy_query = legacy_query.where(
+            User.name.ilike(search) | StudentProfile.full_name.ilike(search) | StudentProfile.roll.ilike(search)
+        )
+    for user in db.scalars(legacy_query.order_by(StudentProfile.roll)):
+        if user.id in registered_user_ids:
+            continue
+        profile = user.profile
+        payload.append({
+            "id": None,
+            "user_id": user.id,
+            "name": profile.full_name,
+            "full_name": profile.full_name,
+            "roll": profile.roll,
+            "department": profile.department,
+            "session": profile.session,
+            "current_semester": profile.current_semester,
+            "semester": profile.current_semester,
+            "section": profile.section,
             "email": user.email,
-            "attendance": f"{attendance}%",
-            "risk": _student_risk(attendance),
-            "status": status,
         })
     return payload
 
 
 @router.get("/admin/security-alerts")
-def list_security_alerts(db: Session = Depends(get_db), _: User = Depends(admin_only)):
-    alerts = []
-
-    pending_face = db.scalar(select(User.id).join(StudentProfile).where(User.role == "student").where(StudentProfile.face_status != "approved"))
-    if pending_face is not None:
-        pending_count = db.query(User).join(StudentProfile).filter(User.role == "student").filter(StudentProfile.face_status != "approved").count()
-        alerts.append({
-            "id": "face-verification",
-            "title": "Face verification queue",
-            "severity": "High" if pending_count >= 3 else "Medium",
-            "location": "Student onboarding",
-            "note": f"{pending_count} student profile(s) are waiting for approval before attendance can be accepted.",
-            "status": "Open",
-        })
-
-    at_risk = db.scalars(select(User).where(User.role == "student")).all()
-    risk_students = []
-    for user in at_risk:
-        attendance = _attendance_percentage(db, user.id)
-        if attendance < 75:
-            risk_students.append(f"{user.name} ({attendance}%)")
-    if risk_students:
-        alerts.append({
-            "id": "attendance-risk",
-            "title": "Low attendance exposure",
-            "severity": "Medium",
-            "location": "Academic monitoring",
-            "note": ", ".join(risk_students[:3]) + (" and more" if len(risk_students) > 3 else "") + ".",
-            "status": "Investigating",
-        })
-
-    if not alerts:
-        alerts.append({
-            "id": "all-clear",
-            "title": "No active security incidents",
-            "severity": "Low",
-            "location": "System health",
-            "note": "All monitored security checks are currently within expected limits.",
-            "status": "Resolved",
-        })
-    return alerts
+def list_security_alerts(db: Session = Depends(get_db), _: User = Depends(system_admin_only)):
+    return [{
+        "id": "all-clear",
+        "title": "No active security incidents",
+        "severity": "Low",
+        "location": "System health",
+        "note": "All monitored security checks are currently within expected limits.",
+        "status": "Resolved",
+    }]
 
 
 @router.get("/admin/settings")
-def list_admin_settings(db: Session = Depends(get_db), _: User = Depends(admin_only)):
+def list_admin_settings(db: Session = Depends(get_db), _: User = Depends(system_admin_only)):
     rows = db.scalars(select(AdminSetting).order_by(AdminSetting.key)).all()
     return [{
         "id": item.id,
@@ -720,7 +1004,7 @@ def list_admin_settings(db: Session = Depends(get_db), _: User = Depends(admin_o
 
 
 @router.put("/admin/settings/{key}")
-def update_admin_setting(key: str, body: dict, db: Session = Depends(get_db), _: User = Depends(admin_only)):
+def update_admin_setting(key: str, body: dict, db: Session = Depends(get_db), _: User = Depends(system_admin_only)):
     setting = db.scalar(select(AdminSetting).where(AdminSetting.key == key))
     if setting is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Setting not found.")
@@ -742,32 +1026,6 @@ def update_admin_setting(key: str, body: dict, db: Session = Depends(get_db), _:
     }
 
 
-@router.patch("/admin/students/{student_id}/status")
-def update_student_status(
-    student_id: int,
-    body: dict,
-    db: Session = Depends(get_db),
-    _: User = Depends(admin_only),
-):
-    user = db.get(User, student_id)
-    if not user or user.role != "student":
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Student not found.")
-
-    profile = user.profile
-    status_value = (body.get("status") or "Pending").strip()
-    if profile is not None:
-        if status_value == "Verified":
-            profile.face_status = "approved"
-        elif status_value == "Review":
-            profile.face_status = "submitted"
-        elif status_value == "Pending":
-            profile.face_status = "none"
-        elif status_value == "Suspended":
-            user.is_active = False
-    db.commit()
-    return {"id": user.id, "status": status_value}
-
-
 @router.post("/admin/student-enrollments")
 def enroll_students(
     body: StudentCourseEnrollmentIn,
@@ -775,7 +1033,7 @@ def enroll_students(
     _: User = Depends(admin_only),
 ):
     course = db.get(Course, body.course_id)
-    if not course:
+    if not course or not course.is_active:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found.")
     if body.semester != course.semester:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This course is not offered in the selected semester.")
@@ -786,10 +1044,17 @@ def enroll_students(
         if not student or student.role != "student":
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "One or more students do not exist.")
         profile = student.profile
-        if not profile or profile.department != course.department:
+        if (
+            not profile
+            or not profile.roster
+            or not profile.roster_id
+            or not profile.roster.is_active
+            or profile.department != course.department
+            or profile.session != course.session
+        ):
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
-                f"{student.name} is not eligible for {course.department} courses.",
+                f"{student.name} is not registered for the {course.department} {course.session} session.",
             )
         if profile.current_semester != body.semester:
             raise HTTPException(
@@ -802,6 +1067,14 @@ def enroll_students(
                 Enrollment.course_id == course.id,
             )
         )
+        assignment = db.scalar(
+            select(CourseRosterAssignment).where(
+                CourseRosterAssignment.course_id == course.id,
+                CourseRosterAssignment.roster_id == profile.roster_id,
+            )
+        )
+        if not assignment:
+            db.add(CourseRosterAssignment(course_id=course.id, roster_id=profile.roster_id))
         if not existing:
             db.add(Enrollment(student_id=student_id, course_id=course.id, semester=body.semester))
             saved += 1

@@ -1,4 +1,5 @@
 import logging
+import secrets
 
 import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,9 +10,9 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
-from ..models import User
-from ..schemas import DevLoginIn, GoogleLoginIn, PasswordLoginIn
-from ..security import create_token, get_current_user, verify_password
+from ..models import StudentRoster, User
+from ..schemas import AdminBootstrapIn, DevLoginIn, GoogleLoginIn, PasswordLoginIn
+from ..security import create_token, get_current_user, hash_password, verify_password
 from ..services import onboarding_status, user_out
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -27,10 +28,26 @@ def _session_response(db: Session, user: User) -> dict:
 
 
 def _login_or_register_student(db: Session, email: str, name: str, picture: str | None) -> User:
-    """Existing account -> log in. New account -> register as student, but ONLY with a varsity email."""
+    """Allow students with an active admin-approved email into registration or their dashboard."""
     email = email.lower()
+    domain = settings.student_email_domain.lower()
+    if not email.endswith("@" + domain):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"Please sign in with your KUET student email (@{domain}).",
+        )
+
+    roster_record = db.scalar(select(StudentRoster).where(StudentRoster.email == email))
+    if not roster_record or not roster_record.is_active:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "This KUET student email has not been approved by the admin. Ask the admin to add it to the student roster.",
+        )
+
     user = db.scalar(select(User).where(User.email == email))
     if user:
+        if user.role != "student":
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "This account is not registered as a student.")
         if not user.is_active:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been disabled. Contact the admin.")
         if picture and user.picture != picture:
@@ -38,12 +55,6 @@ def _login_or_register_student(db: Session, email: str, name: str, picture: str 
             db.commit()
         return user
 
-    domain = settings.student_email_domain.lower()
-    if not email.endswith("@" + domain):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            f"Please sign in with your KUET student email (@{domain}).",
-        )
     user = User(email=email, name=name or email.split("@")[0], role="student", picture=picture)
     db.add(user)
     db.commit()
@@ -67,6 +78,11 @@ def _login_or_register_staff(db: Session, email: str, name: str, picture: str | 
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been disabled. Contact the admin.")
     if user.role not in {"teacher", "admin"}:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This login method is for faculty and staff only.")
+    if user.role == "admin":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Admin accounts must sign in with their password and admin access code.",
+        )
     if picture and user.picture != picture:
         user.picture = picture
         db.commit()
@@ -194,9 +210,51 @@ def password_login(body: PasswordLoginIn, db: Session = Depends(get_db)):
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password.")
 
+    if user.role == "admin":
+        configured_code = settings.admin_access_code
+        if not configured_code:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Admin access is not configured. Set ADMIN_ACCESS_CODE in the backend .env file.",
+            )
+        if not body.access_code or not secrets.compare_digest(body.access_code, configured_code):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email, password, or admin access code.")
+
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been disabled. Contact the admin.")
 
+    return _session_response(db, user)
+
+
+@router.post("/bootstrap-admin")
+def bootstrap_admin(body: AdminBootstrapIn, db: Session = Depends(get_db)):
+    """Create the first administrator using the out-of-band secret configured by the operator."""
+    if not settings.admin_access_code:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Admin access is not configured. Set ADMIN_ACCESS_CODE in the backend .env file.",
+        )
+    if not secrets.compare_digest(body.access_code, settings.admin_access_code):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Invalid admin access code.")
+    if not body.email.lower().endswith("@kuet.ac.bd"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Admin email must use the @kuet.ac.bd domain.")
+    if db.scalar(select(User.id).where(User.role == "admin")):
+        raise HTTPException(status.HTTP_409_CONFLICT, "An administrator account already exists.")
+
+    user = User(
+        email=body.email.lower(),
+        name=body.name,
+        role="admin",
+        password_hash=hash_password(body.password),
+        is_active=True,
+    )
+    db.add(user)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(user)
     return _session_response(db, user)
 
 

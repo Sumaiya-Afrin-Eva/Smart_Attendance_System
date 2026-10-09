@@ -14,12 +14,12 @@ import TeacherCourses from './pages/teacher/TeacherCourses'
 import TeacherHistory from './pages/teacher/TeacherHistory'
 import TeacherAnalytics from './pages/teacher/TeacherAnalytics'
 import TeacherSettings from './pages/teacher/TeacherSettings'
-import AdminDashboard from './pages/admin/AdminDashboard'
-import AdminCourses from './pages/admin/AdminCourses'
-import TeacherManagement from './pages/admin/TeacherManagement'
 import StudentManagement from './pages/admin/StudentManagement'
-import SecurityAlerts from './pages/admin/SecurityAlerts'
-import SystemSettings from './pages/admin/SystemSettings'
+import StudentRosterForm from './pages/admin/StudentRosterForm'
+import StudentTermManagement from './pages/admin/StudentTermManagement'
+import StudentCourseAssignments from './pages/admin/StudentCourseAssignments'
+
+import FaceLab from './pages/biometrics/FaceLab'
 
 export default function App() {
   return (
@@ -33,6 +33,7 @@ export default function App() {
           <Route index element={<TeacherDashboard />} />
           <Route path="my-courses" element={<TeacherMyCourses />} />
           <Route path="courses" element={<TeacherCourses />} />
+          <Route path="biometrics" element={<FaceLab />} />
           <Route path="history" element={<TeacherHistory />} />
           <Route path="analytics" element={<TeacherAnalytics />} />
           <Route path="settings" element={<TeacherSettings />} />
@@ -57,15 +58,18 @@ export default function App() {
       {/* Admin */}
       <Route element={<ProtectedRoute role="admin" />}>
         <Route path="/admin" element={<DashboardLayout />}>
-          <Route index element={<AdminDashboard />} />
-          <Route path="courses" element={<AdminCourses />} />
-          <Route path="teachers" element={<TeacherManagement />} />
           <Route path="students" element={<StudentManagement />} />
-          <Route path="users" element={<TeacherManagement />} />
-          <Route path="alerts" element={<SecurityAlerts />} />
-          <Route path="settings" element={<SystemSettings />} />
+          <Route path="students/new" element={<StudentRosterForm />} />
+          <Route path="students/:studentId/edit" element={<StudentRosterForm />} />
+          <Route index element={<Navigate to="students" replace />} />
+          <Route path="courses" element={<StudentTermManagement />} />
+          <Route path="course-assignments" element={<StudentCourseAssignments />} />
+          <Route path="*" element={<Navigate to="students" replace />} />
         </Route>
       </Route>
+
+      {/* Dedicated Standalone Classroom Kiosk Mode */}
+      <Route path="/kiosk" element={<FaceLab />} />
 
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>

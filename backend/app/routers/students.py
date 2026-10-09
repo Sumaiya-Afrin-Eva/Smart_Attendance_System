@@ -1,29 +1,24 @@
 """Everything a logged-in student can do with their own data."""
-import shutil
 from collections import defaultdict
 from datetime import datetime, time, timedelta
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
-from sqlalchemy import delete, func, select
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..config import settings
 from ..database import get_db
 from ..marks import RULE, attendance_marks, attendance_percent
 from ..models import (
-    Attendance, ClassSession, Course, Enrollment, FaceSample, StudentProfile, User,
+    Attendance, ClassSession, Course, CourseRosterAssignment, Enrollment, FaceSample, StudentProfile,
+    StudentRoster, User,
 )
-from ..schemas import EnrollmentIn, ProfileIn
+from ..schemas import ProfileIn
 from ..security import require_role
 from ..services import course_out, onboarding_status
 
 router = APIRouter(prefix="/api/students/me", tags=["student"])
 student_only = require_role("student")
-
-MIN_FACE_PHOTOS, MAX_FACE_PHOTOS = 3, 10
-MAX_PHOTO_BYTES = 3 * 1024 * 1024
 
 
 def _profile_or_404(user: User) -> StudentProfile:
@@ -39,10 +34,9 @@ def _profile_out(p: StudentProfile, user: User) -> dict:
         "roll": p.roll,
         "department": p.department,
         "series": p.series,
-        "section": p.section,
+        "session": p.session,
         "current_semester": p.current_semester,
         "phone": p.phone,
-        "face_status": p.face_status,
     }
 
 
@@ -57,11 +51,75 @@ def get_profile(user: User = Depends(student_only)):
 
 @router.put("/profile")
 def save_profile(body: ProfileIn, user: User = Depends(student_only), db: Session = Depends(get_db)):
-    profile = user.profile or StudentProfile(user_id=user.id, face_status="none")
-    for field, value in body.model_dump().items():
-        setattr(profile, field, value)
-    user.name = body.full_name
+    roster = db.scalar(
+        select(StudentRoster).where(
+            StudentRoster.roll == body.roll,
+            StudentRoster.session == body.session,
+        )
+    )
+    if not roster or not roster.is_active:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Roll number and session do not match an active admin-approved student record.",
+        )
+    if not roster.photo_data:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "The admin-approved roster record needs an official face photo before registration.",
+        )
+    if roster.department != body.department:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Department does not match the admin-approved student record.")
+    if roster.email and roster.email.lower() != user.email.lower():
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This academic email does not match the admin-approved student record.")
+    if body.series != roster.session[:4]:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Admission year does not match the approved session.")
+    if user.profile and user.profile.roster_id not in {None, roster.id}:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This account is already linked to another student record.")
+    if roster.profile and roster.profile.user_id != user.id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This student record has already been linked to another account.")
+    offered = db.scalar(
+        select(Course.id).where(
+            Course.department == roster.department,
+            Course.session == roster.session,
+            Course.semester == body.current_semester,
+            Course.is_active.is_(True),
+        ).limit(1)
+    )
+    if offered is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "This year-term is not offered for your approved department and session.",
+        )
+
+    profile = user.profile or StudentProfile(user_id=user.id)
+    profile.roster_id = roster.id
+    profile.full_name = roster.full_name
+    profile.roll = roster.roll
+    profile.department = roster.department
+    profile.series = roster.session[:4]
+    profile.session = roster.session
+    profile.section = None
+    profile.current_semester = body.current_semester
+    profile.phone = roster.phone
+    user.name = roster.full_name
     db.add(profile)
+    assigned_courses = db.scalars(
+        select(Course)
+        .join(CourseRosterAssignment, CourseRosterAssignment.course_id == Course.id)
+        .where(
+            CourseRosterAssignment.roster_id == roster.id,
+            Course.is_active.is_(True),
+            Course.department == roster.department,
+            Course.session == roster.session,
+            Course.semester == body.current_semester,
+        )
+    ).all()
+    for course in assigned_courses:
+        existing_enrollment = db.scalar(
+            select(Enrollment).where(Enrollment.student_id == user.id, Enrollment.course_id == course.id)
+        )
+        if not existing_enrollment:
+            db.add(Enrollment(student_id=user.id, course_id=course.id, semester=course.semester))
     try:
         db.commit()
     except IntegrityError:
@@ -71,73 +129,19 @@ def save_profile(body: ProfileIn, user: User = Depends(student_only), db: Sessio
     return {"profile": _profile_out(profile, user), "onboarding": onboarding_status(db, user)}
 
 
-# ---------------------------------------------------------------- face photos
-
-@router.get("/face")
-def face_status(user: User = Depends(student_only), db: Session = Depends(get_db)):
-    samples = db.scalars(
-        select(FaceSample).where(FaceSample.student_id == user.id).order_by(FaceSample.id)
-    ).all()
-    return {
-        "status": user.profile.face_status if user.profile else "none",
-        "count": len(samples),
-        "sample_ids": [s.id for s in samples],
-        "updated_at": samples[-1].created_at if samples else None,
-    }
-
-
-@router.get("/face/{sample_id}")
-def face_photo(sample_id: int, user: User = Depends(student_only), db: Session = Depends(get_db)):
-    sample = db.get(FaceSample, sample_id)
-    if not sample or sample.student_id != user.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Photo not found")
-    return FileResponse(sample.file_path, media_type="image/jpeg")
-
-
-@router.post("/face")
-async def upload_face(
-    photos: list[UploadFile] = File(...),
-    user: User = Depends(student_only),
-    db: Session = Depends(get_db),
-):
-    profile = _profile_or_404(user)
-    if not MIN_FACE_PHOTOS <= len(photos) <= MAX_FACE_PHOTOS:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"Upload between {MIN_FACE_PHOTOS} and {MAX_FACE_PHOTOS} photos.",
-        )
-
-    contents = []
-    for photo in photos:
-        data = await photo.read()
-        if len(data) > MAX_PHOTO_BYTES:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Each photo must be under 3 MB.")
-        if not (data.startswith(b"\xff\xd8") or data.startswith(b"\x89PNG")):
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Photos must be JPEG or PNG images.")
-        contents.append(data)
-
-    # Replace any previous photos
-    folder = settings.storage_dir / "faces" / str(user.id)
-    shutil.rmtree(folder, ignore_errors=True)
-    folder.mkdir(parents=True, exist_ok=True)
-    db.execute(delete(FaceSample).where(FaceSample.student_id == user.id))
-
-    for i, data in enumerate(contents, start=1):
-        path = folder / f"{i:02d}.jpg"
-        path.write_bytes(data)
-        db.add(FaceSample(student_id=user.id, file_path=str(path)))
-
-    # "submitted": photos saved. The kiosk turns them into face embeddings later.
-    profile.face_status = "submitted"
-    db.commit()
-    return {"status": profile.face_status, "count": len(contents), "onboarding": onboarding_status(db, user)}
-
-
 # ---------------------------------------------------------------- course selection
 
 @router.get("/enrollments")
 def list_enrollments(semester: str | None = None, user: User = Depends(student_only), db: Session = Depends(get_db)):
-    query = select(Enrollment).where(Enrollment.student_id == user.id)
+    profile = _profile_or_404(user)
+    query = (
+        select(Enrollment)
+        .join(CourseRosterAssignment, CourseRosterAssignment.course_id == Enrollment.course_id)
+        .where(
+            Enrollment.student_id == user.id,
+            CourseRosterAssignment.roster_id == profile.roster_id,
+        )
+    )
     if semester:
         query = query.where(Enrollment.semester == semester)
     grouped: dict[str, list] = defaultdict(list)
@@ -150,53 +154,27 @@ def list_enrollments(semester: str | None = None, user: User = Depends(student_o
 
 
 @router.put("/enrollments")
-def save_enrollments(body: EnrollmentIn, user: User = Depends(student_only), db: Session = Depends(get_db)):
-    profile = _profile_or_404(user)
-    wanted = set(body.course_ids)
-    if not wanted:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Select at least one course.")
-
-    courses = db.scalars(select(Course).where(Course.id.in_(wanted))).all()
-    if len(courses) != len(wanted):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "One or more courses do not exist.")
-    for c in courses:
-        if c.semester != body.semester or c.department != profile.department:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                f"{c.code} is not a {profile.department} {body.semester} course.",
-            )
-
-    current = {
-        e.course_id: e
-        for e in db.scalars(
-            select(Enrollment).where(Enrollment.student_id == user.id, Enrollment.semester == body.semester)
-        )
-    }
-    to_remove = set(current) - wanted
-    if to_remove:
-        has_attendance = db.scalar(
-            select(func.count(Attendance.id))
-            .join(ClassSession, ClassSession.id == Attendance.session_id)
-            .where(Attendance.student_id == user.id, ClassSession.course_id.in_(to_remove))
-        )
-        if has_attendance:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "You cannot drop a course that already has attendance records. Contact your teacher.",
-            )
-        for course_id in to_remove:
-            db.delete(current[course_id])
-    for course_id in wanted - set(current):
-        db.add(Enrollment(student_id=user.id, course_id=course_id, semester=body.semester))
-    db.commit()
-    return {"saved": len(wanted), "onboarding": onboarding_status(db, user)}
+def save_enrollments(user: User = Depends(student_only)):
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        "Course assignments are managed by the student administrator.",
+    )
 
 
 # ---------------------------------------------------------------- dashboard & history
 
 def _semester_data(db: Session, user: User, semester: str):
+    profile = user.profile
+    if not profile or not profile.roster_id:
+        return {}, [], {}
     enrollments = db.scalars(
-        select(Enrollment).where(Enrollment.student_id == user.id, Enrollment.semester == semester)
+        select(Enrollment)
+        .join(CourseRosterAssignment, CourseRosterAssignment.course_id == Enrollment.course_id)
+        .where(
+            Enrollment.student_id == user.id,
+            Enrollment.semester == semester,
+            CourseRosterAssignment.roster_id == profile.roster_id,
+        )
     ).all()
     courses = {e.course_id: e.course for e in enrollments}
     # Classes held before the student enrolled do not count against them
@@ -289,6 +267,18 @@ def dashboard(semester: str | None = None, user: User = Depends(student_only), d
         for s in reversed(sessions[-6:])
     ]
 
+    today = [
+        {
+            "session_id": s.id,
+            "course_code": s.course.code,
+            "course_title": s.course.title,
+            "start_at": s.start_at,
+            "status": _status_of(s, records),
+        }
+        for s in sessions
+        if s.start_at.date() == datetime.now().date()
+    ]
+
     upcoming = [
         {
             "session_id": s.id,
@@ -327,6 +317,7 @@ def dashboard(semester: str | None = None, user: User = Depends(student_only), d
         "courses": course_rows,
         "trend": trend,
         "recent": recent,
+        "today": today,
         "upcoming": upcoming,
     }
 

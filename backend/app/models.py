@@ -2,7 +2,7 @@
 
 users            every account (student / teacher / admin)
 student_profiles roll, department, semester... (one per student)
-face_samples     face photos captured at registration
+face_samples     legacy face-photo records retained for cleanup
 courses          courses offered per department and semester (e.g. CSE, 3-2)
 enrollments      which student takes which course
 class_sessions   each class held for a course (created by the teacher)
@@ -12,7 +12,7 @@ attendance       one row per student who was marked in a session
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, DateTime as SQLDateTime, Float, ForeignKey, Integer, String,
+    Boolean, DateTime as SQLDateTime, Float, ForeignKey, Integer, LargeBinary, String,
     TypeDecorator, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -56,22 +56,43 @@ class User(Base):
     profile: Mapped["StudentProfile | None"] = relationship(back_populates="user", uselist=False)
 
 
+class StudentRoster(Base):
+    __tablename__ = "student_roster"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    roll: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    full_name: Mapped[str] = mapped_column(String(120))
+    email: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
+    department: Mapped[str] = mapped_column(String(40))
+    session: Mapped[str] = mapped_column(String(20), index=True)
+    phone: Mapped[str | None] = mapped_column(String(20))
+    photo_data: Mapped[bytes | None] = mapped_column(LargeBinary)
+    photo_mime_type: Mapped[str | None] = mapped_column(String(40))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now, onupdate=datetime.now)
+
+    profile: Mapped["StudentProfile | None"] = relationship(back_populates="roster", uselist=False)
+
+
 class StudentProfile(Base):
     __tablename__ = "student_profiles"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
+    roster_id: Mapped[int | None] = mapped_column(ForeignKey("student_roster.id"), unique=True, index=True)
     roll: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(120))
     department: Mapped[str] = mapped_column(String(40))
     series: Mapped[str] = mapped_column(String(10))  # batch year, e.g. "2021"
+    session: Mapped[str] = mapped_column(String(20), default="")
     section: Mapped[str | None] = mapped_column(String(5))
     current_semester: Mapped[str] = mapped_column(String(5))  # "3-2"
     phone: Mapped[str | None] = mapped_column(String(20))
-    face_status: Mapped[str] = mapped_column(String(20), default="none")  # none | submitted | approved
     updated_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now, onupdate=datetime.now)
 
     user: Mapped[User] = relationship(back_populates="profile")
+    roster: Mapped[StudentRoster | None] = relationship(back_populates="profile")
 
 
 class FaceSample(Base):
@@ -97,9 +118,12 @@ class AdminSetting(Base):
 
 class Course(Base):
     __tablename__ = "courses"
+    __table_args__ = (
+        UniqueConstraint("code", "session", "department", "semester"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    code: Mapped[str] = mapped_column(String(20), unique=True)
+    code: Mapped[str] = mapped_column(String(20), index=True)
     title: Mapped[str] = mapped_column(String(150))
     credit: Mapped[float] = mapped_column(Float, default=3.0)
     department: Mapped[str] = mapped_column(String(40), index=True)
@@ -107,6 +131,7 @@ class Course(Base):
     course_type: Mapped[str] = mapped_column(String(10), default="Theory")  # Theory | Lab
     session: Mapped[str] = mapped_column(String(20), default="2025-2026") # "2025-2026"
     section: Mapped[str] = mapped_column(String(10), default="A") # "A", "B", etc.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     teacher_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
 
 
@@ -121,6 +146,15 @@ class Enrollment(Base):
     created_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
 
     course: Mapped[Course] = relationship()
+
+
+class CourseRosterAssignment(Base):
+    __tablename__ = "course_roster_assignments"
+    __table_args__ = (UniqueConstraint("course_id", "roster_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True)
+    roster_id: Mapped[int] = mapped_column(ForeignKey("student_roster.id"), index=True)
 
 
 class ClassSession(Base):

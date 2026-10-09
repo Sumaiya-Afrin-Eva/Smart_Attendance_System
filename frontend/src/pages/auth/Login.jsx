@@ -2,24 +2,22 @@ import { useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import {
   CircleAlert, Eye, EyeOff, Loader2, Lock, Mail,
-  UserCheck, Sparkles, CheckCircle2, ShieldCheck,
+  UserCheck, CheckCircle2,
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import GoogleButton from '../../components/GoogleButton'
 import { useEffect } from 'react'
 import api from '../../lib/api'
 
-const DEMO = [
-  { label: 'Teacher', email: 'teacher@kuet.ac.bd', password: 'teacher123', role: 'Faculty' },
-  { label: 'Admin', email: 'admin@kuet.ac.bd', password: 'admin123', role: 'Administrator' },
-]
-
 export default function Login() {
-  const { user, loading: checking, login, loginWithGoogle, devLogin } = useAuth()
+  const { user, loading: checking, login, bootstrapAdmin, loginWithGoogle, devLogin } = useAuth()
   const navigate = useNavigate()
   const [tab, setTab] = useState('student') // 'student' | 'staff'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [accessCode, setAccessCode] = useState('')
+  const [adminName, setAdminName] = useState('')
+  const [creatingAdmin, setCreatingAdmin] = useState(false)
   const [showPw, setShowPw] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -59,7 +57,9 @@ export default function Login() {
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    submit(() => login(email, password))
+    submit(() => creatingAdmin
+      ? bootstrapAdmin(email, adminName, password, accessCode)
+      : login(email, password, accessCode))
   }
 
   const handleGoogle = (credential) => submit(() => loginWithGoogle(credential))
@@ -73,6 +73,7 @@ export default function Login() {
           <img
             src={metaInfo.instLogo || '/kuet_logo.png'}
             alt="Institution Logo"
+            onError={(e) => { e.currentTarget.src = '/kuet_logo.png' }}
             className="h-10 w-10 object-contain drop-shadow-2xs"
           />
           <div>
@@ -100,6 +101,7 @@ export default function Login() {
               <img
                 src={metaInfo.instLogo || '/kuet_logo.png'}
                 alt="Official Logo"
+                onError={(e) => { e.currentTarget.src = '/kuet_logo.png' }}
                 className="h-full w-full object-contain"
               />
             </div>
@@ -165,6 +167,15 @@ export default function Login() {
                   onError={setError}
                   disabled={loading}
                 />
+                {error && (
+                  <div
+                    role="alert"
+                    className="mt-3 flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50/90 p-3 text-xs sm:text-sm text-rose-800"
+                  >
+                    <CircleAlert size={17} className="mt-0.5 shrink-0 text-rose-600" />
+                    <span className="font-medium leading-relaxed">{error}</span>
+                  </div>
+                )}
               </div>
 
               {/* Student Features Checklist */}
@@ -188,39 +199,60 @@ export default function Login() {
           {/* ─── Tab 2: Faculty & Staff Credentials Form ─── */}
           {tab === 'staff' && (
             <div className="space-y-4 animate-fade-in">
-              <div className="rounded-2xl border border-stone-200 bg-stone-50/70 p-4.5">
-                <div className="mb-3.5 flex items-center justify-between">
-                  <span className="text-xs sm:text-sm font-bold text-stone-800">
-                    KUET Faculty / Staff Account
-                  </span>
-                  <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
-                    @kuet.ac.bd
-                  </span>
+              {!creatingAdmin && (
+                <>
+                <div className="rounded-2xl border border-stone-200 bg-stone-50/70 p-4.5">
+                  <div className="mb-3.5 flex items-center justify-between">
+                    <span className="text-xs sm:text-sm font-bold text-stone-800">
+                      KUET Faculty / Staff Account
+                    </span>
+                    <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
+                      @kuet.ac.bd
+                    </span>
+                  </div>
+
+                  <GoogleButton
+                    variant="staff"
+                    onCredential={handleGoogle}
+                    onError={setError}
+                    disabled={loading}
+                  />
                 </div>
 
-                <GoogleButton
-                  variant="staff"
-                  onCredential={handleGoogle}
-                  onError={setError}
-                  disabled={loading}
-                />
-              </div>
-
-              <div className="relative flex items-center py-1">
-                <div className="flex-grow border-t border-stone-200" />
-                <span className="mx-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-stone-400">
-                  or continue with email
-                </span>
-                <div className="flex-grow border-t border-stone-200" />
-              </div>
+                <div className="relative flex items-center py-1">
+                  <div className="flex-grow border-t border-stone-200" />
+                  <span className="mx-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-stone-400">
+                    or continue with email
+                  </span>
+                  <div className="flex-grow border-t border-stone-200" />
+                </div>
+                </>
+              )}
 
               <form onSubmit={handleSubmit} className="space-y-4">
+                {creatingAdmin && (
+                  <div>
+                    <label htmlFor="admin-name" className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-stone-600">
+                      Administrator Name
+                    </label>
+                    <input
+                      id="admin-name"
+                      type="text"
+                      required
+                      minLength={3}
+                      autoComplete="name"
+                      value={adminName}
+                      onChange={(e) => setAdminName(e.target.value)}
+                      className="h-11.5 w-full rounded-xl border border-stone-300 bg-white px-3.5 text-sm text-stone-900 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15"
+                    />
+                  </div>
+                )}
                 <div>
                   <label
                     htmlFor="email"
                     className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-stone-600"
                   >
-                    Faculty Email
+                    {creatingAdmin ? 'KUET Admin Email' : 'Faculty / Admin Email'}
                   </label>
                   <div className="relative">
                     <Mail
@@ -234,10 +266,25 @@ export default function Login() {
                       autoComplete="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
-                      placeholder="teacher@kuet.ac.bd"
+                      placeholder="name@kuet.ac.bd"
                       className="h-11.5 w-full rounded-xl border border-stone-300 bg-white pl-10.5 pr-3.5 text-xs sm:text-sm text-stone-900 placeholder:text-stone-400 outline-none transition duration-150 focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15"
                     />
                   </div>
+                </div>
+
+                <div>
+                  <label htmlFor="access-code" className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-stone-600">
+                    Admin Access Code {creatingAdmin ? '' : '(required for admins)'}
+                  </label>
+                  <input
+                    id="access-code"
+                    type="password"
+                    autoComplete="off"
+                    value={accessCode}
+                    onChange={(e) => setAccessCode(e.target.value)}
+                    required={creatingAdmin}
+                    className="h-11.5 w-full rounded-xl border border-stone-300 bg-white px-3.5 text-sm text-stone-900 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15"
+                  />
                 </div>
 
                 <div>
@@ -264,6 +311,7 @@ export default function Login() {
                       id="password"
                       type={showPw ? 'text' : 'password'}
                       required
+                      minLength={creatingAdmin ? 12 : undefined}
                       autoComplete="current-password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
@@ -302,41 +350,23 @@ export default function Login() {
                       <span>Verifying credentials…</span>
                     </>
                   ) : (
-                    <span>Sign In as Faculty / Staff</span>
+                    <span>{creatingAdmin ? 'Create First Admin Account' : 'Sign In as Faculty / Staff'}</span>
                   )}
                 </button>
               </form>
+              <button
+                type="button"
+                onClick={() => {
+                  setCreatingAdmin((value) => !value)
+                  setError('')
+                }}
+                className="w-full text-center text-xs font-semibold text-emerald-800 hover:text-emerald-950"
+              >
+                {creatingAdmin ? 'Back to staff sign-in' : 'First-time admin? Set up admin account'}
+              </button>
             </div>
           )}
 
-          {/* Quick Demo Test Buttons (Dev Mode) */}
-          {import.meta.env.DEV && (
-            <div className="mt-6 border-t border-stone-100 pt-4">
-              <div className="mb-2 flex items-center justify-between">
-                <span className="flex items-center gap-1.5 text-xs font-bold text-stone-600">
-                  <Sparkles size={13} className="text-emerald-700" /> Quick Demo Fill
-                </span>
-                <span className="text-[11px] font-medium text-stone-400">Development Mode</span>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                {DEMO.map((d) => (
-                  <button
-                    key={d.label}
-                    type="button"
-                    onClick={() => {
-                      setTab('staff')
-                      setEmail(d.email)
-                      setPassword(d.password)
-                    }}
-                    className="flex flex-col items-start rounded-xl border border-stone-200 bg-stone-50/80 p-2.5 text-left transition hover:border-emerald-500 hover:bg-white active:scale-[0.98] cursor-pointer"
-                  >
-                    <span className="text-xs font-bold text-stone-800">{d.label}</span>
-                    <span className="text-[11px] text-stone-500 truncate max-w-[120px]">{d.email}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </main>
 
