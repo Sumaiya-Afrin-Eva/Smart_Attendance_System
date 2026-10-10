@@ -124,7 +124,7 @@ export default function AdminTeacherAssignment() {
         targetCourse = filteredCourses.find(c => String(c.id) === initialCourseId) || filteredCourses[0]
         setSelectedCourseId(String(targetCourse.id))
         setAssignments([
-          { teacherId: targetCourse.teacher_id ? String(targetCourse.teacher_id) : '', section: targetCourse.section || 'Both' },
+          { teacherId: targetCourse.teacher_id ? String(targetCourse.teacher_id) : '', section: 'Both' },
           { teacherId: '', section: 'Both' }
         ])
       }
@@ -250,7 +250,7 @@ export default function AdminTeacherAssignment() {
                 setSelectedCourseId(value)
                 const course = courses.find((item) => String(item.id) === String(value))
                 setAssignments([
-                  { teacherId: course?.teacher_id ? String(course.teacher_id) : '', section: course?.section || 'Both' },
+                  { teacherId: course?.teacher_id ? String(course.teacher_id) : '', section: 'Both' },
                   { teacherId: '', section: 'Both' }
                 ])
               }} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400 disabled:opacity-60" disabled={filteredCourses.length === 0}>
