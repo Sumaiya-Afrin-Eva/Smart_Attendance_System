@@ -7,7 +7,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
-from app.config import settings
+from app.config import BASE_DIR, Settings, settings
 from app.database import Base, SessionLocal, engine
 from app import main as main_module
 from app.main import app, ensure_seed_settings
@@ -23,6 +23,12 @@ from app.models import (
     User,
 )
 from app.security import create_token
+
+
+def test_relative_sqlite_database_url_resolves_from_backend_directory():
+    configured = Settings(database_url="sqlite:///../attendance.db")
+
+    assert configured.database_url == f"sqlite:///{BASE_DIR.parent / 'attendance.db'}"
 
 
 def reset_db():
@@ -565,6 +571,21 @@ def test_legacy_roster_photo_path_is_migrated_to_sqlite_blob(tmp_path, monkeypat
         profile_columns = {
             column[1] for column in conn.exec_driver_sql("PRAGMA table_info(student_profiles)").fetchall()
         }
+        user_columns = {
+            column[1] for column in conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()
+        }
+        course_columns = {
+            column[1] for column in conn.exec_driver_sql("PRAGMA table_info(courses)").fetchall()
+        }
     assert migrated_data == photo_bytes
     assert mime_type == "image/jpeg"
     assert "face_status" not in profile_columns
+    assert {
+        "education",
+        "professional_membership",
+        "research_fields",
+        "pabx_ext",
+        "phone",
+        "website",
+    }.issubset(user_columns)
+    assert "status" in course_columns

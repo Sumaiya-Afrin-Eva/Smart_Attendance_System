@@ -1138,6 +1138,12 @@ async def upload_student_photo(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Photos must be JPEG or PNG images.")
     roster.photo_data = content
     roster.photo_mime_type = mime_type
+    photo_dir = settings.storage_dir / "roster_photos"
+    photo_dir.mkdir(parents=True, exist_ok=True)
+    suffix = ".png" if mime_type == "image/png" else ".jpg"
+    photo_path = photo_dir / f"{roster.id}{suffix}"
+    photo_path.write_bytes(content)
+    roster.photo_path = str(photo_path)
     if roster.profile:
         student_id = roster.profile.user_id
         db.execute(delete(FaceSample).where(FaceSample.student_id == student_id))
@@ -1145,7 +1151,12 @@ async def upload_student_photo(
         if face_folder.exists():
             shutil.rmtree(face_folder)
     db.commit()
-    return {"status": "submitted", "count": 1, "stored_in": "student_roster.photo_data"}
+    return {
+        "status": "submitted",
+        "count": 1,
+        "stored_in": "student_roster.photo_data",
+        "photo_path": roster.photo_path,
+    }
 
 
 @router.get("/admin/students/{student_id}/photo")

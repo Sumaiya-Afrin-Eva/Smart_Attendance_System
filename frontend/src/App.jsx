@@ -58,10 +58,10 @@ export default function App() {
       {/* Admin */}
       <Route element={<ProtectedRoute role="admin" />}>
         <Route path="/admin" element={<DashboardLayout />}>
+          <Route index element={<Navigate to="students" replace />} />
           <Route path="students" element={<StudentManagement />} />
           <Route path="students/new" element={<StudentRosterForm />} />
           <Route path="students/:studentId/edit" element={<StudentRosterForm />} />
-          <Route index element={<Navigate to="students" replace />} />
           <Route path="courses" element={<StudentTermManagement />} />
           <Route path="course-assignments" element={<StudentCourseAssignments />} />
           <Route path="*" element={<Navigate to="students" replace />} />
