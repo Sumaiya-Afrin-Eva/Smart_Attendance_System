@@ -61,9 +61,6 @@ export default function MyAttendance() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h2 className="font-display text-2xl font-bold tracking-tight text-stone-900">Attendance History &amp; Logs</h2>
-          <p className="mt-1 text-sm text-stone-500 font-medium">
-            Semester {history.data?.semester} verified biometric and session records
-          </p>
         </div>
         <div className="flex flex-wrap items-center gap-3.5">
           <SemesterSelect value={semester} onChange={(s) => { setSemester(s); changeCourse('') }} />
@@ -148,7 +145,7 @@ export default function MyAttendance() {
             <table className="w-full min-w-[600px] text-left text-sm">
               <thead className="border-b border-[#f0eee6] bg-stone-50/70 text-xs font-bold uppercase tracking-wider text-stone-500">
                 <tr>
-                  <th className="px-6 py-4">Date &amp; Schedule</th>
+                  <th className="px-6 py-4">Date &amp; Verification Time</th>
                   <th className="px-6 py-4">Course Name</th>
                   <th className="px-6 py-4">Status</th>
                   <th className="px-6 py-4">Verification Method</th>
@@ -167,9 +164,11 @@ export default function MyAttendance() {
                           </div>
                           <div>
                             <p className="font-display text-sm font-bold text-stone-900">{formatDate(r.start_at)}</p>
-                            <p className="text-xs sm:text-sm text-stone-500 font-mono">
-                              {formatTime(r.start_at)} – {formatTime(r.end_at)}
-                            </p>
+                            {r.marked_at && (
+                              <p className="text-xs sm:text-sm text-stone-500 font-mono">
+                                {formatTime(r.marked_at)}
+                              </p>
+                            )}
                           </div>
                         </div>
                       </td>

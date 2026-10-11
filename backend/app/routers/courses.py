@@ -505,6 +505,148 @@ def update_course_students(
     }
 
 
+@router.post("/admin/course-assignments/bulk-upload")
+async def bulk_assign_courses(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    """Assign every registered student matching each spreadsheet course offering."""
+    import csv
+    import io
+
+    filename = (file.filename or "").lower()
+    if not filename.endswith((".xlsx", ".csv")):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Upload an .xlsx or .csv assignment file.")
+
+    content = await file.read()
+    try:
+        if filename.endswith(".csv"):
+            rows = list(csv.DictReader(io.StringIO(content.decode("utf-8-sig"))))
+        else:
+            from openpyxl import load_workbook
+
+            workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+            values = list(workbook.active.values)
+            workbook.close()
+            headers = [str(value or "").strip() for value in values[0]] if values else []
+            rows = [
+                dict(zip(headers, row))
+                for row in values[1:]
+                if any(value not in (None, "") for value in row)
+            ]
+    except Exception as error:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Error parsing assignment spreadsheet: {error}") from error
+
+    def get_value(row: dict, aliases: list[str]) -> str | None:
+        normalized = {
+            str(key).strip().lower().replace("_", " "): value
+            for key, value in row.items()
+            if key is not None
+        }
+        for alias in aliases:
+            value = normalized.get(alias.lower().replace("_", " "))
+            if value not in (None, ""):
+                return str(value).strip()
+        return None
+
+    if not rows:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The assignment spreadsheet has no data rows.")
+
+    results = []
+    total_added = 0
+    for row_number, row in enumerate(rows, start=2):
+        code = get_value(row, ["code", "course code", "coursecode"])
+        department = get_value(row, ["department", "dept"])
+        session = get_value(row, ["session", "academic session"])
+        semester = get_value(row, ["semester", "sem", "year term", "year-term"])
+        if not code or not department or not session or not semester:
+            results.append({
+                "row": row_number,
+                "status": "skipped",
+                "reason": "Course Code, Department, Session, and Semester are required.",
+            })
+            continue
+
+        normalized_code = re.sub(r"([A-Za-z]+)\s*([0-9])", r"\1 \2", code).upper()
+        semester_match = re.search(r"(\d)\s*[-/]\s*(\d)", semester)
+        normalized_semester = (
+            f"{semester_match.group(1)}-{semester_match.group(2)}"
+            if semester_match
+            else semester.strip()
+        )
+        courses = db.scalars(
+            select(Course).where(
+                Course.code == normalized_code,
+                Course.department == department.upper(),
+                Course.session == session,
+                Course.semester == normalized_semester,
+                Course.is_active.is_(True),
+            )
+        ).all()
+        if not courses:
+            results.append({
+                "row": row_number,
+                "code": normalized_code,
+                "semester": normalized_semester,
+                "status": "skipped",
+                "reason": "Active course offering for this department, session, and semester was not found.",
+            })
+            continue
+        if len(courses) > 1:
+            results.append({"row": row_number, "code": normalized_code, "status": "skipped", "reason": "More than one active course offering matched."})
+            continue
+
+        course = courses[0]
+        eligible_rosters = db.scalars(
+            select(StudentRoster).where(
+                StudentRoster.is_active.is_(True),
+                StudentRoster.department == course.department,
+                StudentRoster.session == course.session,
+            )
+        ).all()
+        eligible_rosters = [
+            roster for roster in eligible_rosters
+            if roster.profile
+            and roster.profile.user
+            and roster.profile.user.is_active
+            and roster.profile.department == course.department
+            and roster.profile.session == course.session
+            and roster.profile.current_semester == course.semester
+        ]
+        existing_roster_ids = set(db.scalars(
+            select(CourseRosterAssignment.roster_id).where(CourseRosterAssignment.course_id == course.id)
+        ).all())
+        added = 0
+        for roster in eligible_rosters:
+            if roster.id not in existing_roster_ids:
+                db.add(CourseRosterAssignment(course_id=course.id, roster_id=roster.id))
+                existing_roster_ids.add(roster.id)
+                added += 1
+            if not db.scalar(select(Enrollment).where(
+                Enrollment.course_id == course.id,
+                Enrollment.student_id == roster.profile.user_id,
+            )):
+                db.add(Enrollment(
+                    student_id=roster.profile.user_id,
+                    course_id=course.id,
+                    semester=course.semester,
+                ))
+        total_added += added
+        results.append({
+            "row": row_number,
+            "code": course.code,
+            "semester": course.semester,
+            "session": course.session,
+            "status": "assigned",
+            "students": len(eligible_rosters),
+            "added": added,
+        })
+
+    db.commit()
+    return {"detail": "Course assignments completed.", "added": total_added, "results": results}
+
+
 @router.delete("/admin/courses")
 def archive_all_courses(db: Session = Depends(get_db), _: User = Depends(admin_only)):
     courses = db.scalars(select(Course).where(Course.is_active.is_(True))).all()
@@ -550,57 +692,76 @@ async def bulk_upload_courses(
     db: Session = Depends(get_db),
     _: User = Depends(admin_only),
 ):
-    from ..ai_extraction import extract_courses_from_file
     from starlette.concurrency import run_in_threadpool
-    import re
-    from ..ai_extraction import _semester_from_heading
-    
+    import csv
+    import io
+
     file_content = await file.read()
-    mime_type = file.content_type
-    
+    filename = (file.filename or "").lower()
+    mime_type = file.content_type or ""
+
     is_spreadsheet = mime_type in [
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/vnd.ms-excel",
         "text/csv"
-    ] or file.filename.lower().endswith(('.xlsx', '.xls', '.csv'))
-    
+    ] or filename.endswith((".xlsx", ".xls", ".csv"))
+
     if is_spreadsheet:
-        import pandas as pd
-        import io
         try:
-            if file.filename.lower().endswith('.csv') or mime_type == "text/csv":
-                df = pd.read_csv(io.BytesIO(file_content))
+            if filename.endswith(".csv") or mime_type == "text/csv":
+                rows = list(csv.DictReader(io.StringIO(file_content.decode("utf-8-sig"))))
             else:
-                df = pd.read_excel(io.BytesIO(file_content))
-            
-            extracted_data = []
-            for _, row in df.iterrows():
-                def get_val(keys, default=None):
-                    for k in keys:
-                        for col in df.columns:
-                            if col.lower().strip() == k.lower():
-                                v = row[col]
-                                return str(v) if pd.notna(v) else default
-                    return default
-                    
-                data = {
-                    "code": get_val(["code", "course code", "course_code", "coursecode"]),
-                    "title": get_val(["title", "course title", "course_title", "name"]),
-                    "credit": get_val(["credit", "credits"]),
-                    "department": get_val(["department", "dept"]),
-                    "semester": get_val(["semester", "sem"]),
-                    "course_type": get_val(["course_type", "type", "course type"]),
-                    "session": get_val(["session"])
+                if filename.endswith(".xls"):
+                    raise ValueError("Legacy .xls files are not supported. Save the file as .xlsx or .csv and try again.")
+                from openpyxl import load_workbook
+
+                workbook = load_workbook(io.BytesIO(file_content), read_only=True, data_only=True)
+                worksheet = workbook.active
+                values = list(worksheet.values)
+                if not values:
+                    rows = []
+                else:
+                    headers = [str(value or "").strip() for value in values[0]]
+                    rows = [
+                        dict(zip(headers, row))
+                        for row in values[1:]
+                        if any(value not in (None, "") for value in row)
+                    ]
+                workbook.close()
+
+            def get_val(row, keys, default=None):
+                normalized = {
+                    str(key).strip().lower().replace("_", " "): value
+                    for key, value in row.items()
+                    if key is not None
                 }
-                if data["code"]:
-                    extracted_data.append(data)
-        except Exception:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Error parsing spreadsheet: {str(e)}")
+                for key in keys:
+                    value = normalized.get(key.lower().replace("_", " "))
+                    if value not in (None, ""):
+                        return str(value).strip()
+                return default
+
+            extracted_data = [
+                {
+                    "code": get_val(row, ["code", "course code", "coursecode"]),
+                    "title": get_val(row, ["title", "course title", "name"]),
+                    "credit": get_val(row, ["credit", "credits"]),
+                    "department": get_val(row, ["department", "dept"]),
+                    "semester": get_val(row, ["semester", "sem"]),
+                    "course_type": get_val(row, ["course type", "type"]),
+                    "session": get_val(row, ["session", "academic session"]),
+                }
+                for row in rows
+            ]
+            extracted_data = [data for data in extracted_data if data["code"]]
+        except Exception as error:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Error parsing spreadsheet: {error}") from error
     else:
         try:
+            from ..ai_extraction import extract_courses_from_file
             extracted_data = await run_in_threadpool(extract_courses_from_file, file_content, mime_type)
-        except Exception:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+        except Exception as error:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(error)) from error
         
     if not extracted_data:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No courses were extracted from the document.")
@@ -651,7 +812,7 @@ async def bulk_upload_courses(
             if m:
                 out['semester'] = f"{m.group(1)}-{m.group(2)}"
             else:
-                out['semester'] = _semester_from_heading(sem_s)
+                out['semester'] = sem_s
 
         # Course type
         ctype = out.get('course_type') or out.get('type')
@@ -665,7 +826,12 @@ async def bulk_upload_courses(
 
         return out
 
-    seen_codes = set()
+    seen_courses = set()
+    imported_courses: list[dict] = []
+    existing_courses = {
+        (course.code, course.session, course.department, course.semester)
+        for course in db.scalars(select(Course)).all()
+    }
     for data in extracted_data:
         norm = _normalize_course(data)
         try:
@@ -677,12 +843,13 @@ async def bulk_upload_courses(
             continue
 
         # Check for duplicate in current batch or DB
-        if body.code in seen_codes or db.scalar(select(Course).where(Course.code == body.code)):
+        course_key = (body.code, body.session, body.department, body.semester)
+        if course_key in seen_courses or course_key in existing_courses:
             skipped += 1
             skipped_items.append({"data": norm, "reason": "duplicate_code"})
             continue
 
-        seen_codes.add(body.code)
+        seen_courses.add(course_key)
         
         course = Course(
             code=body.code,
@@ -692,19 +859,27 @@ async def bulk_upload_courses(
             course_type=body.course_type,
             credit=body.credit,
             session=body.session,
+            is_active=True,
             status='Active'
         )
         db.add(course)
-        try:
-            db.flush()
-            added += 1
-        except Exception:
-            db.rollback()
-            skipped += 1
-            skipped_items.append({"data": norm, "reason": "db_error"})
-            continue
+        added += 1
+        imported_courses.append({
+            "code": body.code,
+            "title": body.title,
+            "department": body.department,
+            "semester": body.semester,
+            "session": body.session,
+        })
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as error:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Courses could not be imported because the database rejected the records: {error}",
+        ) from error
 
     if skipped > 0:
         print("SKIPPED ITEMS:", skipped_items)
@@ -714,6 +889,7 @@ async def bulk_upload_courses(
         "added": added,
         "skipped": skipped,
         "total": len(extracted_data),
+        "courses": imported_courses,
         "skipped_items": skipped_items,
     }
 
@@ -750,6 +926,32 @@ def delete_all_courses(db: Session = Depends(get_db), _: User = Depends(admin_on
     db.query(Course).delete(synchronize_session=False)
     db.commit()
     return {"success": True}
+
+
+@router.delete("/admin/courses/{course_id}/permanent")
+def permanently_delete_course(course_id: int, db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    course = db.get(Course, course_id)
+    if not course:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found.")
+    if course.is_active:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only archived courses can be permanently deleted.")
+
+    db.query(Attendance).filter(
+        Attendance.session_id.in_(
+            select(ClassSession.id).where(ClassSession.course_id == course_id)
+        )
+    ).delete(synchronize_session=False)
+    db.query(ClassSession).filter(ClassSession.course_id == course_id).delete(synchronize_session=False)
+    db.query(Enrollment).filter(Enrollment.course_id == course_id).delete(synchronize_session=False)
+    db.query(CourseRosterAssignment).filter(CourseRosterAssignment.course_id == course_id).delete(
+        synchronize_session=False
+    )
+    db.query(CourseStatusLog).filter(CourseStatusLog.course_code == course.code).delete(
+        synchronize_session=False
+    )
+    db.delete(course)
+    db.commit()
+    return {"deleted": True, "course_id": course_id}
 
 
 @router.delete("/admin/courses/{course_id}")
@@ -1111,6 +1313,109 @@ def create_student(
         "phone": roster.phone,
         "photo_available": False,
         "status": "Needs photo",
+    }
+
+
+@router.post("/admin/students/bulk-upload")
+async def bulk_upload_students(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    import csv
+    import io
+
+    filename = (file.filename or "").lower()
+    if not filename.endswith((".xlsx", ".csv")):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Upload an .xlsx or .csv student file.")
+
+    content = await file.read()
+    try:
+        if filename.endswith(".csv"):
+            rows = list(csv.DictReader(io.StringIO(content.decode("utf-8-sig"))))
+        else:
+            from openpyxl import load_workbook
+
+            workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+            values = list(workbook.active.values)
+            workbook.close()
+            headers = [str(value or "").strip() for value in values[0]] if values else []
+            rows = [
+                dict(zip(headers, row))
+                for row in values[1:]
+                if any(value not in (None, "") for value in row)
+            ]
+    except Exception as error:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Error parsing student spreadsheet: {error}") from error
+
+    def get_value(row: dict, aliases: list[str]) -> str | None:
+        normalized = {
+            str(key).strip().lower().replace("_", " "): value
+            for key, value in row.items()
+            if key is not None
+        }
+        for alias in aliases:
+            value = normalized.get(alias.lower().replace("_", " "))
+            if value not in (None, ""):
+                return str(value).strip()
+        return None
+
+    if not rows:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The student spreadsheet has no data rows.")
+
+    added = 0
+    skipped_items = []
+    seen_rolls: set[str] = set()
+    seen_emails: set[str] = set()
+    for row_number, row in enumerate(rows, start=2):
+        raw = {
+            "name": get_value(row, ["name", "full name", "student name"]),
+            "roll": get_value(row, ["roll", "roll number", "student roll"]),
+            "email": get_value(row, ["email", "academic email", "student email"]),
+            "session": get_value(row, ["session", "academic session"]),
+            "department": get_value(row, ["department", "dept"]),
+            "phone": get_value(row, ["phone", "mobile", "contact"]),
+        }
+        try:
+            body = AdminStudentCreateIn(**raw)
+            email = str(body.email).lower()
+            if body.roll in seen_rolls or email in seen_emails:
+                raise ValueError("Duplicate roll or email in this file.")
+            if db.scalar(select(StudentRoster.id).where(StudentRoster.roll == body.roll)):
+                raise ValueError("Roll number already exists.")
+            if db.scalar(select(StudentRoster.id).where(StudentRoster.email == email)):
+                raise ValueError("Email already exists.")
+            linked_user = db.scalar(select(User).where(User.email == email))
+            if linked_user and linked_user.role != "student":
+                raise ValueError("Email is already used by a staff account.")
+
+            db.add(StudentRoster(
+                full_name=body.name,
+                roll=body.roll,
+                email=email,
+                department=body.department,
+                session=body.session,
+                phone=body.phone,
+                is_active=True,
+            ))
+            seen_rolls.add(body.roll)
+            seen_emails.add(email)
+            added += 1
+        except Exception as error:
+            skipped_items.append({"row": row_number, "data": raw, "reason": str(error)})
+
+    try:
+        db.commit()
+    except Exception as error:
+        db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Students could not be imported: {error}") from error
+
+    return {
+        "detail": "Student roster import completed.",
+        "added": added,
+        "skipped": len(skipped_items),
+        "total": len(rows),
+        "skipped_items": skipped_items,
     }
 
 

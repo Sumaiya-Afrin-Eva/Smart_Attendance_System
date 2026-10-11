@@ -276,7 +276,7 @@ export default function AdminCourses() {
             <h3 className="font-display text-2xl font-bold text-stone-900">Add new course</h3>
             <div className="flex bg-stone-100 p-1 rounded-xl">
               <button onClick={() => setEntryMode('manual')} className={`px-4 py-1.5 text-sm font-semibold rounded-lg transition-colors ${entryMode === 'manual' ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}>Manual Entry</button>
-              <button onClick={() => setEntryMode('bulk')} className={`px-4 py-1.5 text-sm font-semibold rounded-lg transition-colors ${entryMode === 'bulk' ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}>Bulk Upload (AI)</button>
+              <button onClick={() => setEntryMode('bulk')} className={`px-4 py-1.5 text-sm font-semibold rounded-lg transition-colors ${entryMode === 'bulk' ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'}`}>Excel / CSV Import</button>
             </div>
           </div>
 
@@ -333,10 +333,10 @@ export default function AdminCourses() {
           <form onSubmit={handleBulkUpload} className="py-4">
             <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-stone-300 bg-stone-50 p-8 text-center hover:bg-stone-100 transition-colors cursor-pointer relative">
               <UploadCloud size={40} className="mb-3 text-stone-400" />
-              <p className="text-sm font-semibold text-stone-700 mb-1">Click to upload a document or spreadsheet</p>
-              <p className="text-xs text-stone-500 mb-4">Supports Excel (.xlsx, .csv), PDF, PNG, JPG, or PPTX containing course details</p>
+              <p className="text-sm font-semibold text-stone-700 mb-1">Upload a course spreadsheet</p>
+              <p className="text-xs text-stone-500 mb-4">Use .xlsx or .csv with Code, Title, Department, Semester, Type, Credit, and optional Session columns</p>
               
-              <input type="file" onChange={(e) => setUploadFile(e.target.files[0])} accept=".pdf,.png,.jpg,.jpeg,.pptx,.xlsx,.xls,.csv" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" required />
+              <input type="file" onChange={(e) => setUploadFile(e.target.files[0])} accept=".xlsx,.csv,.pdf,.png,.jpg,.jpeg,.pptx" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" required />
               
               {uploadFile && (
                 <div className="bg-white px-4 py-2 rounded-lg shadow-sm border border-stone-200 inline-flex items-center gap-2">
@@ -351,11 +351,11 @@ export default function AdminCourses() {
                 {uploading ? (
                   <>
                     <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white"></div>
-                    Extracting data...
+                    Importing courses...
                   </>
                 ) : (
                   <>
-                    <UploadCloud size={16} /> Process & Upload
+                    <UploadCloud size={16} /> Import courses
                   </>
                 )}
               </button>

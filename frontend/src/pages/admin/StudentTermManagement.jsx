@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Archive, BookOpen, CalendarRange, GraduationCap, LoaderCircle, Pencil, Plus, RotateCcw, Search, Users } from 'lucide-react'
+import { Archive, BookOpen, CalendarRange, GraduationCap, LoaderCircle, Pencil, Plus, RotateCcw, Search, UploadCloud, Users, X } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
 
 const fallbackSemesters = ['1-1', '1-2', '2-1', '2-2', '3-1', '3-2', '4-1', '4-2']
@@ -29,6 +29,9 @@ export default function StudentTermManagement() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
+  const [entryMode, setEntryMode] = useState('manual')
+  const [uploadFile, setUploadFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
 
   useEffect(() => {
     async function loadData() {
@@ -114,6 +117,30 @@ export default function StudentTermManagement() {
     } finally {
       setSaving(false)
     }
+
+  }
+
+  const handleBulkUpload = async (event) => {
+    event.preventDefault()
+    if (!uploadFile) return
+
+    setUploading(true)
+    setNotice('')
+    try {
+      const formData = new FormData()
+      formData.append('file', uploadFile)
+      const { data } = await api.post('/admin/courses/bulk-upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      const { data: courseRows } = await api.get('/admin/courses', { params: { include_archived: true } })
+      setCourses(courseRows)
+      setUploadFile(null)
+      setNotice(`${data.added} course(s) imported. ${data.skipped} row(s) skipped as duplicate or invalid.`)
+    } catch (error) {
+      setNotice(errorMessage(error, 'Course spreadsheet could not be imported.'))
+    } finally {
+      setUploading(false)
+    }
   }
 
   const handleEdit = (course) => {
@@ -151,6 +178,17 @@ export default function StudentTermManagement() {
     }
   }
 
+  const handlePermanentDelete = async (course) => {
+    if (!window.confirm(`Permanently delete ${course.code}? Its enrollments, classes, attendance history, and course record will be removed.`)) return
+    try {
+      await api.delete(`/admin/courses/${course.id}/permanent`)
+      setCourses((current) => current.filter((item) => item.id !== course.id))
+      setNotice(`${course.code} was permanently deleted.`)
+    } catch (error) {
+      setNotice(errorMessage(error, 'Archived course could not be deleted.'))
+    }
+  }
+
   const handleArchiveAll = async () => {
     if (!activeCourses.length) return
     if (!window.confirm(`Archive all ${activeCourses.length} active courses? Existing enrollments, class sessions, and attendance history will remain in the database.`)) return
@@ -168,10 +206,6 @@ export default function StudentTermManagement() {
       <section className="rounded-2xl border border-stone-200 bg-[#f4f3f1] p-5 shadow-2xs">
         <p className="text-xs font-semibold uppercase tracking-[0.22em] text-stone-500">Student registration setup</p>
         <h2 className="mt-2 font-display text-3xl font-bold text-stone-900">Courses &amp; eligible terms</h2>
-        <p className="mt-3 text-sm text-stone-600">
-          Students can register for a year-term only after a course is listed for their approved department and session.
-          This page contains only the course details used for student eligibility.
-        </p>
       </section>
 
       {notice && (
@@ -188,10 +222,19 @@ export default function StudentTermManagement() {
             </div>
             <div>
               <h3 className="font-display text-xl font-bold text-stone-900">{editingCourseId ? 'Edit course' : 'Add course'}</h3>
-              <p className="text-sm text-stone-500">Manage offerings used for student registration and course assignments.</p>
             </div>
           </div>
 
+          <div className="mb-4 flex rounded-xl bg-stone-100 p-1">
+            <button type="button" onClick={() => setEntryMode('manual')} className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold ${entryMode === 'manual' ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500'}`}>
+              Manual Entry
+            </button>
+            <button type="button" onClick={() => setEntryMode('bulk')} className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold ${entryMode === 'bulk' ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500'}`}>
+              Excel / CSV Import
+            </button>
+          </div>
+
+          {entryMode === 'manual' ? (
           <form className="space-y-4" onSubmit={handleSubmit}>
             <label className="block space-y-1.5">
               <span className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Course code</span>
@@ -239,6 +282,34 @@ export default function StudentTermManagement() {
               </button>
             </div>
           </form>
+          ) : (
+          <form className="space-y-4" onSubmit={handleBulkUpload}>
+            <div className="relative flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-stone-300 bg-stone-50 p-6 text-center hover:bg-stone-100">
+              <UploadCloud size={38} className="mb-3 text-emerald-700" />
+              <p className="text-sm font-semibold text-stone-700">Upload course spreadsheet</p>
+              <p className="mt-1 max-w-sm text-xs text-stone-500">
+                Use .xlsx or .csv with Code, Title, Department, Semester, Type, Credit, and optional Session columns.
+              </p>
+              <input
+                type="file"
+                accept=".xlsx,.csv"
+                onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+              />
+              {uploadFile && (
+                <div className="mt-4 inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-700">
+                  <span className="max-w-56 truncate">{uploadFile.name}</span>
+                  <button type="button" onClick={() => setUploadFile(null)} className="relative z-10 text-stone-400 hover:text-stone-700" aria-label="Remove selected file">
+                    <X size={15} />
+                  </button>
+                </div>
+              )}
+            </div>
+            <button type="submit" disabled={uploading || !uploadFile} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60">
+              <UploadCloud size={16} /> {uploading ? 'Importing courses...' : 'Import courses'}
+            </button>
+          </form>
+          )}
         </div>
 
         <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
@@ -280,6 +351,15 @@ export default function StudentTermManagement() {
                     </div>
                     <div className="flex items-center gap-2">
                       {!course.is_active && <span className="rounded-full bg-stone-200 px-2 py-1 text-[10px] font-bold uppercase text-stone-600">Archived</span>}
+                      {!course.is_active && (
+                        <button
+                          type="button"
+                          onClick={() => handlePermanentDelete(course)}
+                          className="rounded-lg border border-rose-200 bg-rose-50 px-2 py-1 text-[10px] font-bold uppercase text-rose-700 hover:bg-rose-100"
+                        >
+                          Delete permanently
+                        </button>
+                      )}
                       <button
                         type="button"
                         aria-label={`View assigned students for ${course.code}`}

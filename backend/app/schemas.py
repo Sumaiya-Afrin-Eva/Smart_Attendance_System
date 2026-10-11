@@ -162,6 +162,8 @@ class CourseCreateIn(BaseModel):
     @classmethod
     def check_session(cls, v: str) -> str:
         value = v.strip()
+        if value == "Default":
+            return value
         if not re.fullmatch(r"20\d{2}-20\d{2}", value):
             raise ValueError("Session must look like 2021-2022")
         start, end = (int(part) for part in value.split("-"))

@@ -121,8 +121,12 @@ export default function DashboardLayout() {
         {/* Header Branding */}
         <div className={`flex h-18 items-center border-b border-[#f0eee6] px-5 ${collapsed ? 'justify-center' : 'justify-between'}`}>
           <div className="flex items-center gap-3.5 overflow-hidden">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-emerald-200/80 bg-emerald-50 text-emerald-800 shadow-2xs">
-              <GraduationCap size={24} />
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-emerald-200/80 bg-emerald-50 p-1.5 shadow-2xs">
+              <img
+                src="/kuet_logo.png"
+                alt="KUET logo"
+                className="h-full w-full object-contain"
+              />
             </div>
             {!collapsed && (
               <div className="min-w-0 leading-tight">

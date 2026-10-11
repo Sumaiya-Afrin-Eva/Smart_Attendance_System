@@ -43,9 +43,6 @@ export default function StudentDashboard() {
             <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-white lg:text-4xl">
               {greeting}, {firstName} 👋
             </h2>
-            <p className="mt-2.5 text-sm sm:text-base text-emerald-100/90 leading-relaxed">
-              Semester {data.semester} automated face recognition log tracker. Attendance is shown separately for each assigned course.
-            </p>
           </div>
 
           <div className="flex flex-col items-end gap-3.5">
