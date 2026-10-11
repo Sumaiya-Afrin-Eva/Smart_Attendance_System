@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   BookOpen, Calendar, CalendarX,
   ScanFace, UserCheck, ShieldCheck,
@@ -18,10 +19,24 @@ const METHOD_CONFIG = {
 
 export default function MyAttendance() {
   const [semester, setSemester] = useState()
-  const [courseId, setCourseId] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [courseId, setCourseId] = useState(() => searchParams.get('course_id') || '')
   const [filter, setFilter] = useState('all')
   const history = useAttendanceHistory(semester)
   const dashboard = useDashboard(semester)
+
+  useEffect(() => {
+    const selectedCourseId = searchParams.get('course_id') || ''
+    setCourseId((current) => current === selectedCourseId ? current : selectedCourseId)
+  }, [searchParams])
+
+  const changeCourse = (value) => {
+    setCourseId(value)
+    const nextParams = new URLSearchParams(searchParams)
+    if (value) nextParams.set('course_id', value)
+    else nextParams.delete('course_id')
+    setSearchParams(nextParams)
+  }
 
   const rows = useMemo(
     () =>
@@ -51,12 +66,12 @@ export default function MyAttendance() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3.5">
-          <SemesterSelect value={semester} onChange={(s) => { setSemester(s); setCourseId('') }} />
+          <SemesterSelect value={semester} onChange={(s) => { setSemester(s); changeCourse('') }} />
           <div className="relative">
             <select
               aria-label="Filter by course"
               value={courseId}
-              onChange={(e) => setCourseId(e.target.value)}
+              onChange={(e) => changeCourse(e.target.value)}
               className="h-11 rounded-xl border border-stone-300/80 bg-white px-4 pr-9 text-sm font-semibold text-stone-800 shadow-2xs outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15"
             >
               <option value="">All Registered Courses</option>

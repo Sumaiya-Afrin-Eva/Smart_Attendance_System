@@ -147,7 +147,7 @@ export default function FaceLab() {
       const formData = new FormData()
       formData.append('session_id', activeClass.session_id)
       formData.append('image_base64', b64)
-      formData.append('threshold', 0.6)
+      formData.append('threshold', 0.55)
 
       const res = await api.post('/face/kiosk/scan', formData, {
         timeout: 120000,
@@ -436,7 +436,7 @@ export default function FaceLab() {
                       <p className="text-xs font-bold">No Match Found</p>
                     </div>
                     <p className="text-xs text-amber-800 leading-relaxed">
-                      Face did not match any enrolled student with sufficient confidence (threshold 0.60). Please look directly at the camera and try again.
+                      Face did not match any enrolled student with sufficient confidence (threshold 0.55). Please look directly at the camera and try again.
                     </p>
                   </div>
                 )

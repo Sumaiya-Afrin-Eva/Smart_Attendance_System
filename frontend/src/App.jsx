@@ -14,13 +14,6 @@ import TeacherCourses from './pages/teacher/TeacherCourses'
 import TeacherHistory from './pages/teacher/TeacherHistory'
 import TeacherAnalytics from './pages/teacher/TeacherAnalytics'
 import TeacherSettings from './pages/teacher/TeacherSettings'
-<<<<<<< HEAD
-=======
-import AdminDashboard from './pages/admin/AdminDashboard'
-import AdminCourses from './pages/admin/AdminCourses'
-import AdminTeacherAssignment from './pages/admin/AdminTeacherAssignment'
-import TeacherManagement from './pages/admin/TeacherManagement'
->>>>>>> origin/main
 import StudentManagement from './pages/admin/StudentManagement'
 import StudentRosterForm from './pages/admin/StudentRosterForm'
 import StudentTermManagement from './pages/admin/StudentTermManagement'
@@ -65,17 +58,10 @@ export default function App() {
       {/* Admin */}
       <Route element={<ProtectedRoute role="admin" />}>
         <Route path="/admin" element={<DashboardLayout />}>
-<<<<<<< HEAD
-=======
-          <Route index element={<AdminDashboard />} />
-          <Route path="courses" element={<AdminCourses />} />
-          <Route path="assignments" element={<AdminTeacherAssignment />} />
-          <Route path="teachers" element={<TeacherManagement />} />
->>>>>>> origin/main
+          <Route index element={<Navigate to="students" replace />} />
           <Route path="students" element={<StudentManagement />} />
           <Route path="students/new" element={<StudentRosterForm />} />
           <Route path="students/:studentId/edit" element={<StudentRosterForm />} />
-          <Route index element={<Navigate to="students" replace />} />
           <Route path="courses" element={<StudentTermManagement />} />
           <Route path="course-assignments" element={<StudentCourseAssignments />} />
           <Route path="*" element={<Navigate to="students" replace />} />

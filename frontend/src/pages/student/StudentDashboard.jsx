@@ -1,11 +1,8 @@
 import { useState } from 'react'
 import {
-  Bar, BarChart, CartesianGrid, Line, LineChart,
-  ResponsiveContainer, Tooltip, XAxis, YAxis,
-} from 'recharts'
-import {
-  BookOpen, CalendarCheck, CalendarX, CheckCircle2, Percent, Sparkles, TrendingUp,
+  BookOpen, CalendarCheck, CheckCircle2, ChevronRight, Sparkles,
 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { useDashboard } from '../../lib/queries'
 import { errorMessage } from '../../lib/api'
@@ -13,104 +10,17 @@ import { formatPercent } from '../../lib/format'
 import { Badge, Card, EmptyState, ErrorBox, Spinner } from '../../components/ui'
 import SemesterSelect from '../../components/student/SemesterSelect'
 
-const COLORS = {
-  emerald: '#059669',
-  emeraldLight: '#10b981',
-  teal: '#0f766e',
-  slate: '#57534e',
-  grid: '#f0eee6',
-  axis: '#78716c',
-}
-
-function StatCard({ icon: Icon, label, value, hint, variant = 'default', trend }) {
-  const styles = {
-    default: 'glass-card-interactive',
-    brand: 'border-emerald-200/90 bg-gradient-to-br from-emerald-50/80 via-white to-white shadow-2xs hover:border-emerald-300',
-    danger: 'border-rose-200/90 bg-rose-50/50 shadow-2xs hover:border-rose-300',
-    success: 'border-emerald-200/90 bg-emerald-50/50 shadow-2xs hover:border-emerald-300',
-  }
-
-  const iconStyles = {
-    default: 'bg-stone-100 text-stone-600 border border-stone-200/60',
-    brand: 'bg-emerald-800 text-white shadow-2xs',
-    danger: 'bg-rose-600 text-white shadow-2xs',
-    success: 'bg-emerald-700 text-white shadow-2xs',
-  }
-
-  return (
-    <div
-      className={`group relative overflow-hidden rounded-2xl border p-5.5 transition-all duration-200 ${styles[variant]}`}
-    >
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-bold uppercase tracking-wider text-stone-500">{label}</p>
-        <div className={`flex h-10 w-10 items-center justify-center rounded-xl transition-transform group-hover:scale-105 ${iconStyles[variant]}`}>
-          <Icon size={19} />
-        </div>
-      </div>
-      <div className="mt-3.5 flex items-baseline gap-2.5">
-        <p className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight text-stone-900">{value}</p>
-        {trend && (
-          <span className="flex items-center text-xs sm:text-sm font-semibold text-emerald-700">
-            <TrendingUp size={14} className="mr-0.5" />
-            {trend}
-          </span>
-        )}
-      </div>
-      <p className="mt-2 text-xs sm:text-sm text-stone-600 font-medium">{hint}</p>
-    </div>
-  )
-}
-
-function AttendanceBar({ course }) {
-  const pct = course.percent ?? 0
-  return (
-    <div className="relative mt-2.5">
-      <div
-        role="progressbar"
-        aria-label={`${course.title} attendance`}
-        aria-valuenow={Math.round(pct)}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        className="relative h-2.5 w-full overflow-hidden rounded-full bg-stone-100 border border-stone-200/60"
-      >
-        <div
-          className="h-full rounded-full transition-all duration-500 shadow-2xs"
-          style={{ width: `${pct}%`, backgroundColor: COLORS.emerald }}
-        />
-      </div>
-    </div>
-  )
-}
-
-function ChartTooltip({ active, payload, label }) {
-  if (!active || !payload?.length) return null
-  return (
-    <div className="rounded-xl border border-stone-700/60 bg-stone-900/90 p-3.5 text-xs sm:text-sm text-white shadow-lg backdrop-blur-md">
-      <p className="mb-1.5 font-bold text-white">{label}</p>
-      {payload.map((p) => (
-        <div key={p.dataKey} className="flex items-center justify-between gap-3 text-stone-300">
-          <span className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: p.color ?? p.payload.fill }} />
-            {p.name}:
-          </span>
-          <span className="font-bold text-white font-mono">{Math.round(p.value)}%</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
 export default function StudentDashboard() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const [semester, setSemester] = useState()
   const { data, isLoading, error } = useDashboard(semester)
 
   if (isLoading) return <Spinner label="Loading attendance dashboard…" />
   if (error) return <ErrorBox>{errorMessage(error)}</ErrorBox>
 
-  const { summary: s, courses, trend } = data
+  const { courses } = data
   const firstName = user.name.split(' ')[0]
-  const byCourse = courses.map((c) => ({ name: c.code, percent: c.percent ?? 0 }))
 
   // Time-of-day greeting
   const hour = new Date().getHours()
@@ -134,10 +44,7 @@ export default function StudentDashboard() {
               {greeting}, {firstName} 👋
             </h2>
             <p className="mt-2.5 text-sm sm:text-base text-emerald-100/90 leading-relaxed">
-              Semester {data.semester} automated face recognition log tracker. You have attended{' '}
-              <strong className="text-white">{s.attended}</strong> of{' '}
-              <strong className="text-white">{s.held}</strong> scheduled lectures with an overall attendance of{' '}
-              <strong className="text-emerald-300 font-semibold">{formatPercent(s.percent)}</strong>.
+              Semester {data.semester} automated face recognition log tracker. Attendance is shown separately for each assigned course.
             </p>
           </div>
 
@@ -149,24 +56,6 @@ export default function StudentDashboard() {
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Summary Stat Cards */}
-      <div className="grid gap-5 sm:grid-cols-2">
-        <StatCard
-          icon={Percent}
-          label="Overall Attendance"
-          value={formatPercent(s.percent)}
-          hint={`${s.courses} assigned courses this term`}
-          variant="brand"
-        />
-        <StatCard
-          icon={CalendarCheck}
-          label="Classes Attended"
-          value={`${s.attended} / ${s.held}`}
-          hint="Late check-ins counted in marks"
-          variant="default"
-        />
       </div>
 
       <Card
@@ -209,118 +98,42 @@ export default function StudentDashboard() {
         </Card>
       ) : (
         <>
-          {/* Courses Progress Table */}
           <Card
-            title="Course Attendance"
-            subtitle="Attendance progress for each assigned course"
+            title="My Assigned Courses"
+            subtitle="Select a course to view its attendance history"
             icon={BookOpen}
           >
             <ul className="divide-y divide-[#f0eee6]">
-              {courses.map((c) => (
+              {courses.map((c, index) => (
                 <li
                   key={c.id}
-                  className="grid gap-4 px-6 py-4.5 transition-colors hover:bg-stone-50/70 sm:grid-cols-12 sm:items-center"
+                  className="transition-colors hover:bg-emerald-50/40"
                 >
-                  <div className="min-w-0 sm:col-span-5">
-                    <div className="flex items-center gap-2.5">
-                      <p className="truncate font-display text-base font-bold text-stone-900">{c.title}</p>
-                      <Badge tone={c.type === 'Lab' ? 'cyan' : 'slate'} className="text-xs">
-                        {c.type}
-                      </Badge>
-                    </div>
-                    <p className="mt-1 text-xs sm:text-sm text-stone-600 font-medium">
-                      <span className="font-semibold text-stone-800">{c.code}</span> · {c.attended}/{c.held} lectures
-                      {c.late > 0 && <span className="text-amber-750 font-semibold"> · {c.late} late</span>}
-                    </p>
-                  </div>
-
-                  <div className="sm:col-span-4">
-                    <div className="flex justify-between text-xs sm:text-sm font-semibold">
-                      <span className="text-stone-500">Progress</span>
-                      <span className="text-stone-900 font-mono">{formatPercent(c.percent)}</span>
-                    </div>
-                    <AttendanceBar course={c} />
-                  </div>
-
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/student/attendance?course_id=${c.id}`)}
+                    className="flex w-full items-center gap-4 px-6 py-4 text-left"
+                  >
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-sm font-bold text-emerald-800 ring-1 ring-emerald-200">
+                      {index + 1}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="font-display font-bold text-stone-900">{c.code}</span>
+                        <Badge tone={c.type === 'Lab' ? 'cyan' : 'slate'} className="text-xs">{c.type}</Badge>
+                      </span>
+                      <span className="mt-1 block truncate text-sm text-stone-600">{c.title}</span>
+                    </span>
+                    <span className="hidden text-right sm:block">
+                      <span className="block font-mono text-sm font-bold text-stone-900">{formatPercent(c.percent)}</span>
+                      <span className="text-xs text-stone-500">{c.attended}/{c.held} classes</span>
+                    </span>
+                    <ChevronRight size={18} className="shrink-0 text-stone-400" />
+                  </button>
                 </li>
               ))}
             </ul>
           </Card>
-
-          {/* Charts Section */}
-          <div className="grid gap-6 lg:grid-cols-2">
-            {/* Trend Chart */}
-            <Card title="Attendance Progression Trend" subtitle="Weekly vs Cumulative performance" icon={TrendingUp}>
-              {trend.length ? (
-                <div className="h-68 px-2 py-4">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={trend} margin={{ top: 12, right: 20, bottom: 0, left: -5 }}>
-                      <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="label" tick={{ fontSize: 12, fill: COLORS.axis }} tickLine={false} axisLine={false} />
-                      <YAxis
-                        domain={[0, 100]}
-                        ticks={[0, 25, 50, 75, 100]}
-                        tick={{ fontSize: 12, fill: COLORS.axis }}
-                        tickLine={false}
-                        axisLine={false}
-                        unit="%"
-                      />
-                      <Tooltip content={<ChartTooltip />} />
-                      <Line
-                        type="monotone"
-                        dataKey="weekly"
-                        name="Weekly Rate"
-                        stroke="#a8a29e"
-                        strokeWidth={2}
-                        dot={{ r: 3.5, fill: '#a8a29e' }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="cumulative"
-                        name="Cumulative Rate"
-                        stroke={COLORS.emerald}
-                        strokeWidth={2.5}
-                        dot={{ r: 4.5, fill: COLORS.emerald }}
-                        activeDot={{ r: 6.5, fill: COLORS.emeraldLight }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              ) : (
-                <EmptyState icon={CalendarX} title="No trend records yet" />
-              )}
-              <div className="flex flex-wrap items-center gap-4 border-t border-[#f0eee6] px-6 py-3.5 text-xs sm:text-sm text-stone-600">
-                <span className="flex items-center gap-1.5 font-medium text-stone-900">
-                  <span className="h-1.5 w-4 rounded-full bg-emerald-700" /> Cumulative
-                </span>
-                <span className="flex items-center gap-1.5 font-medium text-stone-500">
-                  <span className="h-1.5 w-4 rounded-full bg-stone-400" /> Weekly
-                </span>
-              </div>
-            </Card>
-
-            {/* By Course Bar Chart */}
-            <Card title="Attendance By Course" subtitle="Attendance percentage for each assigned course" icon={CalendarCheck}>
-              <div className="h-68 px-2 py-4">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={byCourse} margin={{ top: 12, right: 20, bottom: 0, left: -5 }}>
-                    <CartesianGrid stroke={COLORS.grid} strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="name" tick={{ fontSize: 12, fill: COLORS.axis }} tickLine={false} axisLine={false} />
-                    <YAxis
-                      domain={[0, 100]}
-                      ticks={[0, 25, 50, 75, 100]}
-                      tick={{ fontSize: 12, fill: COLORS.axis }}
-                      tickLine={false}
-                      axisLine={false}
-                      unit="%"
-                    />
-                    <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(28, 25, 23, 0.02)' }} />
-                    <Bar dataKey="percent" name="Attendance Rate" fill={COLORS.emerald} radius={[6, 6, 0, 0]} maxBarSize={40} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
-          </div>
 
         </>
       )}

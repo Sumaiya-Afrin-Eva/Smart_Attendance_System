@@ -45,6 +45,16 @@ def ensure_database_schema() -> None:
             conn.exec_driver_sql("ALTER TABLE users ADD COLUMN department VARCHAR(40)")
         if "designation" not in col_names:
             conn.exec_driver_sql("ALTER TABLE users ADD COLUMN designation VARCHAR(60)")
+        for column, column_type in {
+            "education": "VARCHAR(500)",
+            "professional_membership": "VARCHAR(500)",
+            "research_fields": "VARCHAR(500)",
+            "pabx_ext": "VARCHAR(20)",
+            "phone": "VARCHAR(20)",
+            "website": "VARCHAR(200)",
+        }.items():
+            if column not in col_names:
+                conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {column} {column_type}")
         if "teacher_status" not in col_names:
             conn.exec_driver_sql("ALTER TABLE users ADD COLUMN teacher_status VARCHAR(20)")
 
@@ -57,6 +67,8 @@ def ensure_database_schema() -> None:
             conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN photo_mime_type VARCHAR(40)")
         if "phone" not in roster_col_names:
             conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN phone VARCHAR(20)")
+        if "photo_path" not in roster_col_names:
+            conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN photo_path VARCHAR(500)")
         if "photo_path" in roster_col_names:
             legacy_photos = conn.exec_driver_sql(
                 "SELECT id, photo_path FROM student_roster "
@@ -71,6 +83,23 @@ def ensure_database_schema() -> None:
                 conn.exec_driver_sql(
                     "UPDATE student_roster SET photo_data = ?, photo_mime_type = ? WHERE id = ?",
                     (photo_data, mime_type, roster_id),
+                )
+        settings.storage_dir.mkdir(parents=True, exist_ok=True)
+        roster_photo_dir = settings.storage_dir / "roster_photos"
+        roster_photo_dir.mkdir(parents=True, exist_ok=True)
+        stored_photos = conn.exec_driver_sql(
+            "SELECT id, photo_data, photo_mime_type, photo_path FROM student_roster "
+            "WHERE photo_data IS NOT NULL"
+        ).fetchall()
+        for roster_id, photo_data, mime_type, stored_path in stored_photos:
+            suffix = ".png" if mime_type == "image/png" else ".jpg"
+            photo_path = roster_photo_dir / f"{roster_id}{suffix}"
+            if not photo_path.is_file() or photo_path.stat().st_size != len(photo_data):
+                photo_path.write_bytes(photo_data)
+            if stored_path != str(photo_path):
+                conn.exec_driver_sql(
+                    "UPDATE student_roster SET photo_path = ? WHERE id = ?",
+                    (str(photo_path), roster_id),
                 )
 
         # Student roster verification fields added after initial deployment.
@@ -109,6 +138,8 @@ def ensure_database_schema() -> None:
             conn.exec_driver_sql("ALTER TABLE courses ADD COLUMN section VARCHAR(10) DEFAULT 'A'")
         if "is_active" not in course_col_names:
             conn.exec_driver_sql("ALTER TABLE courses ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1")
+        if "status" not in course_col_names:
+            conn.exec_driver_sql("ALTER TABLE courses ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'Active'")
 
         # Check class_sessions table
         session_columns = conn.exec_driver_sql("PRAGMA table_info(class_sessions)").fetchall()

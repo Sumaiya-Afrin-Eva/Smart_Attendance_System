@@ -3,7 +3,7 @@
 - Model: InsightFace ArcFace (512-dimensional embedding vector)
 - Input: Image file path, raw bytes, or numpy ndarray
 - Output: 512-d float numpy vector (embedding)
-- Cosine similarity comparison with default threshold 0.6
+- Cosine similarity comparison with default threshold 0.55
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SIMILARITY_THRESHOLD = 0.6
+DEFAULT_SIMILARITY_THRESHOLD = 0.55
 EMBEDDING_DIM = 512
 
 
