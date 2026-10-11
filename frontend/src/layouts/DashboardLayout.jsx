@@ -24,10 +24,20 @@ export const NAV = {
     { to: '/student/profile', label: 'Academic Profile', icon: UserRound },
   ],
   admin: [
+<<<<<<< HEAD
     { to: '/admin/students', label: 'Student Records', icon: GraduationCap, end: true },
     { to: '/admin/students/new', label: 'Add Student', icon: UserRound, end: true },
     { to: '/admin/courses', label: 'Student Courses & Terms', icon: BookOpen },
     { to: '/admin/course-assignments', label: 'Course Assignments', icon: Users },
+=======
+    { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true },
+    { to: '/admin/courses', label: 'Course Management', icon: BookOpen },
+    { to: '/admin/assignments', label: 'Teacher Assignment', icon: ClipboardCheck },
+    { to: '/admin/teachers', label: 'Teacher Management', icon: Users },
+    { to: '/admin/students', label: 'Student Management', icon: GraduationCap },
+    { to: '/admin/alerts', label: 'Security Alerts', icon: ShieldAlert },
+    { to: '/admin/settings', label: 'System Settings', icon: Settings },
+>>>>>>> origin/main
   ],
 }
 
