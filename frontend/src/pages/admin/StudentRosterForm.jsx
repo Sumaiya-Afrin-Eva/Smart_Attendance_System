@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, ImagePlus, Mail, Plus, RotateCcw, UserRound } from 'lucide-react'
+import { ArrowLeft, ImagePlus, Mail, Plus, RotateCcw, UploadCloud, UserRound, X } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
 
 const emptyForm = { name: '', roll: '', email: '', session: '', department: 'CSE', phone: '' }
@@ -15,6 +15,9 @@ export default function StudentRosterForm() {
   const [loading, setLoading] = useState(editing)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
+  const [entryMode, setEntryMode] = useState('manual')
+  const [studentFile, setStudentFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
 
   useEffect(() => {
     if (!studentId) return
@@ -49,6 +52,26 @@ export default function StudentRosterForm() {
     setForm(emptyForm)
     setPhoto(null)
     setPhotoName('')
+  }
+
+  const handleBulkUpload = async (event) => {
+    event.preventDefault()
+    if (!studentFile) return
+    setUploading(true)
+    setNotice('')
+    try {
+      const formData = new FormData()
+      formData.append('file', studentFile)
+      const { data } = await api.post('/admin/students/bulk-upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setStudentFile(null)
+      setNotice(`${data.added} student(s) added. ${data.skipped} row(s) skipped.`)
+    } catch (error) {
+      setNotice(errorMessage(error, 'Student spreadsheet could not be imported.'))
+    } finally {
+      setUploading(false)
+    }
   }
 
   const handleSubmit = async (event) => {
@@ -103,9 +126,16 @@ export default function StudentRosterForm() {
             <UserRound size={20} />
           </div>
         </div>
-        <p className="mt-3 text-sm text-stone-600">
-          Saving an active roster record approves the KUET email for sign-in. The official photo can be added now or later.
-        </p>
+        {!editing && (
+          <div className="mt-6 flex rounded-xl bg-stone-100 p-1">
+            <button type="button" onClick={() => setEntryMode('manual')} className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold ${entryMode === 'manual' ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500'}`}>
+              Manual Entry
+            </button>
+            <button type="button" onClick={() => setEntryMode('bulk')} className={`flex-1 rounded-lg px-3 py-2 text-sm font-semibold ${entryMode === 'bulk' ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500'}`}>
+              Excel / CSV Import
+            </button>
+          </div>
+        )}
 
         {notice && (
           <div role="alert" className="mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
@@ -113,6 +143,27 @@ export default function StudentRosterForm() {
           </div>
         )}
 
+        {entryMode === 'bulk' && !editing ? (
+          <form className="mt-6 space-y-5" onSubmit={handleBulkUpload}>
+            <div className="relative flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-stone-300 bg-stone-50 p-6 text-center">
+              <UploadCloud size={38} className="mb-3 text-emerald-700" />
+              <p className="text-sm font-semibold text-stone-700">Upload student spreadsheet</p>
+              <p className="mt-1 max-w-sm text-xs text-stone-500">
+                Required: Name, Roll, Email, Department, Session. Optional: Phone.
+              </p>
+              <input type="file" accept=".xlsx,.csv" onChange={(event) => setStudentFile(event.target.files?.[0] ?? null)} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
+              {studentFile && (
+                <div className="relative z-10 mt-4 inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm font-medium text-emerald-700">
+                  <span className="max-w-56 truncate">{studentFile.name}</span>
+                  <button type="button" onClick={() => setStudentFile(null)} aria-label="Remove student file"><X size={15} /></button>
+                </div>
+              )}
+            </div>
+            <button type="submit" disabled={uploading || !studentFile} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-800 px-4 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">
+              <UploadCloud size={16} /> {uploading ? 'Importing students...' : 'Import students'}
+            </button>
+          </form>
+        ) : (
         <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
           <label className="block space-y-1.5">
             <span className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Full name</span>
@@ -187,6 +238,7 @@ export default function StudentRosterForm() {
             </button>
           </div>
         </form>
+        )}
       </section>
     </div>
   )

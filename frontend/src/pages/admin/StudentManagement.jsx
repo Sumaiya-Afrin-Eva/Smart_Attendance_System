@@ -87,10 +87,6 @@ export default function StudentManagement() {
             </button>
           </div>
         </div>
-        <p className="mt-3 text-sm text-stone-600">
-          Students can select a year-term only when it is configured under Student Courses &amp; Terms for the same department and session.
-          Saving an active roster record enables its KUET email for sign-in and registration. The official photo is used by the attendance kiosk.
-        </p>
       </section>
 
       <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">

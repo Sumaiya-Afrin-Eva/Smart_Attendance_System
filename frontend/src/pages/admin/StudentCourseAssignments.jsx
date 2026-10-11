@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, Users } from 'lucide-react'
+import { Check, UploadCloud, Users, X } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
 
 export default function StudentCourseAssignments() {
@@ -9,6 +9,8 @@ export default function StudentCourseAssignments() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
+  const [assignmentFile, setAssignmentFile] = useState(null)
+  const [uploading, setUploading] = useState(false)
 
   useEffect(() => {
     async function loadCourses() {
@@ -46,6 +48,29 @@ export default function StudentCourseAssignments() {
     } finally {
       setSaving(false)
     }
+
+  }
+
+  const handleBulkAssignment = async (event) => {
+    event.preventDefault()
+    if (!assignmentFile) return
+    setUploading(true)
+    setNotice('')
+    try {
+      const formData = new FormData()
+      formData.append('file', assignmentFile)
+      const { data } = await api.post('/admin/course-assignments/bulk-upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setAssignmentFile(null)
+      const assigned = data.results.filter((item) => item.status === 'assigned')
+      const skipped = data.results.filter((item) => item.status === 'skipped')
+      setNotice(`${data.added} new assignment(s) saved across ${assigned.length} course row(s). ${skipped.length} row(s) skipped.`)
+    } catch (error) {
+      setNotice(errorMessage(error, 'Course assignment spreadsheet could not be imported.'))
+    } finally {
+      setUploading(false)
+    }
   }
 
   return (
@@ -67,6 +92,7 @@ export default function StudentCourseAssignments() {
         ) : courses.length === 0 ? (
           <p className="mt-5 text-sm text-stone-600">No active courses.</p>
         ) : (
+          <>
           <form onSubmit={handleAddStudents} className="mt-5 space-y-4">
             <label className="block space-y-1.5">
               <span className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Active course</span>
@@ -102,6 +128,21 @@ export default function StudentCourseAssignments() {
               <Check size={16} /> {saving ? 'Adding...' : 'Add student(s) to course'}
             </button>
           </form>
+          <div className="my-6 border-t border-stone-200 pt-6">
+            <h3 className="font-display text-lg font-bold text-stone-900">Assign by Excel / CSV</h3>
+            <form onSubmit={handleBulkAssignment} className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+              <label className="relative flex min-h-12 flex-1 cursor-pointer items-center gap-2 rounded-xl border border-dashed border-stone-300 bg-stone-50 px-4 py-3 text-sm text-stone-600">
+                <UploadCloud size={17} className="text-emerald-700" />
+                <span className="truncate">{assignmentFile?.name || 'Choose .xlsx or .csv file'}</span>
+                <input type="file" accept=".xlsx,.csv" onChange={(event) => setAssignmentFile(event.target.files?.[0] ?? null)} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
+                {assignmentFile && <button type="button" onClick={() => setAssignmentFile(null)} className="relative z-10 ml-auto text-stone-400" aria-label="Remove assignment file"><X size={15} /></button>}
+              </label>
+              <button type="submit" disabled={uploading || !assignmentFile} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-700 px-4 py-3 text-sm font-semibold text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60">
+                <UploadCloud size={16} /> {uploading ? 'Assigning...' : 'Auto-assign students'}
+              </button>
+            </form>
+          </div>
+          </>
         )}
       </section>
     </div>
