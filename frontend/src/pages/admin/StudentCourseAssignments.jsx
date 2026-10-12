@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Check, UploadCloud, Users, X } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
 
 export default function StudentCourseAssignments() {
   const [courses, setCourses] = useState([])
+  const [selectedSession, setSelectedSession] = useState('')
+  const [selectedSemester, setSelectedSemester] = useState('')
   const [selectedCourseId, setSelectedCourseId] = useState('')
   const [studentRolls, setStudentRolls] = useState('')
   const [loading, setLoading] = useState(true)
@@ -17,7 +19,6 @@ export default function StudentCourseAssignments() {
       try {
         const { data } = await api.get('/admin/courses')
         setCourses(data)
-        if (data.length) setSelectedCourseId(String(data[0].id))
       } catch (error) {
         setNotice(errorMessage(error, 'Could not load active courses.'))
       } finally {
@@ -27,7 +28,27 @@ export default function StudentCourseAssignments() {
     loadCourses()
   }, [])
 
-  const selectedCourse = courses.find((course) => String(course.id) === selectedCourseId)
+  const sessions = useMemo(
+    () => [...new Set(courses.map((course) => course.session).filter(Boolean))].sort(),
+    [courses],
+  )
+  const semesters = useMemo(
+    () => [...new Set(courses.map((course) => course.semester).filter(Boolean))].sort(),
+    [courses],
+  )
+  const filteredCourses = useMemo(
+    () => courses.filter((course) => (
+      course.session === selectedSession && course.semester === selectedSemester
+    )),
+    [courses, selectedSession, selectedSemester],
+  )
+  const selectedCourse = filteredCourses.find((course) => String(course.id) === selectedCourseId)
+
+  useEffect(() => {
+    if (filteredCourses.length && !filteredCourses.some((course) => String(course.id) === selectedCourseId)) {
+      setSelectedCourseId(String(filteredCourses[0].id))
+    }
+  }, [filteredCourses, selectedCourseId])
 
   const handleAddStudents = async (event) => {
     event.preventDefault()
@@ -60,6 +81,7 @@ export default function StudentCourseAssignments() {
       const formData = new FormData()
       formData.append('file', assignmentFile)
       const { data } = await api.post('/admin/course-assignments/bulk-upload', formData, {
+        params: { selected_session: selectedSession, selected_semester: selectedSemester },
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       setAssignmentFile(null)
@@ -93,6 +115,46 @@ export default function StudentCourseAssignments() {
           <p className="mt-5 text-sm text-stone-600">No active courses.</p>
         ) : (
           <>
+          <div className="mt-5 grid gap-4 sm:grid-cols-2">
+            <label className="block space-y-1.5">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Session</span>
+              <select
+                value={selectedSession}
+                onChange={(event) => {
+                  setSelectedSession(event.target.value)
+                  setSelectedSemester('')
+                  setSelectedCourseId('')
+                  setStudentRolls('')
+                }}
+                className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400"
+              >
+                <option value="">Select session</option>
+                {sessions.map((session) => <option key={session} value={session}>{session}</option>)}
+              </select>
+            </label>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Semester</span>
+              <select
+                value={selectedSemester}
+                onChange={(event) => {
+                  setSelectedSemester(event.target.value)
+                  setSelectedCourseId('')
+                  setStudentRolls('')
+                }}
+                disabled={!selectedSession}
+                className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">Select semester</option>
+                {semesters.map((semester) => <option key={semester} value={semester}>{semester}</option>)}
+              </select>
+            </label>
+          </div>
+          {!selectedSession || !selectedSemester ? (
+            <p className="mt-5 text-sm text-stone-500">Select a session and semester to view their course offerings.</p>
+          ) : filteredCourses.length === 0 ? (
+            <p className="mt-5 text-sm text-stone-600">No active courses for this session and semester.</p>
+          ) : (
+          <>
           <form onSubmit={handleAddStudents} className="mt-5 space-y-4">
             <label className="block space-y-1.5">
               <span className="text-xs font-semibold uppercase tracking-[0.16em] text-stone-500">Active course</span>
@@ -104,7 +166,7 @@ export default function StudentCourseAssignments() {
                 }}
                 className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400"
               >
-                {courses.map((course) => (
+                {filteredCourses.map((course) => (
                   <option key={course.id} value={course.id}>
                     {course.code} — {course.title} · {course.session} · {course.semester}
                   </option>
@@ -137,11 +199,13 @@ export default function StudentCourseAssignments() {
                 <input type="file" accept=".xlsx,.csv" onChange={(event) => setAssignmentFile(event.target.files?.[0] ?? null)} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
                 {assignmentFile && <button type="button" onClick={() => setAssignmentFile(null)} className="relative z-10 ml-auto text-stone-400" aria-label="Remove assignment file"><X size={15} /></button>}
               </label>
-              <button type="submit" disabled={uploading || !assignmentFile} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-700 px-4 py-3 text-sm font-semibold text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60">
+              <button type="submit" disabled={uploading || !assignmentFile || !selectedSession || !selectedSemester} className="inline-flex items-center justify-center gap-2 rounded-xl bg-sky-700 px-4 py-3 text-sm font-semibold text-white hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-60">
                 <UploadCloud size={16} /> {uploading ? 'Assigning...' : 'Auto-assign students'}
               </button>
             </form>
           </div>
+          </>
+          )}
           </>
         )}
       </section>
