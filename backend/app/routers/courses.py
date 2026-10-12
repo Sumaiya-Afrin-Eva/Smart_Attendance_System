@@ -287,12 +287,18 @@ def delete_teacher_session(session_id: int, db: Session = Depends(get_db), user:
 @router.get("/admin/courses")
 def admin_list_courses(
     include_archived: bool = False,
+    session: str | None = None,
+    semester: str | None = None,
     db: Session = Depends(get_db),
     _: User = Depends(admin_only),
 ):
     query = select(Course)
     if not include_archived:
         query = query.where(Course.is_active.is_(True))
+    if session:
+        query = query.where(Course.session == session.strip())
+    if semester:
+        query = query.where(Course.semester == semester.strip())
     courses = db.scalars(query.order_by(Course.is_active.desc(), Course.department, Course.semester, Course.code)).all()
     return [_admin_course_out(course) for course in courses]
 
@@ -508,6 +514,8 @@ def update_course_students(
 @router.post("/admin/course-assignments/bulk-upload")
 async def bulk_assign_courses(
     file: UploadFile = File(...),
+    selected_session: str | None = None,
+    selected_semester: str | None = None,
     db: Session = Depends(get_db),
     _: User = Depends(admin_only),
 ):
@@ -567,7 +575,6 @@ async def bulk_assign_courses(
                 "reason": "Course Code, Department, Session, and Semester are required.",
             })
             continue
-
         normalized_code = re.sub(r"([A-Za-z]+)\s*([0-9])", r"\1 \2", code).upper()
         semester_match = re.search(r"(\d)\s*[-/]\s*(\d)", semester)
         normalized_semester = (
@@ -575,6 +582,20 @@ async def bulk_assign_courses(
             if semester_match
             else semester.strip()
         )
+        if selected_session and session.strip() != selected_session.strip():
+            results.append({
+                "row": row_number,
+                "status": "skipped",
+                "reason": f"Course is outside the selected session ({selected_session}).",
+            })
+            continue
+        if selected_semester and normalized_semester != selected_semester.strip():
+            results.append({
+                "row": row_number,
+                "status": "skipped",
+                "reason": f"Course is outside the selected semester ({selected_semester}).",
+            })
+            continue
         courses = db.scalars(
             select(Course).where(
                 Course.code == normalized_code,
