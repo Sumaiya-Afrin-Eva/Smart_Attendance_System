@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from ..database import get_db
 from ..models import (
@@ -68,6 +69,17 @@ def _decode_image_payload(file: UploadFile | None, base64_str: str | None) -> by
         except Exception as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid base64 image data: {exc}")
     raise HTTPException(status.HTTP_400_BAD_REQUEST, "No image provided. Upload a file or provide a base64 string.")
+
+
+def _prepare_kiosk_gallery(face_svc, students: list[tuple[StudentRoster, StudentProfile, User]]) -> None:
+    """Load the recognition model and cache this course's registered face embeddings."""
+    face_svc.warmup()
+    for roster, _, _ in students:
+        try:
+            for registered_face in _registered_face_inputs(roster):
+                face_svc.extract_embedding(registered_face)
+        except Exception as exc:
+            logger.warning("Failed preparing admin photo for roster roll %s: %s", roster.roll, exc)
 
 
 class ComparePayload(BaseModel):
@@ -129,6 +141,12 @@ def open_kiosk(body: KioskOpenRequest, db: Session = Depends(get_db)):
             "This course has no registered students with an active course assignment.",
         )
 
+    face_svc = get_face_service()
+    try:
+        _prepare_kiosk_gallery(face_svc, students)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
     now = datetime.now()
     day_start = datetime.combine(now.date(), time.min)
     next_day = day_start + timedelta(days=1)
@@ -167,6 +185,35 @@ def open_kiosk(body: KioskOpenRequest, db: Session = Depends(get_db)):
     }
 
 
+@router.post("/kiosk/liveness")
+async def check_kiosk_liveness(
+    session_id: int = Form(...),
+    image: Optional[UploadFile] = File(None),
+    image_base64: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Verify a blink and head movement challenge for the active kiosk session."""
+    class_session = db.get(ClassSession, session_id)
+    if (
+        class_session is None
+        or class_session.status != "completed"
+        or class_session.start_at.date() != datetime.now().date()
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Today's kiosk class session was not found. Open the kiosk again.")
+    course = db.get(Course, class_session.course_id)
+    if course is None or not course.is_active:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "The selected course is no longer active.")
+
+    frame = _decode_image_payload(image, image_base64)
+    face_svc = get_face_service()
+    try:
+        return await run_in_threadpool(face_svc.check_liveness, frame, f"kiosk:{session_id}")
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+
 @router.post("/kiosk/scan")
 async def scan_kiosk(
     session_id: int = Form(...),
@@ -189,15 +236,31 @@ async def scan_kiosk(
 
     query_bytes = _decode_image_payload(image, image_base64)
     face_svc = get_face_service()
-    query_emb = face_svc.extract_embedding(query_bytes)
+    live_embedding = await run_in_threadpool(face_svc.consume_liveness, f"kiosk:{session_id}")
+    if live_embedding is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Live verification is required. Blink and move your head in front of the camera; a still photo is not accepted.",
+        )
+
+    query_emb = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
     if query_emb is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No clear face detected. Look at the camera and try again.")
+    live_similarity = compute_similarity(query_emb, live_embedding)
+    if live_similarity < 0.45:
+        return {
+            "matched": False,
+            "similarity": round(live_similarity, 4),
+            "similarity_percent": round(max(0.0, live_similarity) * 100, 2),
+            "threshold": threshold,
+            "message": "The face changed after live verification. Please verify again using the camera.",
+        }
 
     student_scores: list[tuple[float, StudentProfile, User]] = []
     for roster, profile, matched_user in _eligible_students(db, course.id):
         try:
             for registered_face in _registered_face_inputs(roster):
-                stored_emb = face_svc.extract_embedding(registered_face)
+                stored_emb = await run_in_threadpool(face_svc.extract_embedding, registered_face)
                 if stored_emb is not None:
                     student_scores.append((compute_similarity(query_emb, stored_emb), profile, matched_user))
         except Exception as exc:

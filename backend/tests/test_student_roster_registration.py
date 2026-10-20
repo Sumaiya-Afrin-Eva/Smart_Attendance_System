@@ -363,6 +363,27 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
         student_token = create_token(student)
         absent_student_token = create_token(absent_student)
 
+    class TestFaceService:
+        proof_available = False
+
+        def warmup(self):
+            pass
+
+        def extract_embedding(self, image):
+            if image in {official_photo, b"kiosk-student-one"}:
+                return np.array([1.0, 0.0], dtype=np.float32)
+            if image == b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"official-student-two":
+                return np.array([0.0, 1.0], dtype=np.float32)
+            return np.array([-1.0, 0.0], dtype=np.float32)
+
+        def consume_liveness(self, session_key):
+            if not type(self).proof_available:
+                return None
+            type(self).proof_available = False
+            return np.array([1.0, 0.0], dtype=np.float32)
+
+    monkeypatch.setattr("app.routers.face.get_face_service", TestFaceService)
+
     opened = client.post("/api/face/kiosk/open", json={"course_code": " cse 3200 "})
     assert opened.status_code == 200, opened.text
     kiosk_session_id = opened.json()["session_id"]
@@ -375,15 +396,14 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
         assert class_session.status == "completed"
         assert class_session.start_at.date() == datetime.now().date()
 
-    class TestFaceService:
-        def extract_embedding(self, image):
-            if image in {official_photo, b"kiosk-student-one"}:
-                return np.array([1.0, 0.0], dtype=np.float32)
-            if image == b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"official-student-two":
-                return np.array([0.0, 1.0], dtype=np.float32)
-            return np.array([-1.0, 0.0], dtype=np.float32)
+    no_liveness = client.post(
+        "/api/face/kiosk/scan",
+        data={"session_id": str(kiosk_session_id)},
+        files={"image": ("camera.jpg", b"kiosk-student-one", "image/jpeg")},
+    )
+    assert no_liveness.status_code == 409, no_liveness.text
 
-    monkeypatch.setattr("app.routers.face.get_face_service", TestFaceService)
+    TestFaceService.proof_available = True
     rejected = client.post(
         "/api/face/kiosk/scan",
         data={"session_id": str(kiosk_session_id)},
@@ -394,6 +414,7 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
     with SessionLocal() as db:
         assert db.query(Attendance).filter_by(session_id=kiosk_session_id).count() == 0
 
+    TestFaceService.proof_available = True
     marked = client.post(
         "/api/face/kiosk/scan",
         data={"session_id": str(kiosk_session_id)},
@@ -404,6 +425,7 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
     assert marked.json()["attendance"]["status"] == "present"
     assert marked.json()["attendance"]["already_marked"] is False
 
+    TestFaceService.proof_available = True
     repeated = client.post(
         "/api/face/kiosk/scan",
         data={"session_id": str(kiosk_session_id)},

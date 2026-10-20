@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -197,7 +198,8 @@ async def check_live_face(
     if photo.content_type not in {"image/jpeg", "image/png"}:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Camera frame must be a JPEG or PNG image.")
     try:
-        return get_face_service().check_liveness(await photo.read(), str(user.id))
+        frame = await photo.read()
+        return await run_in_threadpool(get_face_service().check_liveness, frame, str(user.id))
     except ValueError:
         return {"human": False, "liveness": False, "message": "No single human face detected. A still photo cannot be used."}
     except RuntimeError as exc:
