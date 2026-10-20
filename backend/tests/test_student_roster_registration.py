@@ -210,7 +210,7 @@ def test_completed_student_login_reports_dashboard_ready_state(monkeypatch):
         json={"email": "student1@stud.kuet.ac.bd", "name": "Student One"},
     )
     assert response.status_code == 200, response.text
-    assert response.json()["onboarding"]["complete"] is True
+    assert response.json()["onboarding"] == {"profile": True, "face": False, "complete": False}
 
 
 def test_student_registration_can_complete_before_course_assignment(monkeypatch):
@@ -245,8 +245,8 @@ def test_student_registration_can_complete_before_course_assignment(monkeypatch)
         json={"email": "student1@stud.kuet.ac.bd", "name": "Student One"},
     )
     assert response.status_code == 200, response.text
-    assert response.json()["onboarding"]["complete"] is True
-    assert response.json()["onboarding"] == {"profile": True, "complete": True}
+    assert response.json()["onboarding"]["complete"] is False
+    assert response.json()["onboarding"] == {"profile": True, "face": False, "complete": False}
 
 
 def test_kiosk_matches_admin_roster_photo_not_student_face_samples(monkeypatch):
@@ -496,7 +496,7 @@ def test_registration_requires_matching_roster_photo_and_offered_session_term():
     body["current_semester"] = "3-1"
     accepted = client.put("/api/students/me/profile", headers=student_headers, json=body)
     assert accepted.status_code == 200, accepted.text
-    assert accepted.json()["onboarding"]["complete"] is True
+    assert accepted.json()["onboarding"]["complete"] is False
     assert accepted.json()["profile"]["session"] == "2021-2022"
     assert accepted.json()["profile"]["phone"] == "+8801558082363"
     assert "section" not in accepted.json()["profile"]

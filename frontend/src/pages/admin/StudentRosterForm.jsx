@@ -18,7 +18,6 @@ export default function StudentRosterForm() {
   const [entryMode, setEntryMode] = useState('manual')
   const [studentFile, setStudentFile] = useState(null)
   const [uploading, setUploading] = useState(false)
-
   useEffect(() => {
     if (!studentId) return
 
@@ -79,6 +78,10 @@ export default function StudentRosterForm() {
     setSaving(true)
     setNotice('')
     try {
+      if (!photo) {
+        setNotice('Choose an official student photo.')
+        return
+      }
       const { data } = editing
         ? await api.put(`/admin/students/${studentId}`, form)
         : await api.post('/admin/students', form)
@@ -91,6 +94,8 @@ export default function StudentRosterForm() {
         })
       }
 
+      resetForm()
+      setEntryMode('manual')
       navigate('/admin/students', {
         replace: true,
         state: { notice: `Official roster record for ${data.name} saved${photo ? ' with photo' : ''}.` },

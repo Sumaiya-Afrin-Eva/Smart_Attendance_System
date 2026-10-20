@@ -12,7 +12,7 @@ attendance       one row per student who was marked in a session
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, DateTime as SQLDateTime, Float, ForeignKey, Integer, LargeBinary, String,
+    Boolean, DateTime as SQLDateTime, Float, ForeignKey, Integer, LargeBinary, String, Text,
     TypeDecorator, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -73,6 +73,8 @@ class StudentRoster(Base):
     session: Mapped[str] = mapped_column(String(20), index=True)
     phone: Mapped[str | None] = mapped_column(String(20))
     photo_path: Mapped[str | None] = mapped_column(String(500))
+    face_sample_paths: Mapped[str | None] = mapped_column(Text)
+    face_enrollment_version: Mapped[int] = mapped_column(Integer, default=0)
     photo_data: Mapped[bytes | None] = mapped_column(LargeBinary)
     photo_mime_type: Mapped[str | None] = mapped_column(String(40))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

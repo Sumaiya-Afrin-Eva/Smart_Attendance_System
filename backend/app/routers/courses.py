@@ -1,3 +1,4 @@
+import json
 import shutil
 import re
 from datetime import datetime
@@ -1464,12 +1465,19 @@ async def upload_student_photo(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Photos must be JPEG or PNG images.")
     roster.photo_data = content
     roster.photo_mime_type = mime_type
-    photo_dir = settings.storage_dir / "roster_photos"
+    photo_dir = settings.picture_dir
     photo_dir.mkdir(parents=True, exist_ok=True)
     suffix = ".png" if mime_type == "image/png" else ".jpg"
-    photo_path = photo_dir / f"{roster.id}{suffix}"
+    photo_path = photo_dir / f"{roster.roll}{suffix}"
     photo_path.write_bytes(content)
-    roster.photo_path = str(photo_path)
+    roster.photo_path = f"picture/{photo_path.name}"
+    old_paths = json.loads(roster.face_sample_paths or "[]")
+    for relative_path in old_paths:
+        old_file = (settings.picture_dir.parent / relative_path).resolve()
+        if old_file.parent == settings.picture_dir.resolve() and old_file.is_file():
+            old_file.unlink()
+    roster.face_sample_paths = None
+    roster.face_enrollment_version = 0
     if roster.profile:
         student_id = roster.profile.user_id
         db.execute(delete(FaceSample).where(FaceSample.student_id == student_id))

@@ -13,6 +13,8 @@ from .face_service import (
     is_match,
 )
 
+FACE_ENROLLMENT_VERSION = 1
+
 
 def user_out(user: User) -> dict:
     return {
@@ -37,7 +39,17 @@ def onboarding_status(db: Session, user: User) -> dict | None:
         and profile.roster.session == profile.session
         and profile.roster.department == profile.department
     )
-    return {"profile": roster_verified, "complete": roster_verified}
+    face_enrolled = bool(
+        profile
+        and profile.roster
+        and profile.roster.face_enrollment_version >= FACE_ENROLLMENT_VERSION
+        and profile.roster.face_sample_paths
+    )
+    return {
+        "profile": roster_verified,
+        "face": face_enrolled,
+        "complete": roster_verified and face_enrolled,
+    }
 
 
 def course_out(course: Course) -> dict:
@@ -58,6 +70,7 @@ def course_out(course: Course) -> dict:
 __all__ = [
     "user_out",
     "onboarding_status",
+    "FACE_ENROLLMENT_VERSION",
     "course_out",
     "FaceService",
     "get_face_service",

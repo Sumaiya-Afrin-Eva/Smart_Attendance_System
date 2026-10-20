@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     frontend_origin: str = "http://localhost:5173"
     frontend_origins: str = ""
     storage_dir: Path = BASE_DIR / "storage"
+    picture_dir: Path = BASE_DIR.parent / "picture"
 
     @field_validator("database_url", mode="after")
     @classmethod

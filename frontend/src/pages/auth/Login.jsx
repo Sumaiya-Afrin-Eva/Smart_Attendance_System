@@ -45,7 +45,7 @@ export default function Login() {
     try {
       const signedIn = await action()
       const destination = signedIn.role === 'student' && !signedIn.onboarding?.complete
-        ? '/student/setup'
+        ? signedIn.onboarding?.profile && !signedIn.onboarding?.face ? '/student/setup/face' : '/student/setup'
         : `/${signedIn.role}`
       navigate(destination, { replace: true })
     } catch (err) {

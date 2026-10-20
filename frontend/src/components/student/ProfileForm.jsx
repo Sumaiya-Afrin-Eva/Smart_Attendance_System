@@ -25,7 +25,6 @@ export default function ProfileForm({ profile, onSaved, submitLabel = 'Save Prof
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-
   const set = (name) => (e) => {
     const value = e.target.value
     setForm({
@@ -50,7 +49,7 @@ export default function ProfileForm({ profile, onSaved, submitLabel = 'Save Prof
       onSaved?.(data.profile)
     } catch (err) {
       setErrors(fieldErrors(err))
-      setError(errorMessage(err))
+      setError(err.response ? errorMessage(err) : err.message)
     } finally {
       setSaving(false)
     }
