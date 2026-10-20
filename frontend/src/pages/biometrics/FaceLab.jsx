@@ -15,6 +15,23 @@ import {
 } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
 
+const captureFrame = (video, maxWidth = 640) => new Promise((resolve, reject) => {
+  const scale = Math.min(1, maxWidth / video.videoWidth)
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(video.videoWidth * scale)
+  canvas.height = Math.round(video.videoHeight * scale)
+  const context = canvas.getContext('2d')
+  if (!context) {
+    reject(new Error('Could not prepare the camera frame.'))
+    return
+  }
+  context.drawImage(video, 0, 0, canvas.width, canvas.height)
+  canvas.toBlob((blob) => {
+    if (blob) resolve(blob)
+    else reject(new Error('Could not capture a camera frame.'))
+  }, 'image/jpeg', 0.78)
+})
+
 export default function FaceLab() {
   const [cameraActive, setCameraActive] = useState(false)
   const [scanning, setScanning] = useState(false)
@@ -25,6 +42,12 @@ export default function FaceLab() {
   const [activeClass, setActiveClass] = useState(null)
   const [recentLogs, setRecentLogs] = useState([])
   const [currentTime, setCurrentTime] = useState(new Date())
+  const [liveness, setLiveness] = useState({
+    human: false,
+    liveness: false,
+    message: 'Start the camera to verify a live face.',
+  })
+  const [livenessRetryKey, setLivenessRetryKey] = useState(0)
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -45,7 +68,7 @@ export default function FaceLab() {
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
         audio: false,
       })
 
@@ -80,6 +103,7 @@ export default function FaceLab() {
       videoRef.current.srcObject = null
     }
     setCameraActive(false)
+    setLiveness({ human: false, liveness: false, message: 'Camera stopped.' })
   }, [])
 
   useEffect(() => {
@@ -96,11 +120,53 @@ export default function FaceLab() {
     }
   }, [cameraActive])
 
+  useEffect(() => {
+    if (!cameraActive || !activeClass) return undefined
+    let cancelled = false
+    let timer
+
+    const checkFrame = async () => {
+      const video = videoRef.current
+      if (!video || video.readyState < 2 || video.videoWidth === 0) {
+        if (!cancelled) timer = window.setTimeout(checkFrame, 100)
+        return
+      }
+      try {
+        const frame = await captureFrame(video, 480)
+        const formData = new FormData()
+        formData.append('session_id', activeClass.session_id)
+        formData.append('image', frame, 'live-frame.jpg')
+        const { data } = await api.post('/face/kiosk/liveness', formData, {
+          timeout: 5000,
+          skipNetworkRetry: true,
+        })
+        if (cancelled) return
+        setLiveness(data)
+        if (!data.liveness) timer = window.setTimeout(checkFrame, 350)
+      } catch (err) {
+        if (cancelled) return
+        setLiveness({
+          human: false,
+          liveness: false,
+          message: errorMessage(err, 'Live-face verification is unavailable.'),
+        })
+        timer = window.setTimeout(checkFrame, 1000)
+      }
+    }
+
+    timer = window.setTimeout(checkFrame, 100)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [cameraActive, activeClass, livenessRetryKey])
+
   const handleOpenKiosk = async (event) => {
     event.preventDefault()
     setOpening(true)
     setError('')
     setResult(null)
+    setLiveness({ human: false, liveness: false, message: 'Start the camera to verify a live face.' })
     try {
       const { data } = await api.post('/face/kiosk/open', { course_code: courseCode })
       setActiveClass(data)
@@ -117,12 +183,17 @@ export default function FaceLab() {
     setResult(null)
     setRecentLogs([])
     setError('')
+    setLiveness({ human: false, liveness: false, message: 'Start the camera to verify a live face.' })
   }
 
   // Capture a frame and record attendance for the opened course session.
   const handleScan = async () => {
     if (!activeClass || !videoRef.current || !cameraActive) {
       setError('Please start the camera before scanning.')
+      return
+    }
+    if (!liveness.liveness) {
+      setError('Blink once and slowly move your head in front of the camera before scanning.')
       return
     }
 
@@ -132,13 +203,6 @@ export default function FaceLab() {
       return
     }
 
-    const canvas = document.createElement('canvas')
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
-    const ctx = canvas.getContext('2d')
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-    const b64 = canvas.toDataURL('image/jpeg', 0.9)
-
     setScanning(true)
     setError('')
     setResult(null)
@@ -146,11 +210,12 @@ export default function FaceLab() {
     try {
       const formData = new FormData()
       formData.append('session_id', activeClass.session_id)
-      formData.append('image_base64', b64)
+      const frame = await captureFrame(video)
+      formData.append('image', frame, 'kiosk-frame.jpg')
       formData.append('threshold', 0.55)
 
       const res = await api.post('/face/kiosk/scan', formData, {
-        timeout: 120000,
+        timeout: 15000,
         skipNetworkRetry: true,
       })
       setResult(res.data)
@@ -166,10 +231,12 @@ export default function FaceLab() {
       }
     } catch (err) {
       setError(err.code === 'ECONNABORTED'
-        ? 'Face verification timed out. The first scan may take longer while the recognition model starts; please retry.'
+        ? 'Face verification took too long. Keep your face visible and try again.'
         : errorMessage(err, 'Face identification failed. Please look straight at the camera.'))
     } finally {
       setScanning(false)
+      setLiveness({ human: false, liveness: false, message: 'Blink once and slowly move your head to verify a live face.' })
+      setLivenessRetryKey((key) => key + 1)
     }
   }
 
@@ -252,7 +319,7 @@ export default function FaceLab() {
               className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-800 px-4 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {opening ? <RefreshCw size={18} className="animate-spin" /> : <CheckCircle2 size={18} />}
-              {opening ? 'Opening class…' : 'Open kiosk'}
+              {opening ? 'Preparing recognition…' : 'Open kiosk'}
             </button>
           </form>
         </main>
@@ -319,7 +386,7 @@ export default function FaceLab() {
             <button
               type="button"
               onClick={handleScan}
-              disabled={!cameraActive || scanning}
+              disabled={!cameraActive || scanning || !liveness.liveness}
               className="flex-1 flex h-13 items-center justify-center gap-2.5 rounded-2xl bg-emerald-800 font-display text-sm sm:text-base font-bold text-white shadow-sm hover:bg-emerald-700 active:scale-[0.99] disabled:opacity-50 cursor-pointer transition"
             >
               {scanning ? (
@@ -330,7 +397,7 @@ export default function FaceLab() {
               ) : (
                 <>
                   <Zap size={19} />
-                  <span>Scan Face &amp; Record Attendance</span>
+                  <span>{liveness.liveness ? 'Scan Face & Record Attendance' : 'Verify live face to continue'}</span>
                 </>
               )}
             </button>
@@ -344,6 +411,22 @@ export default function FaceLab() {
               <span>{cameraActive ? 'Pause' : 'Start'}</span>
             </button>
           </div>
+
+          {cameraActive && (
+            <div
+              role="status"
+              aria-live="polite"
+              className={`rounded-xl border p-3 text-xs font-medium ${
+                liveness.liveness
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                  : 'border-amber-200 bg-amber-50 text-amber-900'
+              }`}
+            >
+              {liveness.liveness
+                ? 'Live face verified. Scan now to record attendance.'
+                : liveness.message || (liveness.human ? 'Blink and move your head slightly.' : 'Look at the camera, then blink and move your head slightly.')}
+            </div>
+          )}
 
           {error && (
             <div className="flex items-center gap-2.5 rounded-2xl border border-rose-200 bg-rose-50 p-3.5 text-xs sm:text-sm font-medium text-rose-800">
@@ -375,7 +458,7 @@ export default function FaceLab() {
                   <RefreshCw size={28} className="mb-3 animate-spin text-amber-600" />
                   <p className="text-sm font-semibold text-stone-800">Verifying face…</p>
                   <p className="mt-1 max-w-xs text-xs text-stone-500">
-                    Checking the active course roster. The first scan may take longer while the recognition model starts.
+                    Matching the live-verified face against this course roster.
                   </p>
                 </div>
               ) : error ? (

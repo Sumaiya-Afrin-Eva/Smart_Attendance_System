@@ -382,13 +382,13 @@ def list_course_students(
             select(CourseRosterAssignment.roster_id).where(CourseRosterAssignment.course_id == course.id)
         ).all()
     )
-    roster_rows = db.scalars(
-        select(StudentRoster).where(
-            StudentRoster.is_active.is_(True),
-            StudentRoster.department == course.department,
-            StudentRoster.session == course.session,
-        ).order_by(StudentRoster.roll)
-    ).all()
+    roster_query = select(StudentRoster).where(
+        StudentRoster.is_active.is_(True),
+        StudentRoster.department == course.department,
+    )
+    if course.session != "Default":
+        roster_query = roster_query.where(StudentRoster.session == course.session)
+    roster_rows = db.scalars(roster_query.order_by(StudentRoster.roll)).all()
     return [
         {
             "roster_id": roster.id,
@@ -404,7 +404,7 @@ def list_course_students(
             or (
                 roster.profile.current_semester == course.semester
                 and roster.profile.department == course.department
-                and roster.profile.session == course.session
+                and (course.session == "Default" or not roster.profile.session or roster.profile.session == course.session)
             )
         )
     ]
@@ -450,13 +450,13 @@ def update_course_students(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Enter a student roll or roll range before saving.",
         )
-    all_eligible_rosters = db.scalars(
-        select(StudentRoster).where(
-            StudentRoster.is_active.is_(True),
-            StudentRoster.department == course.department,
-            StudentRoster.session == course.session,
-        )
-    ).all()
+    roster_query = select(StudentRoster).where(
+        StudentRoster.is_active.is_(True),
+        StudentRoster.department == course.department,
+    )
+    if course.session != "Default":
+        roster_query = roster_query.where(StudentRoster.session == course.session)
+    all_eligible_rosters = db.scalars(roster_query).all()
     eligible_rosters = {
         roster.roll: roster
         for roster in all_eligible_rosters
@@ -465,7 +465,7 @@ def update_course_students(
             or (
                 roster.profile.user.is_active
                 and roster.profile.department == course.department
-                and roster.profile.session == course.session
+                and (course.session == "Default" or not roster.profile.session or roster.profile.session == course.session)
                 and roster.profile.current_semester == course.semester
             )
         )
@@ -620,20 +620,20 @@ async def bulk_assign_courses(
             continue
 
         course = courses[0]
-        eligible_rosters = db.scalars(
-            select(StudentRoster).where(
-                StudentRoster.is_active.is_(True),
-                StudentRoster.department == course.department,
-                StudentRoster.session == course.session,
-            )
-        ).all()
+        roster_query = select(StudentRoster).where(
+            StudentRoster.is_active.is_(True),
+            StudentRoster.department == course.department,
+        )
+        if course.session != "Default":
+            roster_query = roster_query.where(StudentRoster.session == course.session)
+        eligible_rosters = db.scalars(roster_query).all()
         eligible_rosters = [
             roster for roster in eligible_rosters
             if roster.profile
             and roster.profile.user
             and roster.profile.user.is_active
             and roster.profile.department == course.department
-            and roster.profile.session == course.session
+            and (course.session == "Default" or not roster.profile.session or roster.profile.session == course.session)
             and roster.profile.current_semester == course.semester
         ]
         existing_roster_ids = set(db.scalars(
@@ -1764,13 +1764,14 @@ def enroll_students(
         if not student or student.role != "student":
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "One or more students do not exist.")
         profile = student.profile
+        session_matches = course.session == "Default" or not profile.session or profile.session == course.session
         if (
             not profile
             or not profile.roster
             or not profile.roster_id
             or not profile.roster.is_active
             or profile.department != course.department
-            or profile.session != course.session
+            or not session_matches
         ):
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,

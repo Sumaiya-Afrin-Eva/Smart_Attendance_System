@@ -17,7 +17,7 @@ export default function FaceEnrollment() {
   const { refresh, logout } = useAuth()
   const videoRef = useRef(null)
   const streamRef = useRef(null)
-  const intervalRef = useRef(null)
+  const checkTimerRef = useRef(null)
   const checkingRef = useRef(false)
   const [cameraActive, setCameraActive] = useState(false)
   const [humanDetected, setHumanDetected] = useState(false)
@@ -29,16 +29,27 @@ export default function FaceEnrollment() {
   const currentStep = captureSteps[samples.length]
 
   useEffect(() => () => {
-    if (intervalRef.current) window.clearInterval(intervalRef.current)
+    if (checkTimerRef.current) window.clearTimeout(checkTimerRef.current)
     streamRef.current?.getTracks().forEach((track) => track.stop())
   }, [])
 
+  const scheduleCheck = (delay = 500) => {
+    if (checkTimerRef.current) window.clearTimeout(checkTimerRef.current)
+    checkTimerRef.current = window.setTimeout(checkFrame, delay)
+  }
+
   const checkFrame = async () => {
-    if (!videoRef.current || checkingRef.current || videoRef.current.readyState < 2) return
+    if (!streamRef.current || !videoRef.current || checkingRef.current) return
+    if (videoRef.current.readyState < 2) {
+      scheduleCheck(100)
+      return
+    }
     checkingRef.current = true
     const canvas = document.createElement('canvas')
-    canvas.width = videoRef.current.videoWidth
-    canvas.height = videoRef.current.videoHeight
+    const video = videoRef.current
+    const scale = Math.min(1, 480 / (video.videoWidth || 480))
+    canvas.width = Math.round((video.videoWidth || 480) * scale)
+    canvas.height = Math.round((video.videoHeight || 360) * scale)
     canvas.getContext('2d').drawImage(videoRef.current, 0, 0)
     canvas.toBlob(async (blob) => {
       try {
@@ -57,26 +68,30 @@ export default function FaceEnrollment() {
         setStatus(errorMessage(error, 'Live face verification is unavailable.'))
       } finally {
         checkingRef.current = false
+        if (streamRef.current) scheduleCheck(500)
       }
     }, 'image/jpeg', 0.78)
   }
 
   const startCamera = async () => {
     try {
-      streamRef.current = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
+      streamRef.current = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+        audio: false,
+      })
       videoRef.current.srcObject = streamRef.current
       await videoRef.current.play()
       setCameraActive(true)
       setStatus('Checking the live camera for a human face...')
-      intervalRef.current = window.setInterval(checkFrame, 900)
+      scheduleCheck(0)
     } catch {
       setStatus('Camera permission is required. Allow camera access and try again.')
     }
   }
 
   const stopCamera = () => {
-    if (intervalRef.current) window.clearInterval(intervalRef.current)
-    intervalRef.current = null
+    if (checkTimerRef.current) window.clearTimeout(checkTimerRef.current)
+    checkTimerRef.current = null
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
     setCameraActive(false)

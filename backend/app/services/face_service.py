@@ -8,7 +8,11 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import logging
+import time
+from collections import OrderedDict
+from threading import Lock
 from pathlib import Path
 from typing import Sequence, Union
 
@@ -38,6 +42,10 @@ EMBEDDING_DIM = 512
 class FaceService:
     """Service for face detection, 512-d ArcFace embedding extraction, and cosine similarity matching."""
 
+    LIVENESS_READY_SECONDS = 1.5
+    LIVENESS_VALID_SECONDS = 8.0
+    EMBEDDING_CACHE_SIZE = 2048
+
     def __init__(self, model_name: str = "buffalo_l", ctx_id: int = 0, det_size: tuple[int, int] = (640, 640)):
         self.model_name = model_name
         self.ctx_id = ctx_id
@@ -45,7 +53,29 @@ class FaceService:
         self._app: FaceAnalysis | None = None
         self._initialized: bool = False
         self._cache: dict[tuple[str, float], np.ndarray] = {}
+        self._embedding_cache: OrderedDict[bytes, np.ndarray] = OrderedDict()
+        self._embedding_cache_lock = Lock()
         self._liveness: dict[str, dict] = {}
+        self._mesh = None
+        self._mesh_lock = Lock()
+        self._face_detector = None
+        self._face_detector_lock = Lock()
+
+    def warmup(self) -> None:
+        """Load the recognition model before a kiosk begins scanning."""
+        self._get_app()
+
+    @staticmethod
+    def should_mark_liveness_ready(state: dict, now: float | None = None) -> bool:
+        """Accept liveness after a blink, movement, and a short observation window."""
+        if not isinstance(state, dict):
+            return False
+        started_at = state.get("started_at")
+        if started_at is None:
+            return False
+        if now is None:
+            now = time.monotonic()
+        return bool(state.get("blink") and state.get("movement") and (now - started_at) >= FaceService.LIVENESS_READY_SECONDS)
 
     def _get_app(self) -> FaceAnalysis:
         """Lazy load the InsightFace model on first use."""
@@ -109,6 +139,15 @@ class FaceService:
         If multiple faces are detected, returns the embedding of the most prominent (largest) face.
         Returns None if no face is detected. Cached for file paths by mtime.
         """
+        byte_cache_key = None
+        if isinstance(image, (bytes, bytearray)):
+            byte_cache_key = hashlib.sha256(image).digest()
+            with self._embedding_cache_lock:
+                cached = self._embedding_cache.get(byte_cache_key)
+                if cached is not None:
+                    self._embedding_cache.move_to_end(byte_cache_key)
+                    return cached
+
         # Check cache if image is a file path
         if isinstance(image, (str, Path)):
             p = Path(image)
@@ -147,6 +186,12 @@ class FaceService:
                         self._cache[(str(p.resolve()), p.stat().st_mtime)] = arr
                     except Exception:
                         pass
+            elif byte_cache_key is not None:
+                with self._embedding_cache_lock:
+                    self._embedding_cache[byte_cache_key] = arr
+                    self._embedding_cache.move_to_end(byte_cache_key)
+                    while len(self._embedding_cache) > self.EMBEDDING_CACHE_SIZE:
+                        self._embedding_cache.popitem(last=False)
             return arr
 
         return None
@@ -158,24 +203,39 @@ class FaceService:
         return app.get(img)
 
     def validate_single_human_face(self, image: Union[str, Path, bytes, np.ndarray]) -> None:
-        """Reject images that do not contain exactly one detectable human face."""
-        faces = self.detect_faces(image)
-        if len(faces) != 1:
-            raise ValueError("Each registration photo must contain exactly one clearly visible human face.")
-
-    def check_liveness(self, image: Union[str, Path, bytes, np.ndarray], session_key: str) -> dict:
-        """Track blink and natural head movement across live camera frames."""
+        """Reject images without exactly one face using the lightweight detector."""
         if mp is None:
             raise RuntimeError("MediaPipe is not installed. Please install the backend requirements.")
         frame = self.to_cv2_image(image)
-        mesh = mp.solutions.face_mesh.FaceMesh(
-            static_image_mode=True,
-            max_num_faces=2,
-            refine_landmarks=True,
-            min_detection_confidence=0.65,
-        )
-        result = mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        mesh.close()
+        with self._face_detector_lock:
+            if self._face_detector is None:
+                self._face_detector = mp.solutions.face_detection.FaceDetection(
+                    model_selection=0,
+                    min_detection_confidence=0.55,
+                )
+            result = self._face_detector.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        if not result.detections or len(result.detections) != 1:
+            raise ValueError("Each registration photo must contain exactly one clearly visible human face.")
+
+    def check_liveness(self, image: Union[str, Path, bytes, np.ndarray], session_key: str) -> dict:
+        """Track blink and natural head movement across live camera frames.
+
+        A short observation window keeps verification responsive while still requiring both
+        a blink and head movement across separate camera frames.
+        """
+        if mp is None:
+            raise RuntimeError("MediaPipe is not installed. Please install the backend requirements.")
+        frame = self.to_cv2_image(image)
+        with self._mesh_lock:
+            if self._mesh is None:
+                self._mesh = mp.solutions.face_mesh.FaceMesh(
+                    static_image_mode=False,
+                    max_num_faces=2,
+                    refine_landmarks=False,
+                    min_detection_confidence=0.55,
+                    min_tracking_confidence=0.5,
+                )
+            result = self._mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         if not result.multi_face_landmarks or len(result.multi_face_landmarks) != 1:
             self._liveness.pop(session_key, None)
             return {
@@ -193,33 +253,62 @@ class FaceService:
         nose = landmarks[1]
         face_width = max(abs(landmarks[234].x - landmarks[454].x), 0.001)
         position = (nose.x / face_width, nose.y / face_width)
+        now = time.monotonic()
         state = self._liveness.setdefault(session_key, {
             "closed": False,
             "blink": False,
             "movement": False,
             "position": position,
+            "started_at": now,
         })
-        if ear < 0.20:
+        if now - state.get("last_seen_at", now) > 2.5:
+            state.update({
+                "closed": False,
+                "blink": False,
+                "movement": False,
+                "position": position,
+                "started_at": now,
+                "live_embedding": None,
+            })
+        if state.get("started_at") is None:
+            state["started_at"] = now
+
+        if ear < 0.18:
             state["closed"] = True
-        elif state["closed"] and ear > 0.23:
+        elif state["closed"] and ear > 0.21:
             state["blink"] = True
             state["closed"] = False
-        previous = state["position"]
-        if abs(position[0] - previous[0]) > 0.035 or abs(position[1] - previous[1]) > 0.035:
+
+        previous = state.get("position", position)
+        movement_detected = abs(position[0] - previous[0]) > 0.018 or abs(position[1] - previous[1]) > 0.018
+        if movement_detected:
             state["movement"] = True
         state["position"] = position
-        liveness = bool(state["blink"] and state["movement"])
+        state["last_seen_at"] = now
+
+        liveness = self.should_mark_liveness_ready(state, now)
+        if liveness and state.get("live_embedding") is None:
+            state["live_embedding"] = self.extract_embedding(frame)
+            liveness = state["live_embedding"] is not None
         return {
             "human": True,
             "blink_detected": state["blink"],
             "movement_detected": state["movement"],
             "liveness": liveness,
             "message": (
-                "Live human verified. Blink and move your head as instructed."
+                "Live human verified. You can capture now."
                 if liveness else
                 "Keep your face visible, blink once, and slowly move your head."
             ),
         }
+
+    def consume_liveness(self, session_key: str) -> np.ndarray | None:
+        """Consume a recent live-face proof once so it cannot authorize later scans."""
+        state = self._liveness.pop(session_key, None)
+        if not state or time.monotonic() - state.get("last_seen_at", 0) > self.LIVENESS_VALID_SECONDS:
+            return None
+        embedding = state.get("live_embedding")
+        return embedding if isinstance(embedding, np.ndarray) else None
 
     @staticmethod
     def _eye_aspect_ratio(landmarks: list, indexes: tuple[int, ...]) -> float:

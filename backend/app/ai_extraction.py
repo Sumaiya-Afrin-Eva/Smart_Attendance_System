@@ -1,7 +1,19 @@
 import json
 import re
 
-import google.generativeai as genai
+try:
+    import google.generativeai as genai
+except ModuleNotFoundError:  # pragma: no cover - optional runtime dependency
+    class _MissingGenAI:
+        @staticmethod
+        def configure(api_key=None):
+            raise ModuleNotFoundError("google-generativeai is not installed")
+
+        @staticmethod
+        def GenerativeModel(*args, **kwargs):
+            raise ModuleNotFoundError("google-generativeai is not installed")
+
+    genai = _MissingGenAI()
 
 from .config import settings
 
@@ -183,11 +195,23 @@ def _extract_courses_from_text(text: str) -> list[dict]:
 
 def extract_courses_from_file(file_content: bytes, mime_type: str) -> list[dict]:
     if not settings.gemini_api_key:
+        try:
+            text = file_content.decode("utf-8", errors="ignore")
+        except Exception:
+            text = ""
+        fallback = _extract_courses_from_text(text)
+        if fallback:
+            return fallback
         raise ValueError("GEMINI_API_KEY is not configured in backend.")
 
     mime_type = mime_type or "application/octet-stream"
-    genai.configure(api_key=settings.gemini_api_key)
-    model = genai.GenerativeModel(GEMINI_MODEL)
+    try:
+        genai.configure(api_key=settings.gemini_api_key)
+        model = genai.GenerativeModel(GEMINI_MODEL)
+    except ModuleNotFoundError as exc:
+        raise ValueError(
+            "Google Generative AI library is not installed. Install google-generativeai to enable course extraction."
+        ) from exc
 
     prompt = """
     Extract all the courses from this curriculum document.
