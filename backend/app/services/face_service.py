@@ -24,6 +24,11 @@ try:
 except ImportError:
     FaceAnalysis = None
 
+try:
+    import mediapipe as mp
+except ImportError:
+    mp = None
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_SIMILARITY_THRESHOLD = 0.55
@@ -40,6 +45,7 @@ class FaceService:
         self._app: FaceAnalysis | None = None
         self._initialized: bool = False
         self._cache: dict[tuple[str, float], np.ndarray] = {}
+        self._liveness: dict[str, dict] = {}
 
     def _get_app(self) -> FaceAnalysis:
         """Lazy load the InsightFace model on first use."""
@@ -150,6 +156,79 @@ class FaceService:
         img = self.to_cv2_image(image)
         app = self._get_app()
         return app.get(img)
+
+    def validate_single_human_face(self, image: Union[str, Path, bytes, np.ndarray]) -> None:
+        """Reject images that do not contain exactly one detectable human face."""
+        faces = self.detect_faces(image)
+        if len(faces) != 1:
+            raise ValueError("Each registration photo must contain exactly one clearly visible human face.")
+
+    def check_liveness(self, image: Union[str, Path, bytes, np.ndarray], session_key: str) -> dict:
+        """Track blink and natural head movement across live camera frames."""
+        if mp is None:
+            raise RuntimeError("MediaPipe is not installed. Please install the backend requirements.")
+        frame = self.to_cv2_image(image)
+        mesh = mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=2,
+            refine_landmarks=True,
+            min_detection_confidence=0.65,
+        )
+        result = mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        mesh.close()
+        if not result.multi_face_landmarks or len(result.multi_face_landmarks) != 1:
+            self._liveness.pop(session_key, None)
+            return {
+                "human": False,
+                "blink_detected": False,
+                "movement_detected": False,
+                "liveness": False,
+                "message": "No single human face detected. A still photo cannot be used.",
+            }
+
+        landmarks = result.multi_face_landmarks[0].landmark
+        left_eye = self._eye_aspect_ratio(landmarks, (33, 160, 158, 133, 153, 144))
+        right_eye = self._eye_aspect_ratio(landmarks, (362, 385, 387, 263, 373, 380))
+        ear = (left_eye + right_eye) / 2
+        nose = landmarks[1]
+        face_width = max(abs(landmarks[234].x - landmarks[454].x), 0.001)
+        position = (nose.x / face_width, nose.y / face_width)
+        state = self._liveness.setdefault(session_key, {
+            "closed": False,
+            "blink": False,
+            "movement": False,
+            "position": position,
+        })
+        if ear < 0.20:
+            state["closed"] = True
+        elif state["closed"] and ear > 0.23:
+            state["blink"] = True
+            state["closed"] = False
+        previous = state["position"]
+        if abs(position[0] - previous[0]) > 0.035 or abs(position[1] - previous[1]) > 0.035:
+            state["movement"] = True
+        state["position"] = position
+        liveness = bool(state["blink"] and state["movement"])
+        return {
+            "human": True,
+            "blink_detected": state["blink"],
+            "movement_detected": state["movement"],
+            "liveness": liveness,
+            "message": (
+                "Live human verified. Blink and move your head as instructed."
+                if liveness else
+                "Keep your face visible, blink once, and slowly move your head."
+            ),
+        }
+
+    @staticmethod
+    def _eye_aspect_ratio(landmarks: list, indexes: tuple[int, ...]) -> float:
+        p1, p2, p3, p4, p5, p6 = (landmarks[index] for index in indexes)
+        vertical = np.linalg.norm(np.array([p2.x - p6.x, p2.y - p6.y])) + np.linalg.norm(
+            np.array([p3.x - p5.x, p3.y - p5.y])
+        )
+        horizontal = np.linalg.norm(np.array([p1.x - p4.x, p1.y - p4.y]))
+        return float(vertical / max(horizontal, 1e-6))
 
     def extract_all_embeddings(self, image: Union[str, Path, bytes, np.ndarray]) -> list[dict]:
         """Extract embeddings and bounding boxes for all faces found in the image."""

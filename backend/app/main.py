@@ -69,6 +69,10 @@ def ensure_database_schema() -> None:
             conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN phone VARCHAR(20)")
         if "photo_path" not in roster_col_names:
             conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN photo_path VARCHAR(500)")
+        if "face_sample_paths" not in roster_col_names:
+            conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN face_sample_paths TEXT")
+        if "face_enrollment_version" not in roster_col_names:
+            conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN face_enrollment_version INTEGER NOT NULL DEFAULT 0")
         if "photo_path" in roster_col_names:
             legacy_photos = conn.exec_driver_sql(
                 "SELECT id, photo_path FROM student_roster "
@@ -85,7 +89,7 @@ def ensure_database_schema() -> None:
                     (photo_data, mime_type, roster_id),
                 )
         settings.storage_dir.mkdir(parents=True, exist_ok=True)
-        roster_photo_dir = settings.storage_dir / "roster_photos"
+        roster_photo_dir = settings.picture_dir
         roster_photo_dir.mkdir(parents=True, exist_ok=True)
         stored_photos = conn.exec_driver_sql(
             "SELECT id, photo_data, photo_mime_type, photo_path FROM student_roster "
@@ -96,10 +100,11 @@ def ensure_database_schema() -> None:
             photo_path = roster_photo_dir / f"{roster_id}{suffix}"
             if not photo_path.is_file() or photo_path.stat().st_size != len(photo_data):
                 photo_path.write_bytes(photo_data)
-            if stored_path != str(photo_path):
+            relative_path = f"picture/{photo_path.name}"
+            if stored_path != relative_path:
                 conn.exec_driver_sql(
                     "UPDATE student_roster SET photo_path = ? WHERE id = ?",
-                    (str(photo_path), roster_id),
+                    (relative_path, roster_id),
                 )
 
         # Student roster verification fields added after initial deployment.
@@ -213,6 +218,7 @@ def migrate_course_code_uniqueness() -> None:
 Base.metadata.create_all(bind=engine)
 ensure_database_schema()
 settings.storage_dir.mkdir(parents=True, exist_ok=True)
+settings.picture_dir.mkdir(parents=True, exist_ok=True)
 ensure_seed_settings()
 
 app = FastAPI(title="Smart Attendance API", version="0.1.0")

@@ -1,13 +1,17 @@
 """Everything a logged-in student can do with their own data."""
+import json
+from pathlib import Path
+from uuid import uuid4
 from collections import defaultdict
 from datetime import datetime, time, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..database import get_db
+from ..config import settings
 from ..marks import RULE, attendance_marks, attendance_percent
 from ..models import (
     Attendance, ClassSession, Course, CourseRosterAssignment, Enrollment, FaceSample, StudentProfile,
@@ -15,7 +19,8 @@ from ..models import (
 )
 from ..schemas import ProfileIn
 from ..security import require_role
-from ..services import course_out, onboarding_status
+from ..services import FACE_ENROLLMENT_VERSION, course_out, onboarding_status
+from ..services.face_service import get_face_service
 
 router = APIRouter(prefix="/api/students/me", tags=["student"])
 student_only = require_role("student")
@@ -127,6 +132,77 @@ def save_profile(body: ProfileIn, user: User = Depends(student_only), db: Sessio
         raise HTTPException(status.HTTP_409_CONFLICT, "This roll number is already registered to another account.")
     db.refresh(user)
     return {"profile": _profile_out(profile, user), "onboarding": onboarding_status(db, user)}
+
+
+@router.post("/face-samples")
+async def upload_face_samples(
+    photos: list[UploadFile] = File(...),
+    user: User = Depends(student_only),
+    db: Session = Depends(get_db),
+):
+    """Validate and store the student's camera registration samples."""
+    if len(photos) != 5:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Capture exactly five different face photos.")
+    if not user.profile or not user.profile.roster_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Complete the academic details before face registration.")
+
+    roster = db.get(StudentRoster, user.profile.roster_id)
+    if not roster or not roster.is_active:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Your approved student record could not be found.")
+
+    face_service = get_face_service()
+    validated: list[tuple[bytes, str]] = []
+    for photo in photos:
+        content = await photo.read()
+        if photo.content_type not in {"image/jpeg", "image/png"}:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Only JPEG or PNG images are allowed.")
+        if len(content) > 3 * 1024 * 1024:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Each photo must be under 3 MB.")
+        try:
+            face_service.validate_single_human_face(content)
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        validated.append((content, "image/png" if content.startswith(b"\x89PNG") else "image/jpeg"))
+
+    picture_root = settings.picture_dir.resolve()
+    picture_root.mkdir(parents=True, exist_ok=True)
+    old_paths = json.loads(roster.face_sample_paths or "[]")
+    paths: list[str] = []
+    for index, (content, mime_type) in enumerate(validated, start=1):
+        suffix = ".png" if mime_type == "image/png" else ".jpg"
+        filename = f"{roster.roll}_{uuid4().hex}_{index}{suffix}"
+        (picture_root / filename).write_bytes(content)
+        paths.append(f"picture/{filename}")
+
+    for relative_path in old_paths:
+        old_file = (settings.picture_dir.parent / relative_path).resolve()
+        if old_file.parent == picture_root and old_file.is_file():
+            old_file.unlink()
+
+    roster.face_sample_paths = json.dumps(paths)
+    roster.face_enrollment_version = FACE_ENROLLMENT_VERSION
+    roster.photo_path = paths[0]
+    roster.photo_data = validated[0][0]
+    roster.photo_mime_type = validated[0][1]
+    db.commit()
+    return {"status": "submitted", "count": len(paths), "photo_paths": paths}
+
+
+@router.post("/face-check")
+async def check_live_face(
+    photo: UploadFile = File(...),
+    user: User = Depends(student_only),
+):
+    """Check one live camera frame before allowing a registration capture."""
+    if photo.content_type not in {"image/jpeg", "image/png"}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Camera frame must be a JPEG or PNG image.")
+    try:
+        return get_face_service().check_liveness(await photo.read(), str(user.id))
+    except ValueError:
+        return {"human": False, "liveness": False, "message": "No single human face detected. A still photo cannot be used."}
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    return {"human": True, "message": "Human face detected. You can capture this view."}
 
 
 # ---------------------------------------------------------------- course selection

@@ -8,8 +8,10 @@ Endpoints for:
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from datetime import datetime, time, timedelta
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -39,6 +41,18 @@ from ..services.face_service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/face", tags=["face"])
+
+
+def _registered_face_inputs(roster: StudentRoster) -> list[bytes | str]:
+    """Return all registration samples, falling back to the legacy database photo."""
+    paths = json.loads(roster.face_sample_paths or "[]")
+    project_root = Path(__file__).resolve().parents[2].parent
+    inputs: list[bytes | str] = [
+        str((project_root / path).resolve())
+        for path in paths
+        if isinstance(path, str)
+    ]
+    return inputs or ([roster.photo_data] if roster.photo_data else [])
 
 
 def _decode_image_payload(file: UploadFile | None, base64_str: str | None) -> bytes:
@@ -182,9 +196,10 @@ async def scan_kiosk(
     student_scores: list[tuple[float, StudentProfile, User]] = []
     for roster, profile, matched_user in _eligible_students(db, course.id):
         try:
-            stored_emb = face_svc.extract_embedding(roster.photo_data)
-            if stored_emb is not None:
-                student_scores.append((compute_similarity(query_emb, stored_emb), profile, matched_user))
+            for registered_face in _registered_face_inputs(roster):
+                stored_emb = face_svc.extract_embedding(registered_face)
+                if stored_emb is not None:
+                    student_scores.append((compute_similarity(query_emb, stored_emb), profile, matched_user))
         except Exception as exc:
             logger.warning("Failed processing admin photo for roster roll %s: %s", roster.roll, exc)
 
@@ -329,10 +344,11 @@ async def recognize_face(
     student_scores: list[tuple[float, StudentProfile, User]] = []
     for roster, profile, matched_user in roster_records:
         try:
-            stored_emb = face_svc.extract_embedding(roster.photo_data)
-            if stored_emb is not None:
-                sim = compute_similarity(query_emb, stored_emb)
-                student_scores.append((sim, profile, matched_user))
+            for registered_face in _registered_face_inputs(roster):
+                stored_emb = face_svc.extract_embedding(registered_face)
+                if stored_emb is not None:
+                    sim = compute_similarity(query_emb, stored_emb)
+                    student_scores.append((sim, profile, matched_user))
         except Exception as exc:
             logger.warning("Failed processing admin photo for roster roll %s: %s", roster.roll, exc)
 

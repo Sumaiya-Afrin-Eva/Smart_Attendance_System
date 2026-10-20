@@ -43,7 +43,7 @@ export default function Onboarding() {
             Complete Your Student Registration
           </h1>
           <p className="mt-1.5 text-sm sm:text-base text-stone-600">
-            Signed in as <strong className="text-stone-900 font-semibold">{user?.email}</strong>. Enter your academic details to continue. Your admin-approved photo is used by the attendance kiosk.
+            Signed in as <strong className="text-stone-900 font-semibold">{user?.email}</strong>. Enter your academic details first; after saving, you will complete face enrollment on a separate guided screen.
           </p>
         </div>
 
@@ -51,7 +51,7 @@ export default function Onboarding() {
           <div className="mb-6 border-b border-[#f0eee6] pb-4.5">
             <div>
               <p className="text-xs font-bold uppercase tracking-wider text-emerald-800">Student registration</p>
-              <h2 className="font-display text-xl font-bold text-stone-900">Academic Details</h2>
+              <h2 className="font-display text-xl font-bold text-stone-900">Step 1: Academic Details</h2>
             </div>
           </div>
 
@@ -60,8 +60,8 @@ export default function Onboarding() {
           ) : (
             <ProfileForm
               profile={profile}
-              onSaved={() => navigate('/student')}
-              submitLabel="Save Details &amp; Enter Portal"
+              onSaved={() => navigate('/student/setup/face')}
+              submitLabel="Save Details &amp; Continue"
             />
           )}
         </section>
