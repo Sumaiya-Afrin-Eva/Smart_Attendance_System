@@ -128,6 +128,24 @@ class StudentProfile(Base):
     roster: Mapped[StudentRoster | None] = relationship(back_populates="profile")
 
 
+class StudentSemesterFaceEnrollment(Base):
+    __tablename__ = "student_semester_face_enrollments"
+    __table_args__ = (UniqueConstraint("user_id", "semester"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    semester: Mapped[str] = mapped_column(String(5), index=True)
+    enrollment_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
+
+
+class SystemMigration(Base):
+    __tablename__ = "system_migrations"
+
+    name: Mapped[str] = mapped_column(String(120), primary_key=True)
+    applied_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
+
+
 class FaceSample(Base):
     __tablename__ = "face_samples"
 

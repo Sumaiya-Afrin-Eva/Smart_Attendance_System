@@ -1,4 +1,5 @@
 import { ShieldCheck, UserRound } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { useProfile } from '../../lib/queries'
 import { Card, Spinner } from '../../components/ui'
 import ProfileForm from '../../components/student/ProfileForm'
@@ -6,6 +7,7 @@ import { useAuth } from '../../context/AuthContext'
 
 export default function MyProfile() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const { data: profile, isLoading } = useProfile()
   if (isLoading) return <Spinner label="Loading student profile…" />
 
@@ -75,7 +77,12 @@ export default function MyProfile() {
       {/* Profile Form Card */}
       <Card title="Student Academic Details" subtitle="Required for course registration and face recognition roster matching" icon={UserRound}>
         <div className="p-6 sm:p-7">
-          <ProfileForm profile={profile} />
+          <ProfileForm
+            profile={profile}
+            onSaved={(_, onboarding) => {
+              if (!onboarding?.face) navigate('/student/setup/face')
+            }}
+          />
         </div>
       </Card>
     </div>

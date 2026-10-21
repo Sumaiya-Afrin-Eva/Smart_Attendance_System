@@ -16,7 +16,7 @@ from ..config import settings
 from ..marks import RULE, attendance_marks, attendance_percent
 from ..models import (
     Attendance, ClassSession, Course, CourseRosterAssignment, Enrollment, FaceSample, StudentProfile,
-    StudentRoster, User,
+    StudentRoster, StudentSemesterFaceEnrollment, User,
 )
 from ..schemas import ProfileIn
 from ..security import require_role
@@ -185,6 +185,23 @@ async def upload_face_samples(
     roster.photo_path = paths[0]
     roster.photo_data = validated[0][0]
     roster.photo_mime_type = validated[0][1]
+    semester_enrollment = db.scalar(
+        select(StudentSemesterFaceEnrollment).where(
+            StudentSemesterFaceEnrollment.user_id == user.id,
+            StudentSemesterFaceEnrollment.semester == user.profile.current_semester,
+        )
+    )
+    if semester_enrollment:
+        semester_enrollment.enrollment_version = FACE_ENROLLMENT_VERSION
+        semester_enrollment.created_at = datetime.now()
+    else:
+        db.add(
+            StudentSemesterFaceEnrollment(
+                user_id=user.id,
+                semester=user.profile.current_semester,
+                enrollment_version=FACE_ENROLLMENT_VERSION,
+            )
+        )
     db.commit()
     return {"status": "submitted", "count": len(paths), "photo_paths": paths}
 

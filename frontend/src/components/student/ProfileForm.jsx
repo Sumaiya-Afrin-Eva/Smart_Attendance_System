@@ -46,7 +46,7 @@ export default function ProfileForm({ profile, onSaved, submitLabel = 'Save Prof
       queryClient.setQueryData(['profile'], data.profile)
       await refresh()
       setSaved(true)
-      onSaved?.(data.profile)
+      onSaved?.(data.profile, data.onboarding)
     } catch (err) {
       setErrors(fieldErrors(err))
       setError(err.response ? errorMessage(err) : err.message)

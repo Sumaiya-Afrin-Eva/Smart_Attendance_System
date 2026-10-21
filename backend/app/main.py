@@ -4,9 +4,14 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 
 from .config import settings
 from .database import Base, SessionLocal, engine
+from .models import (
+    AdminSetting, Enrollment, StudentProfile, StudentRoster, StudentSemesterFaceEnrollment, SystemMigration,
+)
+from .routers import auth, courses, face, students
 from .models import AdminSetting
 from .routers import auth, courses, face, routine, students
 
@@ -276,9 +281,55 @@ def migrate_course_code_uniqueness() -> None:
             raise RuntimeError(f"Course migration left foreign-key violations: {violations!r}")
 
 
+def backfill_legacy_semester_face_enrollments() -> None:
+    """Preserve completed face enrollment for semesters already present in legacy records."""
+    with SessionLocal() as db:
+        migration_name = "semester-face-enrollment-backfill-v1"
+        if db.get(SystemMigration, migration_name):
+            return
+
+        profiles = db.scalars(
+            select(StudentProfile)
+            .join(StudentRoster, StudentProfile.roster_id == StudentRoster.id)
+            .where(
+                StudentRoster.face_enrollment_version > 0,
+                StudentRoster.face_sample_paths.is_not(None),
+                StudentRoster.face_sample_paths != "[]",
+            )
+        ).all()
+        for profile in profiles:
+            current_order = int(profile.current_semester[0]) * 2 + int(profile.current_semester[-1])
+            semesters = {
+                semester
+                for semester in db.scalars(
+                    select(Enrollment.semester).where(Enrollment.student_id == profile.user_id)
+                ).all()
+                if int(semester[0]) * 2 + int(semester[-1]) <= current_order
+            }
+            semesters.add(profile.current_semester)
+            for semester in semesters:
+                existing = db.scalar(
+                    select(StudentSemesterFaceEnrollment.id).where(
+                        StudentSemesterFaceEnrollment.user_id == profile.user_id,
+                        StudentSemesterFaceEnrollment.semester == semester,
+                    )
+                )
+                if existing is None:
+                    db.add(
+                        StudentSemesterFaceEnrollment(
+                            user_id=profile.user_id,
+                            semester=semester,
+                            enrollment_version=1,
+                        )
+                    )
+        db.add(SystemMigration(name=migration_name))
+        db.commit()
+
+
 # Creates the tables on first run (fine for this project; use Alembic for real migrations)
 Base.metadata.create_all(bind=engine)
 ensure_database_schema()
+backfill_legacy_semester_face_enrollments()
 settings.storage_dir.mkdir(parents=True, exist_ok=True)
 settings.picture_dir.mkdir(parents=True, exist_ok=True)
 ensure_seed_settings()

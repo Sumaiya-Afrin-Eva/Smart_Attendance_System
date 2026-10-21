@@ -94,9 +94,11 @@ export default function App() {
         </Route>
       </Route>
 
-      {/* Student: first-time registration (profile -> face -> courses) */}
-      <Route element={<ProtectedRoute role="student" setupPage />}>
+      {/* Student: profile setup is one-time; face enrollment is tracked per semester */}
+      <Route element={<ProtectedRoute role="student" setupStep="profile" />}>
         <Route path="/student/setup" element={<Onboarding />} />
+      </Route>
+      <Route element={<ProtectedRoute role="student" setupStep="face" />}>
         <Route path="/student/setup/face" element={<FaceEnrollment />} />
       </Route>
 
