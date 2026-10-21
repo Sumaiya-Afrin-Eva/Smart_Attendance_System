@@ -201,7 +201,11 @@ async def check_live_face(
         frame = await photo.read()
         return await run_in_threadpool(get_face_service().check_liveness, frame, str(user.id))
     except ValueError:
-        return {"human": False, "liveness": False, "message": "No single human face detected. A still photo cannot be used."}
+        return {
+            "human": False,
+            "liveness": False,
+            "message": "Exactly one clear face must be visible. Uncover the camera, center your face, and face a well-lit area.",
+        }
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     return {"human": True, "message": "Human face detected. You can capture this view."}

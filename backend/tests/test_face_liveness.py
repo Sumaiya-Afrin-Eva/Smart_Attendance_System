@@ -21,10 +21,21 @@ def test_should_not_mark_liveness_ready_before_blink_movement_window():
     state = {
         "blink": True,
         "movement": True,
-        "started_at": time.monotonic() - 1,
+        "started_at": time.monotonic() - 0.99,
     }
 
     assert service.should_mark_liveness_ready(state, time.monotonic()) is False
+
+
+def test_should_mark_liveness_ready_after_shorter_blink_movement_window():
+    service = FaceService()
+    state = {
+        "blink": True,
+        "movement": True,
+        "started_at": time.monotonic() - 1.1,
+    }
+
+    assert service.should_mark_liveness_ready(state, time.monotonic()) is True
 
 
 def test_liveness_proof_is_consumed_only_once():
@@ -48,6 +59,42 @@ def test_liveness_proof_expires():
     }
 
     assert service.consume_liveness("kiosk:1") is None
+
+
+def test_blink_detection_uses_face_specific_open_eye_baseline():
+    state = {"closed": False, "blink": False, "open_ear": None}
+
+    FaceService.update_blink_state(state, 0.30)
+    FaceService.update_blink_state(state, 0.20)
+
+    assert state["closed"] is True
+    assert state["blink"] is False
+
+    FaceService.update_blink_state(state, 0.28)
+
+    assert state["closed"] is False
+    assert state["blink"] is True
+
+
+def test_partial_eye_closure_does_not_count_as_blink():
+    state = {"closed": False, "blink": False, "open_ear": None}
+
+    FaceService.update_blink_state(state, 0.30)
+    FaceService.update_blink_state(state, 0.25)
+    FaceService.update_blink_state(state, 0.30)
+
+    assert state["blink"] is False
+    assert state["closed"] is False
+
+
+def test_blink_detection_supports_lower_face_specific_eye_ratio():
+    state = {"closed": False, "blink": False, "open_ear": None}
+
+    FaceService.update_blink_state(state, 0.16)
+    FaceService.update_blink_state(state, 0.10)
+    FaceService.update_blink_state(state, 0.15)
+
+    assert state["blink"] is True
 
 
 def test_byte_image_embeddings_are_cached():

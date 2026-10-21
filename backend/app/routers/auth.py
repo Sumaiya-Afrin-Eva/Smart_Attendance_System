@@ -1,5 +1,9 @@
 import logging
+import hashlib
 import secrets
+import smtplib
+import time
+from email.message import EmailMessage
 
 import requests as http_requests
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,13 +14,22 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
-from ..models import StudentRoster, User
-from ..schemas import AdminBootstrapIn, DevLoginIn, GoogleLoginIn, PasswordLoginIn
+from ..models import PasswordResetToken, StudentRoster, User
+from ..schemas import (
+    AdminBootstrapIn,
+    DevLoginIn,
+    GoogleLoginIn,
+    PasswordLoginIn,
+    PasswordResetIn,
+    PasswordResetRequestIn,
+)
 from ..security import create_token, get_current_user, hash_password, verify_password
 from ..services import onboarding_status, user_out
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
+PASSWORD_RESET_VALID_SECONDS = 30 * 60
+PASSWORD_RESET_REQUEST_INTERVAL_SECONDS = 60
 
 
 def _session_response(db: Session, user: User) -> dict:
@@ -25,6 +38,47 @@ def _session_response(db: Session, user: User) -> dict:
         "user": user_out(user),
         "onboarding": onboarding_status(db, user),
     }
+
+
+def _send_password_reset_email(email: str, token: str) -> None:
+    """Send a short-lived password reset link using the configured SMTP server."""
+    required_settings = (settings.smtp_host, settings.smtp_from)
+    if not all(required_settings) or (settings.smtp_username and not settings.smtp_password):
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Password recovery email is not configured. Contact the system administrator.",
+        )
+
+    reset_url = f"{settings.frontend_origin.rstrip('/')}/reset-password?token={token}"
+    message = EmailMessage()
+    message["Subject"] = "Reset your Smart Attendance password"
+    message["From"] = settings.smtp_from
+    message["To"] = email
+    message.set_content(
+        "A password reset was requested for your Smart Attendance account.\n\n"
+        f"Use this one-time link within 30 minutes:\n{reset_url}\n\n"
+        "If you did not request this, you can ignore this email."
+    )
+
+    try:
+        if settings.smtp_use_ssl:
+            with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=10) as server:
+                if settings.smtp_username:
+                    server.login(settings.smtp_username, settings.smtp_password)
+                server.send_message(message)
+        else:
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
+                if settings.smtp_use_tls:
+                    server.starttls()
+                if settings.smtp_username:
+                    server.login(settings.smtp_username, settings.smtp_password)
+                server.send_message(message)
+    except (OSError, smtplib.SMTPException):
+        logger.exception("Failed to send password reset email")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Password recovery email could not be sent. Contact the system administrator.",
+        ) from None
 
 
 def _login_or_register_student(db: Session, email: str, name: str, picture: str | None) -> User:
@@ -224,6 +278,83 @@ def password_login(body: PasswordLoginIn, db: Session = Depends(get_db)):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been disabled. Contact the admin.")
 
     return _session_response(db, user)
+
+
+@router.post("/password-reset/request")
+def request_password_reset(body: PasswordResetRequestIn, db: Session = Depends(get_db)):
+    """Send a time-limited reset link without revealing whether an account exists."""
+    if not settings.smtp_host or not settings.smtp_from or (
+        settings.smtp_username and not settings.smtp_password
+    ):
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Password recovery email is not configured. Contact the system administrator.",
+        )
+
+    user = db.scalar(
+        select(User).where(
+            User.email == body.email.lower(),
+            User.role.in_(("teacher", "admin")),
+            User.is_active.is_(True),
+        )
+    )
+    if user is None:
+        return {"message": "If an active staff account exists for that email, a reset link has been sent."}
+
+    now = time.time()
+    recent_request = db.scalar(
+        select(PasswordResetToken.id).where(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.created_at > now - PASSWORD_RESET_REQUEST_INTERVAL_SECONDS,
+        )
+    )
+    if recent_request is not None:
+        return {"message": "If an active staff account exists for that email, a reset link has been sent."}
+
+    token = secrets.token_urlsafe(32)
+    db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user.id).delete()
+    db.add(
+        PasswordResetToken(
+            user_id=user.id,
+            token_hash=hashlib.sha256(token.encode()).hexdigest(),
+            expires_at=now + PASSWORD_RESET_VALID_SECONDS,
+            created_at=now,
+        )
+    )
+    db.commit()
+
+    try:
+        _send_password_reset_email(user.email, token)
+    except HTTPException:
+        db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user.id).delete()
+        db.commit()
+        raise
+    return {"message": "If an active staff account exists for that email, a reset link has been sent."}
+
+
+@router.post("/password-reset/confirm")
+def confirm_password_reset(body: PasswordResetIn, db: Session = Depends(get_db)):
+    """Replace a staff password with a one-time, unexpired reset token."""
+    token_hash = hashlib.sha256(body.token.encode()).hexdigest()
+    reset_token = db.scalar(
+        select(PasswordResetToken).where(
+            PasswordResetToken.token_hash == token_hash,
+            PasswordResetToken.expires_at > time.time(),
+        )
+    )
+    if reset_token is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This reset link is invalid or expired. Request a new one.")
+
+    user = db.get(User, reset_token.user_id)
+    if user is None or not user.is_active or user.role not in {"teacher", "admin"}:
+        db.delete(reset_token)
+        db.commit()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This reset link is invalid or expired. Request a new one.")
+
+    user.password_hash = hash_password(body.password)
+    db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user.id).delete()
+    db.commit()
+    return {"message": "Password reset successfully. Sign in with your new password."}
 
 
 @router.post("/bootstrap-admin")

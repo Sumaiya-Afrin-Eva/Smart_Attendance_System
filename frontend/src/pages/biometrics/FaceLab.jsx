@@ -15,6 +15,8 @@ import {
 } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
 
+const LIVENESS_POLL_INTERVAL_MS = 150
+
 const captureFrame = (video, maxWidth = 640) => new Promise((resolve, reject) => {
   const scale = Math.min(1, maxWidth / video.videoWidth)
   const canvas = document.createElement('canvas')
@@ -142,7 +144,7 @@ export default function FaceLab() {
         })
         if (cancelled) return
         setLiveness(data)
-        if (!data.liveness) timer = window.setTimeout(checkFrame, 350)
+        if (!data.liveness) timer = window.setTimeout(checkFrame, LIVENESS_POLL_INTERVAL_MS)
       } catch (err) {
         if (cancelled) return
         setLiveness({

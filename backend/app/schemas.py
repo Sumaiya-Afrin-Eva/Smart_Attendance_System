@@ -23,6 +23,15 @@ class PasswordLoginIn(BaseModel):
     access_code: str | None = None
 
 
+class PasswordResetRequestIn(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetIn(BaseModel):
+    token: str = Field(min_length=20, max_length=256)
+    password: str = Field(min_length=12, max_length=128)
+
+
 class AdminBootstrapIn(BaseModel):
     email: EmailStr
     name: str = Field(min_length=3, max_length=120)
