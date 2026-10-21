@@ -47,15 +47,14 @@ export default function Login() {
     setLoading(true)
     try {
       const signedIn = await action()
-      const destination = signedIn.role === 'student' && !signedIn.onboarding?.complete
-const destination =
-  signedIn.role === 'student' && !signedIn.onboarding?.complete
-    ? signedIn.onboarding?.profile && !signedIn.onboarding?.face
-      ? '/student/setup/face'
-      : '/student/setup'
-    : signedIn.role === 'system_admin'
-      ? '/admin'
-      : `/${signedIn.role}`
+      const destination =
+        signedIn.role === 'student' && !signedIn.onboarding?.complete
+          ? signedIn.onboarding?.profile && !signedIn.onboarding?.face
+            ? '/student/setup/face'
+            : '/student/setup'
+          : signedIn.role === 'system_admin'
+            ? '/admin'
+            : `/${signedIn.role}`
       navigate(destination, { replace: true })
     } catch (err) {
       setError(err.message)

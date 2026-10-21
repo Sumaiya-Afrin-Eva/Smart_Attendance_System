@@ -29,7 +29,6 @@ export const NAV = {
     { to: '/admin/routine', label: 'Routine Management', icon: CalendarDays },
     { to: '/admin/assignments', label: 'Teacher Assignment', icon: ClipboardCheck },
     { to: '/admin/teachers', label: 'Teacher Management', icon: Users },
-    { to: '/admin/students', label: 'Student Management', icon: GraduationCap },
     { to: '/admin/alerts', label: 'Security Alerts', icon: ShieldAlert },
     { to: '/admin/settings', label: 'System Settings', icon: Settings },
   ],

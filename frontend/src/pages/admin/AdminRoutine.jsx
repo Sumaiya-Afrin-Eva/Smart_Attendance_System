@@ -596,25 +596,35 @@ export default function AdminRoutine() {
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-700 mb-3">
             <CalendarDays className="h-7 w-7" />
           </div>
-          <h3 className="text-base font-bold text-slate-900">No Routine Slots Found</h3>
+          <h3 className="text-base font-bold text-slate-900">
+            {routine.length === 0 ? 'No Routine Schedule Uploaded' : 'No Routine Slots Found'}
+          </h3>
           <p className="mt-1 text-xs text-slate-500 max-w-md">
-            No class routine slots match the selected filters ({selectedDept} {selectedSem} Sec {selectedSec}).
-            Add routine entries manually or import your department schedule via Excel.
+            {routine.length === 0
+              ? 'No class routines exist yet. Upload your timetable using an Excel or CSV file, or add class periods manually.'
+              : `No class routine slots match the selected filters (${selectedDept} ${selectedSem} Sec ${selectedSec}). Add routine entries manually or import your schedule via Excel.`}
           </p>
-          <div className="mt-4 flex items-center gap-2.5">
-            <button
-              onClick={openAddModal}
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-800 shadow-2xs"
-            >
-              <Plus className="h-4 w-4" />
-              Add Class Slot
-            </button>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2.5">
             <button
               onClick={() => setShowUploadModal(true)}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-2xs"
+              className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-800 shadow-2xs"
             >
               <UploadCloud className="h-4 w-4" />
               Import Excel
+            </button>
+            <button
+              onClick={handleDownloadTemplate}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-2xs"
+            >
+              <Download className="h-4 w-4" />
+              Download Template
+            </button>
+            <button
+              onClick={openAddModal}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 shadow-2xs"
+            >
+              <Plus className="h-4 w-4" />
+              Add Class Slot
             </button>
           </div>
         </div>
