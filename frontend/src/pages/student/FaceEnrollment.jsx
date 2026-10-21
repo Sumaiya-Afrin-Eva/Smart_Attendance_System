@@ -3,6 +3,7 @@ import { CheckCircle2, Camera, ChevronLeft, CircleAlert, RotateCcw, ShieldCheck 
 import { useNavigate } from 'react-router-dom'
 import api, { errorMessage } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+import { useProfile } from '../../lib/queries'
 
 const LIVENESS_POLL_INTERVAL_MS = 150
 
@@ -17,6 +18,7 @@ const captureSteps = [
 export default function FaceEnrollment() {
   const navigate = useNavigate()
   const { refresh, logout } = useAuth()
+  const { data: profile } = useProfile()
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const checkTimerRef = useRef(null)
@@ -179,9 +181,9 @@ export default function FaceEnrollment() {
         </button>
         <section className="overflow-hidden rounded-3xl border border-stone-200 bg-white shadow-sm">
           <div className="border-b border-stone-100 bg-emerald-900 px-6 py-7 text-white sm:px-10">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-200">Step 2 of 2 · Face enrollment</p>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-200">Semester {profile?.current_semester ?? ''} · Face enrollment</p>
             <h1 className="mt-2 font-display text-3xl font-bold">Register your face securely</h1>
-            <p className="mt-2 max-w-2xl text-sm text-emerald-100">Follow each direction and capture one live photo at a time. Your previous attendance and class history remain unchanged.</p>
+            <p className="mt-2 max-w-2xl text-sm text-emerald-100">Complete this once when you first activate a semester. You will not need to enroll again when returning to a semester you have already completed. Previous attendance and class history remain unchanged.</p>
           </div>
           <div className="grid gap-8 p-6 sm:p-10 lg:grid-cols-[1fr_0.8fr]">
             <div className="space-y-4">

@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_attendance.db"
 
@@ -22,6 +22,7 @@ from app.models import (
     PasswordResetToken,
     StudentProfile,
     StudentRoster,
+    StudentSemesterFaceEnrollment,
     User,
 )
 from app.security import create_token, hash_password, verify_password
@@ -534,6 +535,146 @@ def test_registration_requires_matching_roster_photo_and_offered_session_term():
             select(Enrollment.id).where(
                 Enrollment.student_id == student.id,
                 Enrollment.course_id == course.id,
+            )
+        ) is not None
+
+
+def test_semester_face_enrollment_is_required_once_and_keeps_old_attendance(monkeypatch, tmp_path):
+    reset_db()
+    client = TestClient(app)
+    student_headers = headers_for("student1@stud.kuet.ac.bd")
+    monkeypatch.setattr(settings, "storage_dir", tmp_path / "storage")
+
+    with SessionLocal() as db:
+        student = db.scalar(select(User).where(User.email == "student1@stud.kuet.ac.bd"))
+        student_id = student.id
+        roster = StudentRoster(
+            full_name="Student One",
+            roll="2107001",
+            email=student.email,
+            department="CSE",
+            session="2021-2022",
+            face_sample_paths='["picture/old-face.jpg"]',
+            face_enrollment_version=1,
+            photo_data=b"old-enrolled-face",
+            photo_mime_type="image/jpeg",
+            is_active=True,
+        )
+        old_course = Course(
+            code="CSE 3201",
+            title="Previous semester course",
+            department="CSE",
+            semester="3-2",
+            session="2021-2022",
+            course_type="Theory",
+        )
+        new_course = Course(
+            code="CSE 4101",
+            title="New semester course",
+            department="CSE",
+            semester="4-1",
+            session="2021-2022",
+            course_type="Theory",
+        )
+        db.add_all([roster, old_course, new_course])
+        db.flush()
+        profile = StudentProfile(
+            user_id=student.id,
+            roster_id=roster.id,
+            roll=roster.roll,
+            full_name=roster.full_name,
+            department=roster.department,
+            series="2021",
+            session=roster.session,
+            current_semester="3-2",
+        )
+        db.add(profile)
+        db.flush()
+        old_session = ClassSession(
+            course_id=old_course.id,
+            start_at=datetime.now(),
+            end_at=datetime.now(),
+            status="completed",
+        )
+        db.add_all([
+            Enrollment(
+                student_id=student.id,
+                course_id=old_course.id,
+                semester="3-2",
+                created_at=datetime.now() - timedelta(days=1),
+            ),
+            Enrollment(student_id=student.id, course_id=new_course.id, semester="4-1"),
+            CourseRosterAssignment(course_id=old_course.id, roster_id=roster.id),
+            CourseRosterAssignment(course_id=new_course.id, roster_id=roster.id),
+            old_session,
+        ])
+        db.flush()
+        db.add(Attendance(
+            session_id=old_session.id,
+            student_id=student.id,
+            status="present",
+            method="face",
+        ))
+        db.commit()
+
+    main_module.backfill_legacy_semester_face_enrollments()
+    body = {
+        "full_name": "Student One",
+        "roll": "2107001",
+        "department": "CSE",
+        "series": "2021",
+        "session": "2021-2022",
+        "current_semester": "4-1",
+    }
+    moved_forward = client.put("/api/students/me/profile", headers=student_headers, json=body)
+    assert moved_forward.status_code == 200, moved_forward.text
+    assert moved_forward.json()["onboarding"]["face"] is False
+    main_module.backfill_legacy_semester_face_enrollments()
+    after_restart_migration = client.get("/api/auth/me", headers=student_headers)
+    assert after_restart_migration.status_code == 200, after_restart_migration.text
+    assert after_restart_migration.json()["onboarding"]["face"] is False
+
+    class ValidFaceService:
+        def validate_single_human_face(self, image):
+            return None
+
+    monkeypatch.setattr("app.routers.students.get_face_service", ValidFaceService)
+    photos = [
+        ("photos", (f"face-{index}.jpg", b"\xff\xd8\xff" + bytes([index]), "image/jpeg"))
+        for index in range(5)
+    ]
+    enrolled = client.post(
+        "/api/students/me/face-samples",
+        headers=student_headers,
+        files=photos,
+    )
+    assert enrolled.status_code == 200, enrolled.text
+
+    with SessionLocal() as db:
+        assert db.scalar(
+            select(StudentSemesterFaceEnrollment.id).where(
+                StudentSemesterFaceEnrollment.user_id == student_id,
+                StudentSemesterFaceEnrollment.semester == "4-1",
+            )
+        ) is not None
+
+    body["current_semester"] = "3-2"
+    moved_back = client.put("/api/students/me/profile", headers=student_headers, json=body)
+    assert moved_back.status_code == 200, moved_back.text
+    assert moved_back.json()["onboarding"]["face"] is True
+    old_dashboard = client.get("/api/students/me/dashboard?semester=3-2", headers=student_headers)
+    assert old_dashboard.status_code == 200, old_dashboard.text
+    assert old_dashboard.json()["summary"]["attended"] == 1
+
+    body["current_semester"] = "4-1"
+    returned_forward = client.put("/api/students/me/profile", headers=student_headers, json=body)
+    assert returned_forward.status_code == 200, returned_forward.text
+    assert returned_forward.json()["onboarding"]["face"] is True
+    with SessionLocal() as db:
+        assert db.scalar(
+            select(Enrollment.id).where(
+                Enrollment.student_id == student_id,
+                Enrollment.semester == "3-2",
             )
         ) is not None
 

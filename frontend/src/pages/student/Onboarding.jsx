@@ -43,7 +43,7 @@ export default function Onboarding() {
             Complete Your Student Registration
           </h1>
           <p className="mt-1.5 text-sm sm:text-base text-stone-600">
-            Signed in as <strong className="text-stone-900 font-semibold">{user?.email}</strong>. Enter your academic details first; after saving, you will complete face enrollment on a separate guided screen.
+            Signed in as <strong className="text-stone-900 font-semibold">{user?.email}</strong>. Complete your academic profile once; you will only return here if your student record has not been set up yet.
           </p>
         </div>
 

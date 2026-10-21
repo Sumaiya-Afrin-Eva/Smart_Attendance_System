@@ -2,7 +2,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..models import Course, StudentProfile, User
+from ..models import Course, StudentProfile, StudentSemesterFaceEnrollment, User
 from .face_service import (
     DEFAULT_SIMILARITY_THRESHOLD,
     EMBEDDING_DIM,
@@ -41,9 +41,13 @@ def onboarding_status(db: Session, user: User) -> dict | None:
     )
     face_enrolled = bool(
         profile
-        and profile.roster
-        and profile.roster.face_enrollment_version >= FACE_ENROLLMENT_VERSION
-        and profile.roster.face_sample_paths
+        and db.scalar(
+            select(StudentSemesterFaceEnrollment.id).where(
+                StudentSemesterFaceEnrollment.user_id == user.id,
+                StudentSemesterFaceEnrollment.semester == profile.current_semester,
+                StudentSemesterFaceEnrollment.enrollment_version >= FACE_ENROLLMENT_VERSION,
+            )
+        )
     )
     return {
         "profile": roster_verified,

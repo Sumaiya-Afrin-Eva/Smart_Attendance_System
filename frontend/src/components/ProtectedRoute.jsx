@@ -2,8 +2,7 @@ import { Navigate, Outlet } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { FullPageSpinner } from './ui'
 
-// setupPage=true marks the student registration page itself
-export default function ProtectedRoute({ role, setupPage = false }) {
+export default function ProtectedRoute({ role, setupStep }) {
   const { user, onboarding, loading } = useAuth()
 
   if (loading) return <FullPageSpinner />
@@ -12,8 +11,16 @@ export default function ProtectedRoute({ role, setupPage = false }) {
 
   if (role === 'student') {
     const registered = onboarding?.complete
-    if (!registered && !setupPage) return <Navigate to="/student/setup" replace />  // finish registration first
-    if (registered && setupPage) return <Navigate to="/student" replace />
+    if (!registered && !setupStep) {
+      return <Navigate to={onboarding?.profile ? '/student/setup/face' : '/student/setup'} replace />
+    }
+    if (registered && setupStep) return <Navigate to="/student" replace />
+    if (setupStep === 'profile' && onboarding?.profile) {
+      return <Navigate to={onboarding?.face ? '/student' : '/student/setup/face'} replace />
+    }
+    if (setupStep === 'face' && !onboarding?.profile) {
+      return <Navigate to="/student/setup" replace />
+    }
   }
 
   return <Outlet />
