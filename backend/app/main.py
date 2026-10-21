@@ -114,8 +114,10 @@ def ensure_database_schema() -> None:
             conn.exec_driver_sql("ALTER TABLE student_profiles ADD COLUMN roster_id INTEGER REFERENCES student_roster(id)")
         if "session" not in profile_col_names:
             conn.exec_driver_sql("ALTER TABLE student_profiles ADD COLUMN session VARCHAR(20) DEFAULT ''")
-        if "face_status" in profile_col_names:
-            conn.exec_driver_sql("ALTER TABLE student_profiles DROP COLUMN face_status")
+        if "face_status" not in profile_col_names:
+            conn.exec_driver_sql(
+                "ALTER TABLE student_profiles ADD COLUMN face_status VARCHAR(20) NOT NULL DEFAULT 'none'"
+            )
         if {"phone", "section"}.issubset(profile_col_names):
             conn.exec_driver_sql(
                 "UPDATE student_profiles "

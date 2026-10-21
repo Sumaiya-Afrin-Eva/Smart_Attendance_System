@@ -15,6 +15,13 @@ class Settings(BaseSettings):
     admin_access_code: str = ""
     google_client_id: str = ""
     gemini_api_key: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
     student_email_domain: str = "stud.kuet.ac.bd"
     dev_login_enabled: bool = True
     frontend_origin: str = "http://localhost:5173"

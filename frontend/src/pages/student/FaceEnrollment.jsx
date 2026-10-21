@@ -4,6 +4,8 @@ import { useNavigate } from 'react-router-dom'
 import api, { errorMessage } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 
+const LIVENESS_POLL_INTERVAL_MS = 150
+
 const captureSteps = [
   { title: 'Look straight at the camera', detail: 'Keep your head straight and look directly into the camera.' },
   { title: 'Turn your head slightly left', detail: 'Slowly turn your face a little to your left.' },
@@ -19,6 +21,7 @@ export default function FaceEnrollment() {
   const streamRef = useRef(null)
   const checkTimerRef = useRef(null)
   const checkingRef = useRef(false)
+  const checkAbortRef = useRef(null)
   const [cameraActive, setCameraActive] = useState(false)
   const [humanDetected, setHumanDetected] = useState(false)
   const [livenessReady, setLivenessReady] = useState(false)
@@ -30,6 +33,7 @@ export default function FaceEnrollment() {
 
   useEffect(() => () => {
     if (checkTimerRef.current) window.clearTimeout(checkTimerRef.current)
+    checkAbortRef.current?.abort()
     streamRef.current?.getTracks().forEach((track) => track.stop())
   }, [])
 
@@ -40,51 +44,75 @@ export default function FaceEnrollment() {
 
   const checkFrame = async () => {
     if (!streamRef.current || !videoRef.current || checkingRef.current) return
-    if (videoRef.current.readyState < 2) {
+    const activeStream = streamRef.current
+    const video = videoRef.current
+    if (video.readyState < 2 || video.videoWidth === 0) {
       scheduleCheck(100)
       return
     }
     checkingRef.current = true
+    const controller = new AbortController()
+    checkAbortRef.current = controller
     const canvas = document.createElement('canvas')
-    const video = videoRef.current
-    const scale = Math.min(1, 480 / (video.videoWidth || 480))
-    canvas.width = Math.round((video.videoWidth || 480) * scale)
-    canvas.height = Math.round((video.videoHeight || 360) * scale)
-    canvas.getContext('2d').drawImage(videoRef.current, 0, 0)
-    canvas.toBlob(async (blob) => {
-      try {
-        if (!blob) return
-        const formData = new FormData()
-        formData.append('photo', blob, 'live-frame.jpg')
-        const { data } = await api.post('/students/me/face-check', formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        })
-        setHumanDetected(data.human)
-        setLivenessReady(data.liveness === true)
-        setStatus(data.message)
-      } catch (error) {
-        setHumanDetected(false)
-        setLivenessReady(false)
-        setStatus(errorMessage(error, 'Live face verification is unavailable.'))
-      } finally {
+    const scale = Math.min(1, 480 / video.videoWidth)
+    canvas.width = Math.round(video.videoWidth * scale)
+    canvas.height = Math.round(video.videoHeight * scale)
+    const context = canvas.getContext('2d')
+    if (!context) {
+      checkAbortRef.current = null
+      checkingRef.current = false
+      setStatus('Could not prepare a camera frame. Please restart the camera.')
+      return
+    }
+    context.drawImage(video, 0, 0, canvas.width, canvas.height)
+
+    try {
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.78))
+      if (!blob) throw new Error('Could not capture a camera frame. Please restart the camera.')
+      const formData = new FormData()
+      formData.append('photo', blob, 'live-frame.jpg')
+      const { data } = await api.post('/students/me/face-check', formData, {
+        signal: controller.signal,
+        skipNetworkRetry: true,
+      })
+      if (controller.signal.aborted || streamRef.current !== activeStream) return
+      setHumanDetected(data.human)
+      setLivenessReady(data.liveness === true)
+      setStatus(data.message)
+    } catch (error) {
+      if (controller.signal.aborted || streamRef.current !== activeStream) return
+      setHumanDetected(false)
+      setLivenessReady(false)
+      setStatus(errorMessage(error, error.message || 'Live face verification is unavailable.'))
+    } finally {
+      if (checkAbortRef.current === controller) {
+        checkAbortRef.current = null
         checkingRef.current = false
-        if (streamRef.current) scheduleCheck(500)
+        if (streamRef.current === activeStream) scheduleCheck(LIVENESS_POLL_INTERVAL_MS)
       }
-    }, 'image/jpeg', 0.78)
+    }
   }
 
   const startCamera = async () => {
+    setHumanDetected(false)
+    setLivenessReady(false)
+    setStatus('Checking the live camera for a human face...')
     try {
-      streamRef.current = await navigator.mediaDevices.getUserMedia({
+      const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
         audio: false,
       })
-      videoRef.current.srcObject = streamRef.current
+      streamRef.current = stream
+      videoRef.current.srcObject = stream
       await videoRef.current.play()
       setCameraActive(true)
-      setStatus('Checking the live camera for a human face...')
       scheduleCheck(0)
     } catch {
+      streamRef.current?.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+      setCameraActive(false)
+      setHumanDetected(false)
+      setLivenessReady(false)
       setStatus('Camera permission is required. Allow camera access and try again.')
     }
   }
@@ -92,12 +120,16 @@ export default function FaceEnrollment() {
   const stopCamera = () => {
     if (checkTimerRef.current) window.clearTimeout(checkTimerRef.current)
     checkTimerRef.current = null
+    checkAbortRef.current?.abort()
+    checkAbortRef.current = null
+    checkingRef.current = false
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
+    if (videoRef.current) videoRef.current.srcObject = null
     setCameraActive(false)
     setHumanDetected(false)
     setLivenessReady(false)
-    setStatus('Camera stopped.')
+    setStatus('Camera stopped. Start it again to continue face enrollment.')
   }
 
   const capture = () => {

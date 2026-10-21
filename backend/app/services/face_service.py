@@ -42,7 +42,7 @@ EMBEDDING_DIM = 512
 class FaceService:
     """Service for face detection, 512-d ArcFace embedding extraction, and cosine similarity matching."""
 
-    LIVENESS_READY_SECONDS = 1.5
+    LIVENESS_READY_SECONDS = 1.0
     LIVENESS_VALID_SECONDS = 8.0
     EMBEDDING_CACHE_SIZE = 2048
 
@@ -52,6 +52,7 @@ class FaceService:
         self.det_size = det_size
         self._app: FaceAnalysis | None = None
         self._initialized: bool = False
+        self._app_lock = Lock()
         self._cache: dict[tuple[str, float], np.ndarray] = {}
         self._embedding_cache: OrderedDict[bytes, np.ndarray] = OrderedDict()
         self._embedding_cache_lock = Lock()
@@ -79,28 +80,29 @@ class FaceService:
 
     def _get_app(self) -> FaceAnalysis:
         """Lazy load the InsightFace model on first use."""
-        if self._initialized and self._app is not None:
+        with self._app_lock:
+            if self._initialized and self._app is not None:
+                return self._app
+
+            if FaceAnalysis is None:
+                raise RuntimeError(
+                    "InsightFace is not installed. Please install it with: pip install insightface onnxruntime"
+                )
+
+            logger.info("Initializing InsightFace model: %s (det_size=%s)...", self.model_name, self.det_size)
+            try:
+                # Try GPU if available (ctx_id >= 0), fallback to CPU if not
+                providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if self.ctx_id >= 0 else ["CPUExecutionProvider"]
+                app = FaceAnalysis(name=self.model_name, providers=providers)
+                app.prepare(ctx_id=self.ctx_id, det_size=self.det_size)
+            except Exception as exc:
+                logger.warning("GPU execution provider failed (%s), falling back to CPUExecutionProvider", exc)
+                app = FaceAnalysis(name=self.model_name, providers=["CPUExecutionProvider"])
+                app.prepare(ctx_id=-1, det_size=self.det_size)
+
+            self._app = app
+            self._initialized = True
             return self._app
-
-        if FaceAnalysis is None:
-            raise RuntimeError(
-                "InsightFace is not installed. Please install it with: pip install insightface onnxruntime"
-            )
-
-        logger.info("Initializing InsightFace model: %s (det_size=%s)...", self.model_name, self.det_size)
-        try:
-            # Try GPU if available (ctx_id >= 0), fallback to CPU if not
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if self.ctx_id >= 0 else ["CPUExecutionProvider"]
-            app = FaceAnalysis(name=self.model_name, providers=providers)
-            app.prepare(ctx_id=self.ctx_id, det_size=self.det_size)
-        except Exception as exc:
-            logger.warning("GPU execution provider failed (%s), falling back to CPUExecutionProvider", exc)
-            app = FaceAnalysis(name=self.model_name, providers=["CPUExecutionProvider"])
-            app.prepare(ctx_id=-1, det_size=self.det_size)
-
-        self._app = app
-        self._initialized = True
-        return self._app
 
     @staticmethod
     def to_cv2_image(image: Union[str, Path, bytes, np.ndarray]) -> np.ndarray:
@@ -243,7 +245,7 @@ class FaceService:
                 "blink_detected": False,
                 "movement_detected": False,
                 "liveness": False,
-                "message": "No single human face detected. A still photo cannot be used.",
+                "message": "Exactly one clear face must be visible. Uncover the camera, center your face, and face a well-lit area.",
             }
 
         landmarks = result.multi_face_landmarks[0].landmark
@@ -257,14 +259,16 @@ class FaceService:
         state = self._liveness.setdefault(session_key, {
             "closed": False,
             "blink": False,
+            "open_ear": None,
             "movement": False,
             "position": position,
             "started_at": now,
         })
-        if now - state.get("last_seen_at", now) > 2.5:
+        if now - state.get("last_seen_at", now) > 5.0:
             state.update({
                 "closed": False,
                 "blink": False,
+                "open_ear": None,
                 "movement": False,
                 "position": position,
                 "started_at": now,
@@ -273,14 +277,10 @@ class FaceService:
         if state.get("started_at") is None:
             state["started_at"] = now
 
-        if ear < 0.18:
-            state["closed"] = True
-        elif state["closed"] and ear > 0.21:
-            state["blink"] = True
-            state["closed"] = False
+        self.update_blink_state(state, ear)
 
         previous = state.get("position", position)
-        movement_detected = abs(position[0] - previous[0]) > 0.018 or abs(position[1] - previous[1]) > 0.018
+        movement_detected = abs(position[0] - previous[0]) > 0.012 or abs(position[1] - previous[1]) > 0.012
         if movement_detected:
             state["movement"] = True
         state["position"] = position
@@ -290,16 +290,22 @@ class FaceService:
         if liveness and state.get("live_embedding") is None:
             state["live_embedding"] = self.extract_embedding(frame)
             liveness = state["live_embedding"] is not None
+        if liveness:
+            message = "Live human verified. You can scan now."
+        elif not state["blink"] and not state["movement"]:
+            message = "Face detected. Blink once and slowly move your head."
+        elif not state["blink"]:
+            message = "Head movement detected. Now blink once."
+        elif not state["movement"]:
+            message = "Blink detected. Slowly turn or move your head."
+        else:
+            message = "Blink and movement detected. Keep your face visible."
         return {
             "human": True,
             "blink_detected": state["blink"],
             "movement_detected": state["movement"],
             "liveness": liveness,
-            "message": (
-                "Live human verified. You can capture now."
-                if liveness else
-                "Keep your face visible, blink once, and slowly move your head."
-            ),
+            "message": message,
         }
 
     def consume_liveness(self, session_key: str) -> np.ndarray | None:
@@ -318,6 +324,23 @@ class FaceService:
         )
         horizontal = np.linalg.norm(np.array([p1.x - p4.x, p1.y - p4.y]))
         return float(vertical / max(horizontal, 1e-6))
+
+    @staticmethod
+    def update_blink_state(state: dict, ear: float) -> None:
+        """Detect a close-and-reopen event relative to this face's open-eye ratio."""
+        baseline = state.get("open_ear")
+        if baseline is None:
+            if ear >= 0.14:
+                state["open_ear"] = ear
+            return
+
+        if ear < baseline * 0.72:
+            state["closed"] = True
+        elif state.get("closed") and ear > baseline * 0.82:
+            state["blink"] = True
+            state["closed"] = False
+        elif not state.get("closed") and ear > baseline * 0.82:
+            state["open_ear"] = baseline * 0.9 + ear * 0.1
 
     def extract_all_embeddings(self, image: Union[str, Path, bytes, np.ndarray]) -> list[dict]:
         """Extract embeddings and bounding boxes for all faces found in the image."""

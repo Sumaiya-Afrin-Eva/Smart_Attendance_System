@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, select
 from app.config import BASE_DIR, Settings, settings
 from app.database import Base, SessionLocal, engine
 from app import main as main_module
+from app.routers import auth as auth_module
 from app.main import app, ensure_seed_settings
 from app.models import (
     Attendance,
@@ -18,11 +19,12 @@ from app.models import (
     CourseRosterAssignment,
     Enrollment,
     FaceSample,
+    PasswordResetToken,
     StudentProfile,
     StudentRoster,
     User,
 )
-from app.security import create_token
+from app.security import create_token, hash_password, verify_password
 
 
 def test_relative_sqlite_database_url_resolves_from_backend_directory():
@@ -566,6 +568,107 @@ def test_admin_bootstrap_and_login_require_server_access_code(monkeypatch):
     assert allowed_login.status_code == 200, allowed_login.text
 
 
+def test_staff_password_reset_uses_one_time_email_token(monkeypatch):
+    reset_db()
+    monkeypatch.setattr(settings, "smtp_host", "smtp.test")
+    monkeypatch.setattr(settings, "smtp_from", "noreply@test")
+    monkeypatch.setattr(settings, "smtp_username", "")
+    monkeypatch.setattr(settings, "smtp_password", "")
+    sent = []
+    monkeypatch.setattr(auth_module, "_send_password_reset_email", lambda email, token: sent.append((email, token)))
+    with SessionLocal() as db:
+        db.add(User(
+            email="faculty@kuet.ac.bd",
+            name="Faculty Member",
+            role="teacher",
+            password_hash=hash_password("old-password-value"),
+        ))
+        db.commit()
+
+    client = TestClient(app)
+    unknown = client.post(
+        "/api/auth/password-reset/request",
+        json={"email": "unknown@kuet.ac.bd"},
+    )
+    assert unknown.status_code == 200
+    assert unknown.json()["message"] == "If an active staff account exists for that email, a reset link has been sent."
+    assert sent == []
+
+    requested = client.post(
+        "/api/auth/password-reset/request",
+        json={"email": "faculty@kuet.ac.bd"},
+    )
+    assert requested.status_code == 200
+    assert len(sent) == 1
+    assert sent[0][0] == "faculty@kuet.ac.bd"
+
+    new_password = "a-new-secure-password"
+    confirmed = client.post(
+        "/api/auth/password-reset/confirm",
+        json={"token": sent[0][1], "password": new_password},
+    )
+    assert confirmed.status_code == 200
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(User.email == "faculty@kuet.ac.bd"))
+        assert verify_password(new_password, user.password_hash)
+        assert db.query(PasswordResetToken).count() == 0
+
+    reused = client.post(
+        "/api/auth/password-reset/confirm",
+        json={"token": sent[0][1], "password": "another-secure-password"},
+    )
+    assert reused.status_code == 400
+
+
+def test_staff_password_reset_rejects_expired_token(monkeypatch):
+    reset_db()
+    monkeypatch.setattr(settings, "smtp_host", "smtp.test")
+    monkeypatch.setattr(settings, "smtp_from", "noreply@test")
+    monkeypatch.setattr(settings, "smtp_username", "")
+    monkeypatch.setattr(settings, "smtp_password", "")
+    sent = []
+    monkeypatch.setattr(auth_module, "_send_password_reset_email", lambda email, token: sent.append(token))
+    with SessionLocal() as db:
+        db.add(User(
+            email="faculty@kuet.ac.bd",
+            name="Faculty Member",
+            role="teacher",
+            password_hash=hash_password("old-password-value"),
+        ))
+        db.commit()
+
+    client = TestClient(app)
+    requested = client.post(
+        "/api/auth/password-reset/request",
+        json={"email": "faculty@kuet.ac.bd"},
+    )
+    assert requested.status_code == 200
+    with SessionLocal() as db:
+        reset_token = db.scalar(select(PasswordResetToken))
+        reset_token.expires_at = 0
+        db.commit()
+
+    expired = client.post(
+        "/api/auth/password-reset/confirm",
+        json={"token": sent[0], "password": "a-new-secure-password"},
+    )
+    assert expired.status_code == 400
+
+
+def test_staff_password_reset_requires_smtp_configuration(monkeypatch):
+    reset_db()
+    monkeypatch.setattr(settings, "smtp_host", "")
+    monkeypatch.setattr(settings, "smtp_from", "")
+
+    response = TestClient(app).post(
+        "/api/auth/password-reset/request",
+        json={"email": "admin@kuet.ac.bd"},
+    )
+
+    assert response.status_code == 503
+    assert "not configured" in response.json()["detail"]
+
+
 def test_legacy_roster_photo_path_is_migrated_to_sqlite_blob(tmp_path, monkeypatch):
     legacy_photo = tmp_path / "official.jpg"
     photo_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 20
@@ -601,7 +704,7 @@ def test_legacy_roster_photo_path_is_migrated_to_sqlite_blob(tmp_path, monkeypat
         }
     assert migrated_data == photo_bytes
     assert mime_type == "image/jpeg"
-    assert "face_status" not in profile_columns
+    assert "face_status" in profile_columns
     assert {
         "education",
         "professional_membership",

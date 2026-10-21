@@ -297,6 +297,7 @@ export default function Login() {
                     </label>
                     <button
                       type="button"
+                      onClick={() => navigate('/forgot-password', { state: { email } })}
                       className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 transition cursor-pointer"
                     >
                       Forgot password?

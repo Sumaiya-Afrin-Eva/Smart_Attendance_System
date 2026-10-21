@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import ProtectedRoute from './components/ProtectedRoute'
 import DashboardLayout from './layouts/DashboardLayout'
 import Login from './pages/auth/Login'
+import PasswordRecovery from './pages/auth/PasswordRecovery'
 import Placeholder from './pages/Placeholder'
 import Onboarding from './pages/student/Onboarding'
 import FaceEnrollment from './pages/student/FaceEnrollment'
@@ -61,6 +62,8 @@ export default function App() {
     <Routes>
       <Route path="/" element={<Navigate to="/login" replace />} />
       <Route path="/login" element={<Login />} />
+      <Route path="/forgot-password" element={<PasswordRecovery />} />
+      <Route path="/reset-password" element={<PasswordRecovery />} />
 
       {/* Teacher */}
       <Route element={<ProtectedRoute role="teacher" />}>

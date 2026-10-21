@@ -14,7 +14,7 @@ from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -72,7 +72,7 @@ def _decode_image_payload(file: UploadFile | None, base64_str: str | None) -> by
 
 
 def _prepare_kiosk_gallery(face_svc, students: list[tuple[StudentRoster, StudentProfile, User]]) -> None:
-    """Load the recognition model and cache this course's registered face embeddings."""
+    """Warm recognition and cache registered faces after the kiosk is ready to use."""
     face_svc.warmup()
     for roster, _, _ in students:
         try:
@@ -116,7 +116,11 @@ def _eligible_students(db: Session, course_id: int):
 
 
 @router.post("/kiosk/open")
-def open_kiosk(body: KioskOpenRequest, db: Session = Depends(get_db)):
+def open_kiosk(
+    body: KioskOpenRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     """Open today's completed attendance session for one active course offering."""
     code = body.course_code.strip()
     courses = db.scalars(
@@ -142,10 +146,7 @@ def open_kiosk(body: KioskOpenRequest, db: Session = Depends(get_db)):
         )
 
     face_svc = get_face_service()
-    try:
-        _prepare_kiosk_gallery(face_svc, students)
-    except RuntimeError as exc:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    background_tasks.add_task(_prepare_kiosk_gallery, face_svc, students)
 
     now = datetime.now()
     day_start = datetime.combine(now.date(), time.min)
@@ -243,7 +244,10 @@ async def scan_kiosk(
             "Live verification is required. Blink and move your head in front of the camera; a still photo is not accepted.",
         )
 
-    query_emb = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
+    try:
+        query_emb = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
+    except RuntimeError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     if query_emb is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No clear face detected. Look at the camera and try again.")
     live_similarity = compute_similarity(query_emb, live_embedding)
@@ -264,6 +268,8 @@ async def scan_kiosk(
                 if stored_emb is not None:
                     student_scores.append((compute_similarity(query_emb, stored_emb), profile, matched_user))
         except Exception as exc:
+            if isinstance(exc, RuntimeError):
+                raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
             logger.warning("Failed processing admin photo for roster roll %s: %s", roster.roll, exc)
 
     if not student_scores:
