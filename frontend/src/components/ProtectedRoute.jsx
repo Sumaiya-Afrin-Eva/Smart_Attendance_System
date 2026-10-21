@@ -8,7 +8,11 @@ export default function ProtectedRoute({ role, setupPage = false }) {
 
   if (loading) return <FullPageSpinner />
   if (!user) return <Navigate to="/login" replace />                          // not logged in
-  if (user.role !== role) return <Navigate to={`/${user.role}`} replace />    // wrong role
+  const allowed = Array.isArray(role) ? role.includes(user.role) : user.role === role
+  if (!allowed) {
+    const defaultRoute = user.role === 'system_admin' ? '/admin' : `/${user.role}`
+    return <Navigate to={defaultRoute} replace />
+  }
 
   if (role === 'student') {
     const registered = onboarding?.complete

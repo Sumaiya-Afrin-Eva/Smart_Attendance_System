@@ -14,11 +14,11 @@ from sqlalchemy import delete, select
 
 from app.database import Base, SessionLocal, engine
 from app.models import (
-    Attendance, ClassSession, Course, Enrollment, FaceSample, StudentProfile, User,
+    Attendance, ClassSession, Course, CourseRosterAssignment, Enrollment, FaceSample,
+    StudentProfile, StudentRoster, User,
 )
 from app.security import hash_password
 
-# (code, title, credit, department, semester, type)
 COURSES = [
     ("CSE 3101", "Theory of Computation", 3.0, "CSE", "3-1", "Theory"),
     ("CSE 3103", "Microprocessors and Microcontrollers", 3.0, "CSE", "3-1", "Theory"),
@@ -38,7 +38,8 @@ COURSES = [
 ]
 
 STAFF = [
-    ("admin@kuet.ac.bd", "System Admin", "admin", "admin123"),
+    ("sysadmin@kuet.ac.bd", "System Administrator", "system_admin", "sysadmin123"),
+    ("admin@kuet.ac.bd", "Student Administrator", "admin", "admin123"),
     ("teacher@kuet.ac.bd", "Sk Md Masudul Ahsan", "teacher", "teacher123"),
 ]
 
@@ -82,19 +83,45 @@ def seed_demo(db):
         student = User(email=DEMO_EMAIL, name="Demo Student", role="student")
         db.add(student)
         db.flush()
+
+    # Roster record for admin verification & kiosk matching
+    roster = db.scalar(select(StudentRoster).where(StudentRoster.roll == "2107001"))
+    if not roster:
+        photo_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 20
+        face_sample = Path(__file__).parent / "storage" / "faces" / "6" / "01.jpg"
+        if face_sample.exists():
+            photo_bytes = face_sample.read_bytes()
+        roster = StudentRoster(
+            roll="2107001",
+            full_name="Demo Student",
+            email=DEMO_EMAIL,
+            department="CSE",
+            session="2025-2026",
+            phone="01700000000",
+            photo_data=photo_bytes,
+            photo_mime_type="image/jpeg",
+            is_active=True,
+        )
+        db.add(roster)
+        db.flush()
+
     db.add(StudentProfile(
-        user_id=student.id, roll="2107001", full_name="Demo Student", department="CSE",
-        series="2021", section="A", current_semester="3-2", face_status="submitted",
+        user_id=student.id, roster_id=roster.id, roll="2107001", full_name="Demo Student", department="CSE",
+        series="2021", session="2025-2026", section="A", current_semester="3-2",
     ))
 
     today = date.today()
     this_monday = today - timedelta(days=today.weekday())
     for code, (rate, weekday, hour, room) in DEMO_PLAN.items():
         course = db.scalar(select(Course).where(Course.code == code))
+        if not course:
+            continue
         db.add(Enrollment(
             student_id=student.id, course_id=course.id, semester="3-2",
             created_at=datetime.combine(this_monday - timedelta(weeks=PAST_WEEKS, days=1), time(9)),
         ))
+        if not db.scalar(select(CourseRosterAssignment).where(CourseRosterAssignment.course_id == course.id, CourseRosterAssignment.roster_id == roster.id)):
+            db.add(CourseRosterAssignment(course_id=course.id, roster_id=roster.id))
         db.execute(delete(ClassSession).where(ClassSession.course_id == course.id))
 
         past = []

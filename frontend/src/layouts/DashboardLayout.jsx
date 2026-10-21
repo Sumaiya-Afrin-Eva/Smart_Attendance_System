@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
-  Bell, BookOpen, ChevronLeft, ChevronRight, ClipboardCheck, FileText,
+  Bell, BookOpen, CalendarDays, ChevronLeft, ChevronRight, ClipboardCheck, FileText,
   GraduationCap, LayoutDashboard, LogOut, Menu, Radio, Settings,
-  UserRound, Users, X, Clock, Wifi, Scan,
+  ShieldAlert, UserRound, Users, X, Clock, Wifi, Scan,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
@@ -23,6 +23,16 @@ export const NAV = {
     { to: '/student/courses', label: 'My Courses', icon: BookOpen },
     { to: '/student/profile', label: 'Academic Profile', icon: UserRound },
   ],
+  system_admin: [
+    { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true },
+    { to: '/admin/courses', label: 'Course Management', icon: BookOpen },
+    { to: '/admin/routine', label: 'Routine Management', icon: CalendarDays },
+    { to: '/admin/assignments', label: 'Teacher Assignment', icon: ClipboardCheck },
+    { to: '/admin/teachers', label: 'Teacher Management', icon: Users },
+    { to: '/admin/students', label: 'Student Management', icon: GraduationCap },
+    { to: '/admin/alerts', label: 'Security Alerts', icon: ShieldAlert },
+    { to: '/admin/settings', label: 'System Settings', icon: Settings },
+  ],
   admin: [
     { to: '/admin/students', label: 'Student Records', icon: GraduationCap, end: true },
     { to: '/admin/students/new', label: 'Add Student', icon: UserRound, end: true },
@@ -31,11 +41,17 @@ export const NAV = {
   ],
 }
 
-const ROLE_LABEL = { teacher: 'Faculty Member', student: 'Undergraduate Student', admin: 'Student Administrator' }
+const ROLE_LABEL = {
+  teacher: 'Faculty Member',
+  student: 'Undergraduate Student',
+  admin: 'Student Administrator',
+  system_admin: 'System Administrator',
+}
 const ROLE_BADGE = {
   teacher: 'bg-emerald-50 text-emerald-800 border-emerald-200/80',
   student: 'bg-teal-50 text-teal-800 border-teal-200/80',
-  admin: 'bg-purple-50 text-purple-800 border-purple-200/80',
+  admin: 'bg-blue-50 text-blue-800 border-blue-200/80',
+  system_admin: 'bg-purple-50 text-purple-800 border-purple-200/80',
 }
 
 function getInitials(name = '') {
