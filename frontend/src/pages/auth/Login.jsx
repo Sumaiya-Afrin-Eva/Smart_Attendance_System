@@ -37,16 +37,24 @@ export default function Login() {
   }, [])
 
   if (checking) return null
-  if (user) return <Navigate to={`/${user.role}`} replace />
+  if (user) {
+    const defaultRoute = user.role === 'system_admin' ? '/admin' : `/${user.role}`
+    return <Navigate to={defaultRoute} replace />
+  }
 
   const submit = async (action) => {
     setError('')
     setLoading(true)
     try {
       const signedIn = await action()
-      const destination = signedIn.role === 'student' && !signedIn.onboarding?.complete
-        ? signedIn.onboarding?.profile && !signedIn.onboarding?.face ? '/student/setup/face' : '/student/setup'
-        : `/${signedIn.role}`
+      const destination =
+        signedIn.role === 'student' && !signedIn.onboarding?.complete
+          ? signedIn.onboarding?.profile && !signedIn.onboarding?.face
+            ? '/student/setup/face'
+            : '/student/setup'
+          : signedIn.role === 'system_admin'
+            ? '/admin'
+            : `/${signedIn.role}`
       navigate(destination, { replace: true })
     } catch (err) {
       setError(err.message)
