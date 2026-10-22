@@ -37,6 +37,7 @@ const captureFrame = (video, maxWidth = 640) => new Promise((resolve, reject) =>
 export default function FaceLab() {
   const [cameraActive, setCameraActive] = useState(false)
   const [scanning, setScanning] = useState(false)
+  const [scanMode, setScanMode] = useState('face')
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
   const [courseCode, setCourseCode] = useState('')
@@ -53,6 +54,8 @@ export default function FaceLab() {
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
+  const qrScanLockRef = useRef(false)
+  const lastQrTokenRef = useRef(null)
 
   // Live Digital Clock
   useEffect(() => {
@@ -70,7 +73,7 @@ export default function FaceLab() {
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
         audio: false,
       })
 
@@ -123,7 +126,7 @@ export default function FaceLab() {
   }, [cameraActive])
 
   useEffect(() => {
-    if (!cameraActive || !activeClass) return undefined
+    if (!cameraActive || !activeClass || scanMode !== 'face') return undefined
     let cancelled = false
     let timer
 
@@ -161,7 +164,7 @@ export default function FaceLab() {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [cameraActive, activeClass, livenessRetryKey])
+  }, [cameraActive, activeClass, livenessRetryKey, scanMode])
 
   const handleOpenKiosk = async (event) => {
     event.preventDefault()
@@ -171,6 +174,7 @@ export default function FaceLab() {
     setLiveness({ human: false, liveness: false, message: 'Start the camera to verify a live face.' })
     try {
       const { data } = await api.post('/face/kiosk/open', { course_code: courseCode })
+      lastQrTokenRef.current = null
       setActiveClass(data)
     } catch (err) {
       setError(errorMessage(err, 'Could not open the attendance kiosk for this course.'))
@@ -185,8 +189,87 @@ export default function FaceLab() {
     setResult(null)
     setRecentLogs([])
     setError('')
+    setScanMode('face')
+    qrScanLockRef.current = false
     setLiveness({ human: false, liveness: false, message: 'Start the camera to verify a live face.' })
   }
+
+  const handleQrToken = useCallback(async (token) => {
+    if (qrScanLockRef.current || !activeClass) return
+    qrScanLockRef.current = true
+    setScanning(true)
+    setError('')
+    setResult(null)
+
+    try {
+      const { data } = await api.post('/face/kiosk/qr-scan', {
+        session_id: activeClass.session_id,
+        token,
+      }, {
+        timeout: 10000,
+        skipNetworkRetry: true,
+      })
+      setResult(data)
+      const newLog = {
+        name: data.student.name,
+        roll: data.student.roll,
+        alreadyMarked: data.attendance.already_marked,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      }
+      setRecentLogs((previous) => [newLog, ...previous.slice(0, 4)])
+    } catch (err) {
+      setError(errorMessage(err, 'QR verification failed. Ask the student to refresh their code.'))
+    } finally {
+      setScanning(false)
+      window.setTimeout(() => { qrScanLockRef.current = false }, 1200)
+    }
+  }, [activeClass])
+
+  useEffect(() => {
+    if (!cameraActive || !activeClass || scanMode !== 'qr') return undefined
+    let cancelled = false
+
+    let scannerControls
+    const submitToken = (token) => {
+      if (token && token !== lastQrTokenRef.current && !qrScanLockRef.current) {
+        lastQrTokenRef.current = token
+        void handleQrToken(token)
+      }
+    }
+
+    const startZxingScanner = async () => {
+      try {
+        const { BrowserQRCodeReader } = await import('@zxing/browser')
+        const { BarcodeFormat, DecodeHintType } = await import('@zxing/library')
+        if (cancelled) return
+
+        const video = videoRef.current
+        if (!video) return
+        const hints = new Map([
+          [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]],
+          [DecodeHintType.TRY_HARDER, true],
+        ])
+        const reader = new BrowserQRCodeReader(hints)
+        const controls = await reader.decodeFromVideoElement(video, (result) => {
+          if (!cancelled && result) submitToken(result.getText())
+        })
+        if (cancelled) controls.stop()
+        else scannerControls = controls
+      } catch (scanError) {
+        if (!cancelled) {
+          console.error('QR scanner could not start:', scanError)
+          setError('QR scanner could not start. Check camera permission and reload the kiosk.')
+        }
+      }
+    }
+
+    startZxingScanner()
+    return () => {
+      cancelled = true
+      scannerControls?.stop()
+      qrScanLockRef.current = false
+    }
+  }, [cameraActive, activeClass, scanMode, handleQrToken])
 
   // Capture a frame and record attendance for the opened course session.
   const handleScan = async () => {
@@ -356,7 +439,7 @@ export default function FaceLab() {
             )}
 
             {/* Minimalist Face Target HUD */}
-            {cameraActive && (
+            {cameraActive && scanMode === 'face' && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                 <div
                   className={`relative h-60 w-60 rounded-3xl border-2 transition-all duration-300 ${
@@ -375,16 +458,54 @@ export default function FaceLab() {
                 </div>
               </div>
             )}
+            {cameraActive && scanMode === 'qr' && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="flex h-64 w-64 items-center justify-center rounded-3xl border-2 border-emerald-300/80 bg-emerald-950/10 shadow-[0_0_30px_rgba(52,211,153,0.2)]">
+                  <span className="rounded-full bg-stone-950/70 px-4 py-2 text-sm font-semibold text-white">
+                    Point camera at student QR
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Camera Status Overlay */}
             <div className="absolute top-4 left-4 flex items-center gap-2 rounded-full bg-stone-900/70 backdrop-blur-md px-3 py-1 text-2xs font-semibold text-white">
               <span className={`h-2 w-2 rounded-full ${cameraActive ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
-              <span>{cameraActive ? 'Live Camera Feed' : 'Camera Off'}</span>
+              <span>{cameraActive ? (scanMode === 'qr' ? 'QR Scanner Active' : 'Live Camera Feed') : 'Camera Off'}</span>
             </div>
           </div>
 
+          <div className="grid grid-cols-2 gap-2 rounded-2xl border border-stone-200 bg-white p-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setError('')
+                setResult(null)
+                setScanMode('face')
+                setLiveness({ human: false, liveness: false, message: 'Start the camera to verify a live face.' })
+              }}
+              aria-pressed={scanMode === 'face'}
+              className={`rounded-xl px-3 py-2.5 text-sm font-bold transition ${scanMode === 'face' ? 'bg-emerald-800 text-white' : 'text-stone-600 hover:bg-stone-50'}`}
+            >
+              Face attendance
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setError('')
+                setResult(null)
+                setScanMode('qr')
+                setLiveness({ human: false, liveness: false, message: 'Point the kiosk camera at a student QR code.' })
+              }}
+              aria-pressed={scanMode === 'qr'}
+              className={`rounded-xl px-3 py-2.5 text-sm font-bold transition ${scanMode === 'qr' ? 'bg-emerald-800 text-white' : 'text-stone-600 hover:bg-stone-50'}`}
+            >
+              Student QR
+            </button>
+          </div>
+
           {/* Action Buttons */}
-          <div className="flex gap-3">
+          {scanMode === 'face' ? <div className="flex gap-3">
             <button
               type="button"
               onClick={handleScan}
@@ -412,9 +533,13 @@ export default function FaceLab() {
               <Camera size={17} />
               <span>{cameraActive ? 'Pause' : 'Start'}</span>
             </button>
-          </div>
+          </div> : (
+            <div role="status" aria-live="polite" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-medium text-emerald-800">
+              {scanning ? 'Checking QR with the attendance server…' : 'QR scanner is ready. A valid student QR will record attendance automatically.'}
+            </div>
+          )}
 
-          {cameraActive && (
+          {cameraActive && scanMode === 'face' && (
             <div
               role="status"
               aria-live="polite"
@@ -448,7 +573,7 @@ export default function FaceLab() {
                   <ShieldCheck size={17} className="text-emerald-700" />
                   <span>Attendance Verification</span>
                 </h2>
-                {result && (
+                {result?.similarity_percent != null && (
                   <span className="text-2xs font-mono font-semibold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
                     Confidence: {result.similarity_percent}%
                   </span>
@@ -458,7 +583,9 @@ export default function FaceLab() {
               {scanning ? (
                 <div role="status" aria-live="polite" className="flex flex-col items-center justify-center py-10 text-center">
                   <RefreshCw size={28} className="mb-3 animate-spin text-amber-600" />
-                  <p className="text-sm font-semibold text-stone-800">Verifying face…</p>
+                  <p className="text-sm font-semibold text-stone-800">
+                    {scanMode === 'qr' ? 'Verifying student QR…' : 'Verifying face…'}
+                  </p>
                   <p className="mt-1 max-w-xs text-xs text-stone-500">
                     Matching the live-verified face against this course roster.
                   </p>
@@ -481,7 +608,9 @@ export default function FaceLab() {
                           {result.attendance.already_marked ? 'Already Present' : 'Attendance Recorded'}
                         </p>
                         <p className="text-xs text-emerald-700 font-medium">
-                          {result.attendance.already_marked ? 'Attendance was already recorded for this class.' : 'Face verified and attendance saved.'}
+                          {result.attendance.already_marked
+                            ? 'Attendance was already recorded for this class.'
+                            : result.method === 'qr' ? 'Student QR verified and attendance saved.' : 'Face verified and attendance saved.'}
                         </p>
                       </div>
                     </div>
@@ -532,7 +661,7 @@ export default function FaceLab() {
                   </div>
                   <p className="text-sm font-semibold text-stone-700">Ready for Next Student</p>
                   <p className="text-xs text-stone-400 max-w-xs mt-1">
-                    Look into the camera and click scan to mark attendance.
+                    {scanMode === 'qr' ? 'Point the camera at the student’s current QR code.' : 'Look into the camera and click scan to mark attendance.'}
                   </p>
                 </div>
               )}
@@ -540,7 +669,7 @@ export default function FaceLab() {
 
             <div className="pt-3 border-t border-stone-100 flex items-center justify-between text-2xs text-stone-400">
               <span>Terminal: KUET-CSE-KIOSK-01</span>
-              <span>Threshold: 0.60</span>
+              <span>{scanMode === 'qr' ? 'QR signature · expiry · replay checks active' : 'Threshold: 0.60'}</span>
             </div>
           </div>
 

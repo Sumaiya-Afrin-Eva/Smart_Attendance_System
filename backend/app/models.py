@@ -132,6 +132,17 @@ class SystemMigration(Base):
     applied_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
 
 
+class ConsumedAttendanceQr(Base):
+    __tablename__ = "consumed_attendance_qr"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    jti: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("class_sessions.id"), index=True)
+    expires_at: Mapped[int] = mapped_column(Integer, index=True)
+    used_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
+
+
 class FaceSample(Base):
     __tablename__ = "face_samples"
 

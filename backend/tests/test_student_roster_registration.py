@@ -1,9 +1,10 @@
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_attendance.db"
 
 import numpy as np
+import jwt
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 
@@ -15,6 +16,7 @@ from app.main import app, ensure_seed_settings
 from app.models import (
     Attendance,
     ClassSession,
+    ConsumedAttendanceQr,
     Course,
     CourseRosterAssignment,
     Enrollment,
@@ -677,6 +679,159 @@ def test_semester_face_enrollment_is_required_once_and_keeps_old_attendance(monk
                 Enrollment.semester == "3-2",
             )
         ) is not None
+
+
+def test_student_qr_marks_assigned_course_and_cannot_be_replayed():
+    reset_db()
+    client = TestClient(app)
+    with SessionLocal() as db:
+        student = db.scalar(select(User).where(User.email == "student1@stud.kuet.ac.bd"))
+        roster = StudentRoster(
+            full_name="Student One",
+            roll="2107001",
+            email=student.email,
+            department="CSE",
+            session="2021-2022",
+            is_active=True,
+        )
+        course = Course(
+            code="CSE 3201",
+            title="QR attendance course",
+            department="CSE",
+            semester="3-2",
+            session="2021-2022",
+            course_type="Theory",
+        )
+        db.add_all([roster, course])
+        db.flush()
+        student.profile = StudentProfile(
+            user_id=student.id,
+            roster_id=roster.id,
+            roll=roster.roll,
+            full_name=roster.full_name,
+            department=roster.department,
+            series="2021",
+            session=roster.session,
+            current_semester="3-2",
+        )
+        db.flush()
+        db.add_all([
+            StudentSemesterFaceEnrollment(
+                user_id=student.id,
+                semester="3-2",
+                enrollment_version=1,
+            ),
+            CourseRosterAssignment(course_id=course.id, roster_id=roster.id),
+            Enrollment(student_id=student.id, course_id=course.id, semester="3-2"),
+        ])
+        class_session = ClassSession(
+            course_id=course.id,
+            start_at=datetime.now(),
+            end_at=datetime.now(),
+            status="completed",
+        )
+        db.add(class_session)
+        db.commit()
+        session_id = class_session.id
+        student_id = student.id
+
+    student_headers = headers_for("student1@stud.kuet.ac.bd")
+    issued = client.get("/api/students/me/attendance-qr", headers=student_headers)
+    assert issued.status_code == 200, issued.text
+    assert issued.json()["expires_in"] == 30
+    assert issued.json()["student"]["roll"] == "2107001"
+
+    payload = {"session_id": session_id, "token": issued.json()["token"]}
+    marked = client.post("/api/face/kiosk/qr-scan", json=payload)
+    assert marked.status_code == 200, marked.text
+    assert marked.json()["student"]["id"] == student_id
+    assert marked.json()["student"]["roll"] == "2107001"
+    assert marked.json()["attendance"]["already_marked"] is False
+
+    replay = client.post("/api/face/kiosk/qr-scan", json=payload)
+    assert replay.status_code == 409, replay.text
+    with SessionLocal() as db:
+        attendance = db.scalar(select(Attendance).where(Attendance.session_id == session_id))
+        assert attendance is not None
+        assert attendance.student_id == student_id
+        assert attendance.method == "qr"
+        assert db.scalar(select(ConsumedAttendanceQr.id)) is not None
+
+
+def test_student_qr_requires_current_semester_face_enrollment_and_rejects_expired_token():
+    reset_db()
+    client = TestClient(app)
+    with SessionLocal() as db:
+        student = db.scalar(select(User).where(User.email == "student1@stud.kuet.ac.bd"))
+        roster = StudentRoster(
+            full_name="Student One",
+            roll="2107001",
+            email=student.email,
+            department="CSE",
+            session="2021-2022",
+            is_active=True,
+        )
+        course = Course(
+            code="CSE 3201",
+            title="QR attendance course",
+            department="CSE",
+            semester="3-2",
+            session="2021-2022",
+            course_type="Theory",
+        )
+        db.add_all([roster, course])
+        db.flush()
+        student.profile = StudentProfile(
+            user_id=student.id,
+            roster_id=roster.id,
+            roll=roster.roll,
+            full_name=roster.full_name,
+            department=roster.department,
+            series="2021",
+            session=roster.session,
+            current_semester="3-2",
+        )
+        db.flush()
+        db.add_all([
+            CourseRosterAssignment(course_id=course.id, roster_id=roster.id),
+            Enrollment(student_id=student.id, course_id=course.id, semester="3-2"),
+        ])
+        class_session = ClassSession(
+            course_id=course.id,
+            start_at=datetime.now(),
+            end_at=datetime.now(),
+            status="completed",
+        )
+        db.add(class_session)
+        db.commit()
+        session_id = class_session.id
+        student_id = student.id
+
+    student_headers = headers_for("student1@stud.kuet.ac.bd")
+    unavailable = client.get("/api/students/me/attendance-qr", headers=student_headers)
+    assert unavailable.status_code == 403
+
+    now = datetime.now(timezone.utc)
+    expired_token = jwt.encode(
+        {
+            "sub": str(student_id),
+            "semester": "3-2",
+            "jti": "expired-qr-token",
+            "iat": int((now - timedelta(minutes=2)).timestamp()),
+            "exp": int((now - timedelta(minutes=1)).timestamp()),
+            "iss": "smart-attendance",
+            "aud": "attendance-kiosk",
+            "scope": "attendance:mark",
+        },
+        settings.jwt_secret,
+        algorithm="HS256",
+    )
+    expired = client.post(
+        "/api/face/kiosk/qr-scan",
+        json={"session_id": session_id, "token": expired_token},
+    )
+    assert expired.status_code == 401
+    assert "expired" in expired.json()["detail"].lower()
 
 
 def test_admin_bootstrap_and_login_require_server_access_code(monkeypatch):

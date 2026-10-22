@@ -1,21 +1,23 @@
 """Everything a logged-in student can do with their own data."""
 import json
+import jwt
 from pathlib import Path
-from uuid import uuid4
 from collections import defaultdict
 from datetime import datetime, time, timedelta
+from datetime import timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from starlette.concurrency import run_in_threadpool
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from ..database import get_db
 from ..config import settings
 from ..marks import RULE, attendance_marks, attendance_percent
 from ..models import (
-    Attendance, ClassSession, Course, CourseRosterAssignment, Enrollment, FaceSample, StudentProfile,
+    Attendance, ClassSession, ConsumedAttendanceQr, Course, CourseRosterAssignment, Enrollment, FaceSample, StudentProfile,
     StudentRoster, StudentSemesterFaceEnrollment, User,
 )
 from ..schemas import ProfileIn
@@ -25,6 +27,9 @@ from ..services.face_service import get_face_service
 
 router = APIRouter(prefix="/api/students/me", tags=["student"])
 student_only = require_role("student")
+ATTENDANCE_QR_VALID_SECONDS = 30
+ATTENDANCE_QR_ISSUER = "smart-attendance"
+ATTENDANCE_QR_AUDIENCE = "attendance-kiosk"
 
 
 def _profile_or_404(user: User) -> StudentProfile:
@@ -43,6 +48,66 @@ def _profile_out(p: StudentProfile, user: User) -> dict:
         "session": p.session,
         "current_semester": p.current_semester,
         "phone": p.phone,
+    }
+
+
+@router.get("/attendance-qr")
+def issue_attendance_qr(user: User = Depends(student_only), db: Session = Depends(get_db)):
+    """Issue a short-lived signed QR token for the student's active semester."""
+    profile = user.profile
+    if not profile or not profile.roster_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Complete student registration before requesting an attendance QR.")
+
+    roster = db.get(StudentRoster, profile.roster_id)
+    if (
+        not roster
+        or not roster.is_active
+        or roster.roll != profile.roll
+        or roster.department != profile.department
+        or roster.session != profile.session
+    ):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Your approved student record is not active.")
+
+    enrolled = db.scalar(
+        select(StudentSemesterFaceEnrollment.id).where(
+            StudentSemesterFaceEnrollment.user_id == user.id,
+            StudentSemesterFaceEnrollment.semester == profile.current_semester,
+            StudentSemesterFaceEnrollment.enrollment_version >= FACE_ENROLLMENT_VERSION,
+        )
+    )
+    if not enrolled:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Complete face enrollment for your current semester before requesting an attendance QR.",
+        )
+
+    now = datetime.now(timezone.utc)
+    expires_at = int(now.timestamp()) + ATTENDANCE_QR_VALID_SECONDS
+    db.execute(delete(ConsumedAttendanceQr).where(ConsumedAttendanceQr.expires_at < int(now.timestamp())))
+    db.commit()
+    token = jwt.encode(
+        {
+            "sub": str(user.id),
+            "semester": profile.current_semester,
+            "jti": str(uuid4()),
+            "iat": int(now.timestamp()),
+            "exp": expires_at,
+            "iss": ATTENDANCE_QR_ISSUER,
+            "aud": ATTENDANCE_QR_AUDIENCE,
+            "scope": "attendance:mark",
+        },
+        settings.jwt_secret,
+        algorithm="HS256",
+    )
+    return {
+        "token": token,
+        "expires_at": expires_at,
+        "expires_in": ATTENDANCE_QR_VALID_SECONDS,
+        "student": {
+            "name": profile.full_name,
+            "roll": profile.roll,
+            "semester": profile.current_semester,
+        },
     }
 
 
