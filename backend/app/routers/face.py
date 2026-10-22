@@ -14,6 +14,7 @@ from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Optional
 
+import jwt
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -25,6 +26,7 @@ from ..database import get_db
 from ..models import (
     Attendance,
     ClassSession,
+    ConsumedAttendanceQr,
     Course,
     CourseRosterAssignment,
     Enrollment,
@@ -32,6 +34,7 @@ from ..models import (
     StudentRoster,
     User,
 )
+from ..config import settings
 from ..services.face_service import (
     DEFAULT_SIMILARITY_THRESHOLD,
     compute_similarity,
@@ -42,6 +45,8 @@ from ..services.face_service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/face", tags=["face"])
+ATTENDANCE_QR_ISSUER = "smart-attendance"
+ATTENDANCE_QR_AUDIENCE = "attendance-kiosk"
 
 
 def _registered_face_inputs(roster: StudentRoster) -> list[bytes | str]:
@@ -97,6 +102,11 @@ class KioskOpenRequest(BaseModel):
     course_code: str = Field(min_length=1, max_length=20)
 
 
+class KioskQrScanRequest(BaseModel):
+    session_id: int
+    token: str = Field(min_length=1, max_length=4096)
+
+
 def _eligible_students(db: Session, course_id: int):
     return db.execute(
         select(StudentRoster, StudentProfile, User)
@@ -113,6 +123,140 @@ def _eligible_students(db: Session, course_id: int):
             User.role == "student",
         )
     ).all()
+
+
+def _qr_error(detail: str = "This attendance QR is invalid or has expired.") -> HTTPException:
+    return HTTPException(status.HTTP_401_UNAUTHORIZED, detail)
+
+
+@router.post("/kiosk/qr-scan")
+def scan_kiosk_qr(body: KioskQrScanRequest, db: Session = Depends(get_db)):
+    """Verify and consume one student QR token, then record attendance for this class."""
+    try:
+        claims = jwt.decode(
+            body.token,
+            settings.jwt_secret,
+            algorithms=["HS256"],
+            audience=ATTENDANCE_QR_AUDIENCE,
+            issuer=ATTENDANCE_QR_ISSUER,
+            options={"require": ["sub", "semester", "jti", "iat", "exp", "scope"]},
+        )
+    except jwt.ExpiredSignatureError:
+        raise _qr_error("This attendance QR has expired. Ask the student to refresh it.") from None
+    except jwt.PyJWTError:
+        raise _qr_error() from None
+
+    if claims.get("scope") != "attendance:mark":
+        raise _qr_error()
+
+    class_session = db.get(ClassSession, body.session_id)
+    if (
+        class_session is None
+        or class_session.status != "completed"
+        or class_session.start_at.date() != datetime.now().date()
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Today's kiosk class session was not found. Open the kiosk again.")
+
+    course = db.get(Course, class_session.course_id)
+    if course is None or not course.is_active:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "The selected course is no longer active.")
+
+    try:
+        student_id = int(claims["sub"])
+    except (TypeError, ValueError):
+        raise _qr_error() from None
+
+    student = db.get(User, student_id)
+    profile = student.profile if student and student.role == "student" and student.is_active else None
+    roster = db.get(StudentRoster, profile.roster_id) if profile and profile.roster_id else None
+    if (
+        not profile
+        or not roster
+        or not roster.is_active
+        or profile.current_semester != claims.get("semester")
+        or course.semester != profile.current_semester
+    ):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This student is not eligible for the selected course semester.")
+
+    eligible = db.scalar(
+        select(Enrollment.id)
+        .join(CourseRosterAssignment, CourseRosterAssignment.course_id == Enrollment.course_id)
+        .where(
+            Enrollment.student_id == student.id,
+            Enrollment.course_id == course.id,
+            Enrollment.semester == course.semester,
+            CourseRosterAssignment.roster_id == roster.id,
+        )
+    )
+    if eligible is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This student is not assigned to the selected course.")
+
+    jti = claims.get("jti")
+    if not isinstance(jti, str) or not jti:
+        raise _qr_error()
+    if db.scalar(select(ConsumedAttendanceQr.id).where(ConsumedAttendanceQr.jti == jti)):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This attendance QR has already been used.")
+
+    record = db.scalar(
+        select(Attendance).where(
+            Attendance.session_id == class_session.id,
+            Attendance.student_id == student.id,
+        )
+    )
+    already_marked = record is not None
+    db.add(
+        ConsumedAttendanceQr(
+            jti=jti,
+            user_id=student.id,
+            session_id=class_session.id,
+            expires_at=int(claims["exp"]),
+        )
+    )
+    if record is None:
+        record = Attendance(
+            session_id=class_session.id,
+            student_id=student.id,
+            status="present",
+            marked_at=datetime.now(),
+            method="qr",
+        )
+        db.add(record)
+
+    try:
+        db.commit()
+        db.refresh(record)
+    except IntegrityError:
+        db.rollback()
+        if db.scalar(select(ConsumedAttendanceQr.id).where(ConsumedAttendanceQr.jti == jti)):
+            raise HTTPException(status.HTTP_409_CONFLICT, "This attendance QR has already been used.") from None
+        record = db.scalar(
+            select(Attendance).where(
+                Attendance.session_id == class_session.id,
+                Attendance.student_id == student.id,
+            )
+        )
+        if record is None:
+            raise
+        already_marked = True
+
+    return {
+        "matched": True,
+        "method": "qr",
+        "student": {
+            "id": student.id,
+            "name": profile.full_name,
+            "roll": profile.roll,
+            "department": profile.department,
+            "current_semester": profile.current_semester,
+        },
+        "attendance": {
+            "status": record.status,
+            "marked_at": record.marked_at.isoformat(),
+            "already_marked": already_marked,
+        },
+        "course": {"code": course.code, "title": course.title},
+        "message": "Attendance was already marked for this class." if already_marked else "QR verified and attendance recorded.",
+    }
 
 
 @router.post("/kiosk/open")
