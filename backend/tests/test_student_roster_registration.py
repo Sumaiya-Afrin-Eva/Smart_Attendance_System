@@ -995,6 +995,9 @@ def test_legacy_roster_photo_path_is_migrated_to_sqlite_blob(tmp_path, monkeypat
         user_columns = {
             column[1] for column in conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()
         }
+        teacher_columns = {
+            column[1] for column in conn.exec_driver_sql("PRAGMA table_info(teachers)").fetchall()
+        }
         course_columns = {
             column[1] for column in conn.exec_driver_sql("PRAGMA table_info(courses)").fetchall()
         }
@@ -1008,5 +1011,5 @@ def test_legacy_roster_photo_path_is_migrated_to_sqlite_blob(tmp_path, monkeypat
         "pabx_ext",
         "phone",
         "website",
-    }.issubset(user_columns)
+    }.issubset(teacher_columns)
     assert "status" in course_columns

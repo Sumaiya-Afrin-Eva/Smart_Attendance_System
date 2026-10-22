@@ -14,7 +14,7 @@ from ..database import get_db
 from ..marks import RULE
 from ..models import (
     Attendance, ClassSession, Course, CourseRosterAssignment, Enrollment, FaceSample, StudentProfile,
-    AdminSetting, StudentRoster, User, CourseStatusLog,
+    AdminSetting, StudentRoster, User, TeacherProfile, CourseStatusLog,
 )
 from ..schemas import (
     AdminStudentCreateIn,
@@ -36,7 +36,7 @@ from ..security import get_current_user, hash_password, require_role
 from ..services import course_out
 
 router = APIRouter(prefix="/api", tags=["courses"])
-admin_only = require_role("admin")
+admin_only = require_role("admin", "system_admin")
 system_admin_only = require_role("system_admin")
 teacher_only = require_role("teacher")
 
@@ -109,7 +109,7 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
     course_map = {c.id: c for c in courses}
     course_ids = list(course_map.keys())
 
-    # Upcoming classes
+
     upcoming_sessions = db.scalars(
         select(ClassSession)
         .where(ClassSession.course_id.in_(course_ids), ClassSession.start_at >= datetime.now())
@@ -987,34 +987,36 @@ def delete_course(course_id: int, db: Session = Depends(get_db), _: User = Depen
 
 
 @router.get("/admin/teachers")
-def list_teachers(db: Session = Depends(get_db), _: User = Depends(system_admin_only)):
-    rows = db.scalars(select(User).where(User.role.in_(["teacher", "admin"])).order_by(User.name)).all()
+def list_teachers(db: Session = Depends(get_db), _: User = Depends(admin_only)):
+    teachers = db.scalars(
+        select(TeacherProfile)
+        .join(User, TeacherProfile.user_id == User.id)
+        .order_by(TeacherProfile.name)
+    ).all()
     payload = []
-    for user in rows:
+    for prof in teachers:
+        user = prof.user
         courses = db.scalars(select(Course).where(Course.teacher_id == user.id)).all()
         student_ids = db.scalars(
             select(Enrollment.student_id).join(Course, Enrollment.course_id == Course.id).where(Course.teacher_id == user.id)
         ).all()
         department_values = sorted({course.department for course in courses if course.department})
-        department_name = user.department or (department_values[0] if department_values else "General")
-        # Resolve the display status: use persisted teacher_status; fall back to active/disabled
-        if user.teacher_status:
-            display_status = user.teacher_status
-        else:
-            display_status = "Active" if user.is_active else "Disabled"
+        department_name = prof.department or (department_values[0] if department_values else "CSE")
+        display_status = prof.status or ("Active" if user.is_active else "Disabled")
         payload.append({
             "id": user.id,
-            "name": user.name,
-            "email": user.email,
+            "teacher_id": prof.id,
+            "name": prof.name or user.name,
+            "email": prof.email or user.email,
             "role": user.role,
             "department": department_name,
-            "designation": user.designation or ("Administrator" if user.role == "admin" else "Lecturer"),
-            "education": user.education,
-            "professionalMembership": user.professional_membership,
-            "researchFields": user.research_fields,
-            "pabxExt": user.pabx_ext,
-            "phone": user.phone,
-            "website": user.website,
+            "designation": prof.designation or "Lecturer",
+            "education": prof.education,
+            "professionalMembership": prof.professional_membership,
+            "researchFields": prof.research_fields,
+            "pabxExt": prof.pabx_ext,
+            "phone": prof.phone,
+            "website": prof.website,
             "picture": user.picture,
             "courses": len(courses),
             "students": len(set(student_ids)),
@@ -1104,21 +1106,28 @@ async def bulk_upload_teachers(
             email=email,
             name=name,
             role="teacher",
-            department=dept,
-            designation=designation,
-            education=data.get("education") or None,
-            professional_membership=data.get("professional_membership") or None,
-            research_fields=data.get("research_fields") or None,
-            pabx_ext=data.get("pabx_ext") or None,
-            phone=data.get("phone") or None,
-            website=data.get("website") or None,
             picture=data.get("picture") or None,
-            teacher_status="Active",
-            password_hash=None, # password can be set later or use default
+            password_hash=None,  # password can be set later or use default
             is_active=True,
         )
         db.add(user)
         try:
+            db.flush()
+            teacher_prof = TeacherProfile(
+                user_id=user.id,
+                name=user.name,
+                email=user.email,
+                department=dept or None,
+                designation=designation or None,
+                education=data.get("education") or None,
+                professional_membership=data.get("professional_membership") or None,
+                research_fields=data.get("research_fields") or None,
+                pabx_ext=data.get("pabx_ext") or None,
+                phone=data.get("phone") or None,
+                website=data.get("website") or None,
+                status="Active",
+            )
+            db.add(teacher_prof)
             db.flush()
             added += 1
         except Exception as e:
@@ -1145,6 +1154,9 @@ def delete_all_teachers(db: Session = Depends(get_db), _: User = Depends(admin_o
         courses = db.scalars(select(Course).where(Course.teacher_id == teacher.id)).all()
         for course in courses:
             course.teacher_id = None
+        prof = db.scalar(select(TeacherProfile).where(TeacherProfile.user_id == teacher.id))
+        if prof:
+            db.delete(prof)
         db.delete(teacher)
     db.commit()
     return {"detail": "All teachers deleted successfully."}
@@ -1173,6 +1185,16 @@ def create_teacher(body: dict, db: Session = Depends(get_db), _: User = Depends(
         email=email,
         name=name,
         role="teacher",
+        password_hash=hash_password(password) if password else None,
+        is_active=True,
+    )
+    db.add(user)
+    db.flush()
+
+    teacher_prof = TeacherProfile(
+        user_id=user.id,
+        name=name,
+        email=email,
         department=department or None,
         designation=designation or None,
         education=education or None,
@@ -1181,11 +1203,9 @@ def create_teacher(body: dict, db: Session = Depends(get_db), _: User = Depends(
         pabx_ext=pabx_ext or None,
         phone=phone or None,
         website=website or None,
-        teacher_status="Active",
-        password_hash=hash_password(password) if password else None,
-        is_active=True,
+        status="Active",
     )
-    db.add(user)
+    db.add(teacher_prof)
     db.commit()
     db.refresh(user)
     return {
@@ -1193,14 +1213,14 @@ def create_teacher(body: dict, db: Session = Depends(get_db), _: User = Depends(
         "name": user.name,
         "email": user.email,
         "role": user.role,
-        "department": user.department,
-        "designation": user.designation,
-        "education": user.education,
-        "professionalMembership": user.professional_membership,
-        "researchFields": user.research_fields,
-        "pabxExt": user.pabx_ext,
-        "phone": user.phone,
-        "website": user.website,
+        "department": teacher_prof.department,
+        "designation": teacher_prof.designation,
+        "education": teacher_prof.education,
+        "professionalMembership": teacher_prof.professional_membership,
+        "researchFields": teacher_prof.research_fields,
+        "pabxExt": teacher_prof.pabx_ext,
+        "phone": teacher_prof.phone,
+        "website": teacher_prof.website,
         "status": "Active",
     }
 
@@ -1235,37 +1255,42 @@ def update_teacher(
 
     teacher.name = name
     teacher.email = email
-    if department:
-        teacher.department = department
-    teacher.designation = designation or None
-    teacher.education = education or None
-    teacher.professional_membership = professional_membership or None
-    teacher.research_fields = research_fields or None
-    teacher.pabx_ext = pabx_ext or None
-    teacher.phone = phone or None
-    teacher.website = website or None
     
     if password:
         teacher.password_hash = hash_password(password)
+
+    prof = db.scalar(select(TeacherProfile).where(TeacherProfile.user_id == teacher.id))
+    if not prof:
+        prof = TeacherProfile(user_id=teacher.id, name=teacher.name, email=teacher.email)
+        db.add(prof)
+    prof.name = name
+    prof.email = email
+    if department:
+        prof.department = department
+    prof.designation = designation or None
+    prof.education = education or None
+    prof.professional_membership = professional_membership or None
+    prof.research_fields = research_fields or None
+    prof.pabx_ext = pabx_ext or None
+    prof.phone = phone or None
+    prof.website = website or None
+
     db.commit()
     db.refresh(teacher)
-    # Resolve display status
-    if teacher.teacher_status:
-        display_status = teacher.teacher_status
-    else:
-        display_status = "Active" if teacher.is_active else "Disabled"
+    display_status = prof.status or ("Active" if teacher.is_active else "Disabled")
     return {
         "id": teacher.id,
         "name": teacher.name,
         "email": teacher.email,
         "role": teacher.role,
-        "department": teacher.department,
-        "designation": teacher.designation,
-        "education": teacher.education,
-        "researchFields": teacher.research_fields,
-        "pabxExt": teacher.pabx_ext,
-        "phone": teacher.phone,
-        "website": teacher.website,
+        "department": prof.department,
+        "designation": prof.designation,
+        "education": prof.education,
+        "professionalMembership": prof.professional_membership,
+        "researchFields": prof.research_fields,
+        "pabxExt": prof.pabx_ext,
+        "phone": prof.phone,
+        "website": prof.website,
         "status": display_status,
     }
 
@@ -1285,11 +1310,18 @@ def update_teacher_status(
     valid_statuses = {"Active", "On leave", "Pending", "Disabled"}
     if status_value not in valid_statuses:
         status_value = "Active"
-    teacher.teacher_status = status_value
     teacher.is_active = status_value != "Disabled"
+
+    prof = db.scalar(select(TeacherProfile).where(TeacherProfile.user_id == teacher.id))
+    if not prof:
+        prof = TeacherProfile(user_id=teacher.id, name=teacher.name, email=teacher.email, status=status_value)
+        db.add(prof)
+    else:
+        prof.status = status_value
+
     db.commit()
     db.refresh(teacher)
-    return {"id": teacher.id, "name": teacher.name, "status": teacher.teacher_status}
+    return {"id": teacher.id, "name": teacher.name, "status": prof.status}
 
 
 @router.post("/admin/students")

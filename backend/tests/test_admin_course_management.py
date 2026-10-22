@@ -289,7 +289,7 @@ def test_student_admin_can_manage_enrollments_but_not_teacher_assignments():
         student.profile.roster_id = roster.id
         student.profile.session = roster.session
         db.add_all([
-            Course(code='CSE 3101', title='Theory of Computation', department='CSE', semester='3-1', course_type='Theory', credit=3.0),
+            Course(code='CSE 3101', title='Theory of Computation', department='CSE', semester='3-1', course_type='Theory', credit=3.0, session='2025-2026'),
         ])
         db.commit()
         course = db.scalar(select(Course).where(Course.code == 'CSE 3101'))

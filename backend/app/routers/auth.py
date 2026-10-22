@@ -130,9 +130,9 @@ def _login_or_register_staff(db: Session, email: str, name: str, picture: str | 
         )
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been disabled. Contact the admin.")
-    if user.role not in {"teacher", "admin"}:
+    if user.role not in {"teacher", "admin", "system_admin"}:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This login method is for faculty and staff only.")
-    if user.role == "admin":
+    if user.role in {"admin", "system_admin"}:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "Admin accounts must sign in with their password and admin access code.",
@@ -258,13 +258,13 @@ def password_login(body: PasswordLoginIn, db: Session = Depends(get_db)):
     # user-enumeration attacks.
     if (
         not user
-        or user.role not in {"teacher", "admin"}
+        or user.role not in {"teacher", "admin", "system_admin"}
         or not user.password_hash
         or not verify_password(body.password, user.password_hash)
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password.")
 
-    if user.role == "admin":
+    if user.role in {"admin", "system_admin"}:
         configured_code = settings.admin_access_code
         if not configured_code:
             raise HTTPException(

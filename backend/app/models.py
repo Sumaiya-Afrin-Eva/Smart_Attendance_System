@@ -45,6 +45,22 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(120))
     role: Mapped[str] = mapped_column(String(20))  # student | teacher | admin
+    picture: Mapped[str | None] = mapped_column(String(500), default=None)
+    password_hash: Mapped[str | None] = mapped_column(String(200))  # staff only
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
+
+    profile: Mapped["StudentProfile | None"] = relationship(back_populates="user", uselist=False)
+    teacher_profile: Mapped["TeacherProfile | None"] = relationship(back_populates="user", uselist=False)
+
+
+class TeacherProfile(Base):
+    __tablename__ = "teachers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     department: Mapped[str | None] = mapped_column(String(40), default=None)
     designation: Mapped[str | None] = mapped_column(String(60), default=None)  # Lecturer | Assistant Professor | Professor
     education: Mapped[str | None] = mapped_column(String(500), default=None)
@@ -53,13 +69,11 @@ class User(Base):
     pabx_ext: Mapped[str | None] = mapped_column(String(20), default=None)
     phone: Mapped[str | None] = mapped_column(String(20), default=None)
     website: Mapped[str | None] = mapped_column(String(200), default=None)
-    teacher_status: Mapped[str | None] = mapped_column(String(20), default=None)  # Active | On leave | Pending | Disabled
-    picture: Mapped[str | None] = mapped_column(String(500), default=None)
-    password_hash: Mapped[str | None] = mapped_column(String(200))  # staff only
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(20), default="Active")  # Active | On leave | Pending | Disabled
     created_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now, onupdate=datetime.now)
 
-    profile: Mapped["StudentProfile | None"] = relationship(back_populates="user", uselist=False)
+    user: Mapped[User] = relationship(back_populates="teacher_profile")
 
 
 class PasswordResetToken(Base):
@@ -242,3 +256,22 @@ class Attendance(Base):
     marked_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
     method: Mapped[str] = mapped_column(String(10), default="face")  # face | manual | backup
     confidence: Mapped[float | None] = mapped_column(Float)
+
+
+class ClassRoutine(Base):
+    __tablename__ = "class_routines"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department: Mapped[str] = mapped_column(String(40), index=True)
+    semester: Mapped[str] = mapped_column(String(20), index=True)
+    section: Mapped[str] = mapped_column(String(10), default="A")
+    day: Mapped[str] = mapped_column(String(20), index=True)
+    start_time: Mapped[str] = mapped_column(String(20))
+    end_time: Mapped[str] = mapped_column(String(20))
+    course_code: Mapped[str] = mapped_column(String(30), index=True)
+    course_title: Mapped[str | None] = mapped_column(String(120), default=None)
+    course_type: Mapped[str | None] = mapped_column(String(20), default="Theory")
+    teacher_name: Mapped[str | None] = mapped_column(String(120), default=None)
+    room: Mapped[str | None] = mapped_column(String(50), default=None)
+    session: Mapped[str | None] = mapped_column(String(20), default="2025-2026")
+    created_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)

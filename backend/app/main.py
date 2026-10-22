@@ -12,6 +12,8 @@ from .models import (
     AdminSetting, Enrollment, StudentProfile, StudentRoster, StudentSemesterFaceEnrollment, SystemMigration,
 )
 from .routers import auth, courses, face, students
+from .models import AdminSetting
+from .routers import auth, courses, face, routine, students
 
 
 def ensure_seed_settings() -> None:
@@ -44,22 +46,6 @@ def ensure_database_schema() -> None:
         # Check users table
         columns = conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()
         col_names = {column[1] for column in columns}
-        if "department" not in col_names:
-            conn.exec_driver_sql("ALTER TABLE users ADD COLUMN department VARCHAR(40)")
-        if "designation" not in col_names:
-            conn.exec_driver_sql("ALTER TABLE users ADD COLUMN designation VARCHAR(60)")
-        for column, column_type in {
-            "education": "VARCHAR(500)",
-            "professional_membership": "VARCHAR(500)",
-            "research_fields": "VARCHAR(500)",
-            "pabx_ext": "VARCHAR(20)",
-            "phone": "VARCHAR(20)",
-            "website": "VARCHAR(200)",
-        }.items():
-            if column not in col_names:
-                conn.exec_driver_sql(f"ALTER TABLE users ADD COLUMN {column} {column_type}")
-        if "teacher_status" not in col_names:
-            conn.exec_driver_sql("ALTER TABLE users ADD COLUMN teacher_status VARCHAR(20)")
 
         # Preserve existing official roster photos while moving storage into SQLite.
         roster_columns = conn.exec_driver_sql("PRAGMA table_info(student_roster)").fetchall()
@@ -160,6 +146,82 @@ def ensure_database_schema() -> None:
             conn.exec_driver_sql("ALTER TABLE class_sessions ADD COLUMN roll_start VARCHAR(20) DEFAULT ''")
         if "roll_end" not in session_col_names:
             conn.exec_driver_sql("ALTER TABLE class_sessions ADD COLUMN roll_end VARCHAR(20) DEFAULT ''")
+
+        # Ensure separate teachers table exists and is backfilled from users table
+        conn.exec_driver_sql("""
+            CREATE TABLE IF NOT EXISTS teachers (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER UNIQUE,
+                name VARCHAR(120) NOT NULL,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                department VARCHAR(40),
+                designation VARCHAR(60),
+                education VARCHAR(500),
+                professional_membership VARCHAR(500),
+                research_fields VARCHAR(500),
+                pabx_ext VARCHAR(20),
+                phone VARCHAR(20),
+                website VARCHAR(200),
+                status VARCHAR(20) DEFAULT 'Active',
+                created_at TIMESTAMP,
+                updated_at TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_teachers_email ON teachers (email)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_teachers_user_id ON teachers (user_id)")
+
+        # Backfill teachers into teachers table for any teacher in users table
+        conn.exec_driver_sql("""
+            INSERT OR IGNORE INTO teachers (
+                user_id, name, email, department, designation, status, created_at, updated_at
+            )
+            SELECT
+                id, name, email, 'CSE', 'Professor',
+                CASE WHEN is_active = 1 THEN 'Active' ELSE 'Disabled' END,
+                created_at, created_at
+            FROM users
+            WHERE role = 'teacher' AND id NOT IN (SELECT user_id FROM teachers)
+        """)
+
+        # Ensure separate roles for both administrators
+        if {"role", "email"}.issubset(col_names):
+            conn.exec_driver_sql("UPDATE users SET role = 'system_admin' WHERE email = 'sysadmin@kuet.ac.bd'")
+            conn.exec_driver_sql("UPDATE users SET role = 'admin', name = 'Student Administrator' WHERE email = 'admin@kuet.ac.bd'")
+
+        # Drop legacy teacher columns from users table so users only holds account fields
+        teacher_cols_to_drop = [
+            "department", "designation", "education", "professional_membership",
+            "research_fields", "pabx_ext", "phone", "website", "teacher_status"
+        ]
+        user_columns_now = {column[1] for column in conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()}
+        for col in teacher_cols_to_drop:
+            if col in user_columns_now:
+                conn.exec_driver_sql(f"ALTER TABLE users DROP COLUMN {col}")
+
+        # Ensure class_routines table exists
+        conn.exec_driver_sql("""
+            CREATE TABLE IF NOT EXISTS class_routines (
+                id INTEGER PRIMARY KEY,
+                department VARCHAR(40),
+                semester VARCHAR(20),
+                section VARCHAR(10) DEFAULT 'A',
+                day VARCHAR(20),
+                start_time VARCHAR(20),
+                end_time VARCHAR(20),
+                course_code VARCHAR(30),
+                course_title VARCHAR(120),
+                course_type VARCHAR(20) DEFAULT 'Theory',
+                teacher_name VARCHAR(120),
+                room VARCHAR(50),
+                session VARCHAR(20) DEFAULT '2025-2026',
+                created_at TIMESTAMP
+            )
+        """)
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_class_routines_dept ON class_routines (department)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_class_routines_sem ON class_routines (semester)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_class_routines_day ON class_routines (day)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_class_routines_code ON class_routines (course_code)")
 
     migrate_course_code_uniqueness()
 
@@ -297,19 +359,33 @@ async def friendly_validation_errors(request: Request, exc: RequestValidationErr
     return JSONResponse(status_code=422, content={"detail": next(iter(errors.values()), "Invalid input"), "errors": errors})
 
 
+from fastapi import HTTPException
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
+
+
 @app.exception_handler(Exception)
 async def catch_all_errors(request: Request, exc: Exception):
-    """Ensure every error returns a JSON body with a string 'detail' field."""
+    """Ensure every unhandled error returns a JSON body with a string 'detail' field."""
     import logging
-    logging.getLogger(__name__).exception("Unhandled error on %s %s", request.method, request.url.path)
+    logging.getLogger(__name__).exception("Unhandled error on %s %s: %s", request.method, request.url.path, exc)
     return JSONResponse(
         status_code=500,
-        content={"detail": "An unexpected server error occurred. Please try again."},
+        content={"detail": f"An unexpected server error occurred: {str(exc)}"},
     )
 
 
 app.include_router(auth.router)
 app.include_router(courses.router)
+app.include_router(routine.router)
 app.include_router(students.router)
 app.include_router(face.router)
 

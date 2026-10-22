@@ -200,7 +200,11 @@ class FaceService:
 
     def detect_faces(self, image: Union[str, Path, bytes, np.ndarray]) -> list:
         """Detect all faces in an image with bounding boxes, keypoints, and embeddings."""
-        img = self.to_cv2_image(image)
+        try:
+            img = self.to_cv2_image(image)
+        except (ValueError, TypeError) as exc:
+            logger.warning("Could not convert input to OpenCV image: %s", exc)
+            return []
         app = self._get_app()
         return app.get(img)
 

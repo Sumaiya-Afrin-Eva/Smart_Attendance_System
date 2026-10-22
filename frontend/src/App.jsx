@@ -17,12 +17,28 @@ import TeacherCourses from './pages/teacher/TeacherCourses'
 import TeacherHistory from './pages/teacher/TeacherHistory'
 import TeacherAnalytics from './pages/teacher/TeacherAnalytics'
 import TeacherSettings from './pages/teacher/TeacherSettings'
+import AdminDashboard from './pages/admin/AdminDashboard'
+import AdminCourses from './pages/admin/AdminCourses'
+import AdminRoutine from './pages/admin/AdminRoutine'
+import AdminTeacherAssignment from './pages/admin/AdminTeacherAssignment'
+import TeacherManagement from './pages/admin/TeacherManagement'
 import StudentManagement from './pages/admin/StudentManagement'
 import StudentRosterForm from './pages/admin/StudentRosterForm'
 import StudentTermManagement from './pages/admin/StudentTermManagement'
 import StudentCourseAssignments from './pages/admin/StudentCourseAssignments'
+import SecurityAlerts from './pages/admin/SecurityAlerts'
+import SystemSettings from './pages/admin/SystemSettings'
 
 import FaceLab from './pages/biometrics/FaceLab'
+import { useAuth } from './context/AuthContext'
+
+function AdminDashboardRouter() {
+  const { user } = useAuth()
+  if (user?.role === 'admin') {
+    return <Navigate to="students" replace />
+  }
+  return <AdminDashboard />
+}
 
 export default function App() {
   useEffect(() => {
@@ -96,16 +112,23 @@ export default function App() {
         </Route>
       </Route>
 
-      {/* Admin */}
-      <Route element={<ProtectedRoute role="admin" />}>
+      {/* Admin (System Administrator & Student Administrator) */}
+      <Route element={<ProtectedRoute role={['admin', 'system_admin']} />}>
         <Route path="/admin" element={<DashboardLayout />}>
-          <Route index element={<Navigate to="students" replace />} />
+          <Route index element={<AdminDashboardRouter />} />
+          <Route path="courses" element={<AdminCourses />} />
+          <Route path="routine" element={<AdminRoutine />} />
+          <Route path="assignments" element={<AdminTeacherAssignment />} />
+          <Route path="teachers" element={<TeacherManagement />} />
           <Route path="students" element={<StudentManagement />} />
           <Route path="students/new" element={<StudentRosterForm />} />
           <Route path="students/:studentId/edit" element={<StudentRosterForm />} />
-          <Route path="courses" element={<StudentTermManagement />} />
+          <Route path="student-terms" element={<StudentTermManagement />} />
+          <Route path="student-assignments" element={<StudentCourseAssignments />} />
           <Route path="course-assignments" element={<StudentCourseAssignments />} />
-          <Route path="*" element={<Navigate to="students" replace />} />
+          <Route path="alerts" element={<SecurityAlerts />} />
+          <Route path="settings" element={<SystemSettings />} />
+          <Route path="*" element={<Navigate to="/admin" replace />} />
         </Route>
       </Route>
 
