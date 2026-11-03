@@ -10,8 +10,12 @@ requests>=2.31
 python-multipart>=0.0.9
 google-generativeai>=0.8.3
 openpyxl>=3.1
+pandas>=2.0
 numpy>=1.24,<2
-opencv-python-headless>=4.8
+# InsightFace and MediaPipe require separate OpenCV distributions; keep them on compatible 4.x releases.
+opencv-python>=4.8,<5
+opencv-python-headless>=4.8,<5
+opencv-contrib-python>=4.8,<5
 onnxruntime>=1.16
 onnx>=1.17,<1.19
 insightface>=0.7.3
