@@ -81,6 +81,16 @@ export default function TeacherMyCourses() {
                     <span className="text-sm font-semibold text-stone-900">{course.session}</span>
                   </div>
                 </div>
+
+                {course.day && course.day !== 'TBA' && (
+                  <div className="mt-3 flex items-start gap-2 rounded-xl bg-stone-50 border border-stone-200/70 p-2.5 text-xs">
+                    <Clock size={14} className="mt-0.5 shrink-0 text-emerald-600" />
+                    <div className="min-w-0">
+                      <p className="font-semibold text-stone-800">{course.day}</p>
+                      <p className="text-[11px] text-stone-500 truncate">{course.time}</p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="mt-auto border-t border-stone-100 bg-stone-50/50 px-5 py-3">
@@ -89,6 +99,11 @@ export default function TeacherMyCourses() {
                     <Users size={14} />
                     {course.students} students
                   </span>
+                  {course.slots && course.slots.length > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                      {course.slots.length} {course.slots.length === 1 ? 'period' : 'periods'} / wk
+                    </span>
+                  )}
                 </div>
               </div>
             </article>

@@ -208,7 +208,7 @@ export default function TeacherCourses() {
       return
     }
 
-    const assignedCourse = assignedCourses.find(c => c.code === code && (c.section === formData.section || c.section === 'Both'))
+    const assignedCourse = assignedCourses.find(c => c.code === code && (c.section === formData.section || c.section === 'Both')) || assignedCourses.find(c => c.code === code)
     if (!assignedCourse) {
       alert("Please select a valid assigned course.")
       return

@@ -218,6 +218,7 @@ class AdminStudentCreateIn(BaseModel):
     session: str
     department: str
     phone: str | None = None
+    password: str | None = None
 
     @field_validator("name")
     @classmethod
@@ -257,6 +258,18 @@ class AdminStudentCreateIn(BaseModel):
         if value and not re.fullmatch(r"(\+?88)?01\d{9}", value):
             raise ValueError("Enter a valid Bangladeshi mobile number")
         return value or None
+
+    @field_validator("password")
+    @classmethod
+    def clean_password(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        value = v.strip()
+        if not value:
+            return None
+        if len(value) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        return value
 
 
 class AdminStudentUpdateIn(AdminStudentCreateIn):

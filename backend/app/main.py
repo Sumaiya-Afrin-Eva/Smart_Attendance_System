@@ -172,22 +172,28 @@ def ensure_database_schema() -> None:
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_teachers_user_id ON teachers (user_id)")
 
         # Backfill teachers into teachers table for any teacher in users table
-        conn.exec_driver_sql("""
-            INSERT OR IGNORE INTO teachers (
-                user_id, name, email, department, designation, status, created_at, updated_at
-            )
-            SELECT
-                id, name, email, 'CSE', 'Professor',
-                CASE WHEN is_active = 1 THEN 'Active' ELSE 'Disabled' END,
-                created_at, created_at
-            FROM users
-            WHERE role = 'teacher' AND id NOT IN (SELECT user_id FROM teachers)
-        """)
+        if {"name", "email", "role"}.issubset(col_names):
+            conn.exec_driver_sql("""
+                INSERT OR IGNORE INTO teachers (
+                    user_id, name, email, department, designation, status, created_at, updated_at
+                )
+                SELECT
+                    id, name, email, 'CSE', 'Professor',
+                    CASE WHEN is_active = 1 THEN 'Active' ELSE 'Disabled' END,
+                    created_at, created_at
+                FROM users
+                WHERE role = 'teacher' AND id NOT IN (SELECT user_id FROM teachers)
+            """)
 
         # Ensure separate roles for both administrators
         if {"role", "email"}.issubset(col_names):
             conn.exec_driver_sql("UPDATE users SET role = 'system_admin' WHERE email = 'sysadmin@kuet.ac.bd'")
             conn.exec_driver_sql("UPDATE users SET role = 'admin', name = 'Student Administrator' WHERE email = 'admin@kuet.ac.bd'")
+            from .security import hash_password
+            admin_pwd = hash_password("admin123")
+            sysadmin_pwd = hash_password("sysadmin123")
+            conn.exec_driver_sql(f"UPDATE users SET password_hash = '{admin_pwd}' WHERE email = 'admin@kuet.ac.bd' AND (password_hash IS NULL OR password_hash = 'x')")
+            conn.exec_driver_sql(f"UPDATE users SET password_hash = '{sysadmin_pwd}' WHERE email = 'sysadmin@kuet.ac.bd' AND (password_hash IS NULL OR password_hash = 'x')")
 
         # Drop legacy teacher columns from users table so users only holds account fields
         teacher_cols_to_drop = [
@@ -223,7 +229,94 @@ def ensure_database_schema() -> None:
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_class_routines_day ON class_routines (day)")
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_class_routines_code ON class_routines (course_code)")
 
+        # Ensure course_teachers table exists
+        conn.exec_driver_sql("""
+            CREATE TABLE IF NOT EXISTS course_teachers (
+                id INTEGER PRIMARY KEY,
+                course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
+                teacher_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                section VARCHAR(10) DEFAULT 'Both',
+                role VARCHAR(40) DEFAULT 'Instructor',
+                created_at TIMESTAMP,
+                UNIQUE(course_id, teacher_id, section)
+            )
+        """)
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_course_teachers_course ON course_teachers (course_id)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_course_teachers_teacher ON course_teachers (teacher_id)")
+
     migrate_course_code_uniqueness()
+    sync_course_teachers_from_routine()
+
+
+def sync_course_teachers_from_routine() -> None:
+    """Sync teacher course assignments from ClassRoutine and Course into course_teachers."""
+    from .database import SessionLocal
+    from .models import ClassRoutine, Course, CourseTeacher, User
+    from .routers.routine import _find_teacher_user
+    from sqlalchemy import select
+
+    try:
+        with SessionLocal() as db:
+            seen = set()
+            for ct in db.scalars(select(CourseTeacher)).all():
+                seen.add((ct.course_id, ct.teacher_id, ct.section))
+
+            # 1. Existing Course.teacher_id
+            for c in db.scalars(select(Course).where(Course.teacher_id.isnot(None))).all():
+                key = (c.id, c.teacher_id, c.section or "Both")
+                if key not in seen:
+                    db.add(CourseTeacher(
+                        course_id=c.id,
+                        teacher_id=c.teacher_id,
+                        section=c.section or "Both",
+                        role="Primary Instructor"
+                    ))
+                    seen.add(key)
+
+            # 2. Existing ClassRoutine slots
+            for r in db.scalars(select(ClassRoutine)).all():
+                if not r.teacher_name or not r.teacher_name.strip():
+                    continue
+                teacher_user = _find_teacher_user(r.teacher_name, db)
+                if not teacher_user:
+                    continue
+
+                matched_c = db.scalar(select(Course).where(Course.code == r.course_code))
+                c_type = r.course_type or "Theory"
+                if not matched_c:
+                    matched_c = Course(
+                        code=r.course_code,
+                        title=r.course_title or f"{r.course_code} ({c_type})",
+                        credit=3.0 if c_type == "Theory" else 1.5,
+                        department=r.department or "CSE",
+                        semester=r.semester or "1-1",
+                        course_type=c_type,
+                        session=r.session or "Default",
+                        section=r.section or "A",
+                        teacher_id=teacher_user.id,
+                        is_active=True,
+                        status="Active",
+                    )
+                    db.add(matched_c)
+                    db.flush()
+                elif not matched_c.teacher_id:
+                    matched_c.teacher_id = teacher_user.id
+
+                sec = r.section or "Both"
+                key = (matched_c.id, teacher_user.id, sec)
+                if key not in seen:
+                    db.add(CourseTeacher(
+                        course_id=matched_c.id,
+                        teacher_id=teacher_user.id,
+                        section=sec,
+                        role="Instructor"
+                    ))
+                    seen.add(key)
+
+            db.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger("uvicorn.error").warning(f"Error syncing course teachers: {e}")
 
 
 def migrate_course_code_uniqueness() -> None:

@@ -151,7 +151,6 @@ def save_profile(body: ProfileIn, user: User = Depends(student_only), db: Sessio
     offered = db.scalar(
         select(Course.id).where(
             Course.department == roster.department,
-            Course.session == roster.session,
             Course.semester == body.current_semester,
             Course.is_active.is_(True),
         ).limit(1)
@@ -159,7 +158,7 @@ def save_profile(body: ProfileIn, user: User = Depends(student_only), db: Sessio
     if offered is None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "This year-term is not offered for your approved department and session.",
+            "This year-term is not offered for your approved department.",
         )
 
     profile = user.profile or StudentProfile(user_id=user.id)
@@ -181,7 +180,6 @@ def save_profile(body: ProfileIn, user: User = Depends(student_only), db: Sessio
             CourseRosterAssignment.roster_id == roster.id,
             Course.is_active.is_(True),
             Course.department == roster.department,
-            Course.session == roster.session,
             Course.semester == body.current_semester,
         )
     ).all()

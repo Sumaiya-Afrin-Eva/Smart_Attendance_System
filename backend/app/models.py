@@ -197,6 +197,28 @@ class Course(Base):
     teacher_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     status: Mapped[str] = mapped_column(String(20), default="Active") # "Active" or "Inactive"
 
+    teacher_assignments: Mapped[list["CourseTeacher"]] = relationship(
+        back_populates="course", cascade="all, delete-orphan"
+    )
+
+
+class CourseTeacher(Base):
+    __tablename__ = "course_teachers"
+    __table_args__ = (
+        UniqueConstraint("course_id", "teacher_id", "section"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    section: Mapped[str] = mapped_column(String(10), default="Both")
+    role: Mapped[str | None] = mapped_column(String(40), default="Instructor")
+    created_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
+
+    course: Mapped["Course"] = relationship(back_populates="teacher_assignments")
+    teacher: Mapped["User"] = relationship()
+
+
 class CourseStatusLog(Base):
     __tablename__ = "course_status_logs"
 

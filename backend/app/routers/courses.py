@@ -6,14 +6,14 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import Response
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
 from ..marks import RULE
 from ..models import (
-    Attendance, ClassSession, Course, CourseRosterAssignment, Enrollment, FaceSample, StudentProfile,
+    Attendance, ClassRoutine, ClassSession, Course, CourseRosterAssignment, CourseTeacher, Enrollment, FaceSample, StudentProfile,
     AdminSetting, StudentRoster, User, TeacherProfile, CourseStatusLog,
 )
 from ..schemas import (
@@ -42,7 +42,62 @@ teacher_only = require_role("teacher")
 
 
 def _admin_course_out(course: Course) -> dict:
-    return course_out(course)
+    data = course_out(course)
+    data["teacher_id"] = course.teacher_id
+    assignments = []
+    if hasattr(course, "teacher_assignments") and course.teacher_assignments:
+        for a in course.teacher_assignments:
+            assignments.append({
+                "teacherId": str(a.teacher_id),
+                "section": a.section or "Both",
+                "role": a.role or "Instructor"
+            })
+    data["assignments"] = assignments
+    return data
+
+
+def _get_teacher_assigned_courses(db: Session, user: User) -> list[Course]:
+    """Retrieve all active courses assigned to this teacher via Course.teacher_id, CourseTeacher, or ClassRoutine."""
+    direct_courses = db.scalars(
+        select(Course).where(Course.teacher_id == user.id, Course.is_active.is_(True))
+    ).all()
+    courses_by_id = {c.id: c for c in direct_courses}
+
+    # Many-to-many CourseTeacher assignments
+    ct_courses = db.scalars(
+        select(Course).join(CourseTeacher, CourseTeacher.course_id == Course.id).where(
+            CourseTeacher.teacher_id == user.id,
+            Course.is_active.is_(True)
+        )
+    ).all()
+    for c in ct_courses:
+        courses_by_id[c.id] = c
+
+    # Routine schedule matching
+    user_name_lower = (user.name or "").lower().strip()
+    clean_user = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", user_name_lower, flags=re.I).strip()
+
+    routines = db.scalars(select(ClassRoutine)).all()
+    routine_codes = set()
+    for r in routines:
+        slot_t = (r.teacher_name or "").lower().strip()
+        clean_slot = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", slot_t, flags=re.I).strip()
+        matched = False
+        if slot_t and user_name_lower and (slot_t == user_name_lower or clean_user == clean_slot):
+            matched = True
+        elif clean_user and len(clean_user) > 4 and (clean_user in clean_slot or clean_slot in clean_user):
+            matched = True
+        if matched and r.course_code:
+            routine_codes.add(r.course_code.strip())
+
+    if routine_codes:
+        c_routines = db.scalars(
+            select(Course).where(Course.code.in_(routine_codes), Course.is_active.is_(True))
+        ).all()
+        for c in c_routines:
+            courses_by_id[c.id] = c
+
+    return sorted(courses_by_id.values(), key=lambda c: (c.semester or "", c.code or ""))
 
 
 @router.get("/meta")
@@ -80,18 +135,27 @@ def list_courses(
 
 @router.get("/teacher/stats")
 def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(teacher_only)):
+    courses = _get_teacher_assigned_courses(db, user)
+    course_ids = [c.id for c in courses]
+    course_map = {c.id: c for c in courses}
+
     # 1. Active courses
-    active_courses = db.query(Course).filter(Course.teacher_id == user.id).count()
+    active_courses = len(courses)
 
     # 2. Total classes (sessions)
-    total_classes = db.query(ClassSession).join(Course).filter(Course.teacher_id == user.id).count()
+    total_classes = db.query(ClassSession).filter(ClassSession.course_id.in_(course_ids)).count() if course_ids else 0
 
     # 3. Students tracked (unique enrolled students)
-    students_tracked = db.query(Enrollment.student_id).join(Course).filter(Course.teacher_id == user.id).distinct().count()
+    students_tracked = (
+        db.query(Enrollment.student_id)
+        .filter(Enrollment.course_id.in_(course_ids))
+        .distinct()
+        .count()
+        if course_ids else 0
+    )
 
     # 4. Avg attendance
-    # Find all sessions for this teacher's courses
-    session_ids = [s.id for s in db.scalars(select(ClassSession).join(Course).where(Course.teacher_id == user.id)).all()]
+    session_ids = [s.id for s in db.scalars(select(ClassSession).where(ClassSession.course_id.in_(course_ids))).all()] if course_ids else []
     avg_attendance = "0%"
     if session_ids:
         total_attendance_records = db.query(Attendance).filter(Attendance.session_id.in_(session_ids)).count()
@@ -103,20 +167,14 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
             avg_attendance = f"{round((present_records / total_attendance_records) * 100)}%"
         else:
             avg_attendance = "N/A"
-            
-    
-    courses = db.scalars(select(Course).where(Course.teacher_id == user.id)).all()
-    course_map = {c.id: c for c in courses}
-    course_ids = list(course_map.keys())
-
 
     upcoming_sessions = db.scalars(
         select(ClassSession)
         .where(ClassSession.course_id.in_(course_ids), ClassSession.start_at >= datetime.now())
         .order_by(ClassSession.start_at)
         .limit(3)
-    ).all()
-    
+    ).all() if course_ids else []
+
     upcoming = []
     for s in upcoming_sessions:
         c = course_map[s.course_id]
@@ -128,7 +186,26 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
             "time": f"{s.start_at.strftime('%a')} · {s.start_at.strftime('%I:%M %p')}",
             "section": f"{c.semester}, Section {c.section}"
         })
-        
+
+    if not upcoming and course_ids:
+        course_codes = [c.code for c in courses]
+        clean_user = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", (user.name or "").lower(), flags=re.I).strip()
+        routine_slots = db.scalars(
+            select(ClassRoutine).where(
+                (ClassRoutine.course_code.in_(course_codes)) &
+                (ClassRoutine.teacher_name.ilike(f"%{clean_user}%"))
+            ).limit(4)
+        ).all()
+        for r in routine_slots:
+            upcoming.append({
+                "id": f"routine-{r.id}",
+                "course": r.course_code,
+                "title": r.course_title or r.course_code,
+                "room": r.room or "TBA",
+                "time": f"{r.day} · {r.start_time} - {r.end_time}",
+                "section": f"{r.semester}, Section {r.section}"
+            })
+
     # Recent classes
     recent_sessions = db.scalars(
         select(ClassSession)
@@ -142,15 +219,46 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
         c = course_map[s.course_id]
         total_enrolled = db.query(Enrollment).filter(Enrollment.course_id == c.id).count()
         present = db.query(Attendance).filter(Attendance.session_id == s.id, Attendance.status.in_(["present", "late"])).count()
-        score = f"{round((present/total_enrolled)*100, 1)}%" if total_enrolled > 0 else "0%"
+        tot = max(total_enrolled, present, s.students or 0)
+        if tot == 0:
+            tot = 1
+        score = f"{round((present / tot) * 100, 1)}%"
         recent.append({
             "id": s.id,
             "class": f"{c.code} · {c.title}",
             "date": s.start_at.strftime("%b %-d"),
-            "students": f"{present} / {total_enrolled} present",
+            "students": f"{present} / {tot} present",
             "score": score
         })
         
+    # Recent student check-ins
+    recent_checkins = []
+    if session_ids:
+        latest_att = db.scalars(
+            select(Attendance)
+            .where(Attendance.session_id.in_(session_ids))
+            .order_by(Attendance.marked_at.desc())
+            .limit(10)
+        ).all()
+        for att in latest_att:
+            sess = db.get(ClassSession, att.session_id)
+            c = course_map.get(sess.course_id) if sess else None
+            student_user = db.get(User, att.student_id)
+            profile = student_user.profile if student_user else None
+            recent_checkins.append({
+                "id": att.id,
+                "student_name": profile.full_name if profile else (student_user.name if student_user else "Student"),
+                "roll": profile.roll if profile else "N/A",
+                "department": profile.department if profile else (c.department if c else "CSE"),
+                "course_code": c.code if c else "N/A",
+                "course_title": c.title if c else "N/A",
+                "time": att.marked_at.strftime("%I:%M:%S %p") if att.marked_at else "",
+                "date": att.marked_at.strftime("%a, %-d %b %Y") if att.marked_at else "",
+                "status": att.status.capitalize(),
+                "method": "Face Recognition Scan" if att.method == "face" else (att.method.capitalize() if att.method else "Manual"),
+                "confidence": f"{round(att.confidence * 100, 2)}%" if att.confidence else None,
+            })
+
     # Performance
     performance = []
     for c in courses:
@@ -174,21 +282,35 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
         "avg_attendance": avg_attendance,
         "upcoming": upcoming,
         "recent": recent,
+        "recent_checkins": recent_checkins,
         "performance": performance
     }
 
 
 @router.get("/teacher/courses")
 def teacher_courses(db: Session = Depends(get_db), user: User = Depends(teacher_only)):
-    courses = db.scalars(
-        select(Course).where(Course.teacher_id == user.id, Course.is_active.is_(True)).order_by(Course.semester, Course.code)
-    ).all()
-    # We'll use the existing course_out but add extra info if needed by the frontend like section, room etc if they existed.
-    # The frontend expects id, code, title, semester, section, room, day, time, students, session, rollStart, rollEnd
-    # For now, we populate what we have in the DB.
+    courses = _get_teacher_assigned_courses(db, user)
+
+    user_name_lower = (user.name or "").lower().strip()
+    clean_user = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", user_name_lower, flags=re.I).strip()
+    routines = db.scalars(select(ClassRoutine)).all()
+
     res = []
     for c in courses:
         students = db.query(Enrollment).filter(Enrollment.course_id == c.id).count()
+        slots = []
+        for r in routines:
+            if r.course_code == c.code:
+                slot_t = (r.teacher_name or "").lower().strip()
+                clean_slot = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", slot_t, flags=re.I).strip()
+                if (slot_t == user_name_lower or clean_user == clean_slot) or (clean_user and len(clean_user) > 4 and clean_user in clean_slot) or not r.teacher_name:
+                    slots.append(r)
+
+        day_str = ", ".join(dict.fromkeys(r.day for r in slots if r.day)) if slots else "TBA"
+        time_str = ", ".join(dict.fromkeys(f"{r.start_time} - {r.end_time}" for r in slots if r.start_time and r.end_time)) if slots else "TBA"
+        room_str = ", ".join(dict.fromkeys(r.room for r in slots if r.room and r.room != "TBA")) if slots else "TBA"
+        sec_str = ", ".join(dict.fromkeys(r.section for r in slots if r.section)) if slots else (c.section or "A")
+
         res.append({
             "id": c.id,
             "code": c.code,
@@ -196,25 +318,37 @@ def teacher_courses(db: Session = Depends(get_db), user: User = Depends(teacher_
             "semester": c.semester,
             "credit": c.credit,
             "course_type": c.course_type,
-            "section": c.section,
-            "room": "TBA",
-            "day": "TBA",
-            "time": "TBA",
+            "section": sec_str,
+            "room": room_str or "TBA",
+            "day": day_str or "TBA",
+            "time": time_str or "TBA",
             "students": students,
             "session": c.session,
             "rollStart": "-",
             "rollEnd": "-",
+            "slots": [
+                {
+                    "day": r.day,
+                    "startTime": r.start_time,
+                    "endTime": r.end_time,
+                    "room": r.room,
+                    "section": r.section
+                } for r in slots
+            ]
         })
     return res
-
 
 
 @router.post("/teacher/sessions")
 def create_teacher_session(body: ClassSessionCreateIn, db: Session = Depends(get_db), user: User = Depends(teacher_only)):
     course = db.get(Course, body.course_id)
-    if not course or not course.is_active or course.teacher_id != user.id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found or not assigned to you.")
-        
+    if not course or not course.is_active:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found.")
+
+    assigned = _get_teacher_assigned_courses(db, user)
+    if course.id not in {c.id for c in assigned}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Course not assigned to you.")
+
     session = ClassSession(
         course_id=body.course_id,
         start_at=body.start_at,
@@ -228,7 +362,7 @@ def create_teacher_session(body: ClassSessionCreateIn, db: Session = Depends(get
     db.add(session)
     db.commit()
     db.refresh(session)
-    
+
     return {
         "id": session.id,
         "course_id": session.course_id,
@@ -240,13 +374,13 @@ def create_teacher_session(body: ClassSessionCreateIn, db: Session = Depends(get
 
 @router.get("/teacher/sessions")
 def list_teacher_sessions(db: Session = Depends(get_db), user: User = Depends(teacher_only)):
-    courses = db.scalars(select(Course).where(Course.teacher_id == user.id)).all()
+    courses = _get_teacher_assigned_courses(db, user)
     if not courses:
         return []
-        
+
     course_ids = [c.id for c in courses]
     sessions = db.scalars(select(ClassSession).where(ClassSession.course_id.in_(course_ids)).order_by(ClassSession.start_at.desc())).all()
-    
+
     res = []
     course_map = {c.id: c for c in courses}
     for s in sessions:
@@ -269,20 +403,102 @@ def list_teacher_sessions(db: Session = Depends(get_db), user: User = Depends(te
     return res
 
 
-
 @router.delete("/teacher/sessions/{session_id}")
 def delete_teacher_session(session_id: int, db: Session = Depends(get_db), user: User = Depends(teacher_only)):
     session = db.get(ClassSession, session_id)
     if not session:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found.")
-    
+
     course = db.get(Course, session.course_id)
-    if not course or course.teacher_id != user.id:
+    assigned = _get_teacher_assigned_courses(db, user)
+    if not course or course.id not in {c.id for c in assigned}:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not assigned to this course.")
-        
+
     db.delete(session)
     db.commit()
     return {"detail": "Session deleted"}
+
+
+@router.get("/teacher/history")
+def teacher_attendance_history(
+    session: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role("teacher", "admin", "system_admin")),
+):
+    """Retrieve all class sessions and student attendance records for courses assigned to this teacher."""
+    if user.role in {"admin", "system_admin"}:
+        courses = db.scalars(select(Course).where(Course.is_active.is_(True))).all()
+    else:
+        courses = _get_teacher_assigned_courses(db, user)
+
+    if not courses:
+        return []
+
+    course_ids = [c.id for c in courses]
+    course_map = {c.id: c for c in courses}
+
+    query = select(ClassSession).where(ClassSession.course_id.in_(course_ids))
+    sessions = db.scalars(query.order_by(ClassSession.start_at.desc())).all()
+
+    history = []
+    for s in sessions:
+        c = course_map[s.course_id]
+        if session and session != "All Sessions" and c.session != session:
+            continue
+
+        enrollment_count = db.query(Enrollment).filter(Enrollment.course_id == c.id).count()
+        attendances = db.scalars(
+            select(Attendance)
+            .where(Attendance.session_id == s.id)
+            .order_by(Attendance.marked_at.asc())
+        ).all()
+
+        attendees = []
+        for att in attendances:
+            student_user = db.get(User, att.student_id)
+            profile = student_user.profile if student_user else None
+            roll = profile.roll if profile else "N/A"
+            name = profile.full_name if profile else (student_user.name if student_user else "Student")
+            dept = profile.department if profile else c.department
+            attendees.append({
+                "id": att.id,
+                "roll": roll,
+                "name": name,
+                "department": dept,
+                "status": att.status.capitalize(),
+                "time": att.marked_at.strftime("%I:%M:%S %p") if att.marked_at else "",
+                "method": "Face Recognition Scan" if att.method == "face" else (att.method.capitalize() if att.method else "Manual"),
+                "confidence": f"{round(att.confidence * 100, 2)}%" if att.confidence else None,
+            })
+
+        present_count = len(attendees)
+        total_students = max(enrollment_count, present_count, s.students or 0)
+        if total_students == 0:
+            total_students = 1
+        pct = round((present_count / total_students) * 100, 1)
+
+        start_time_str = s.start_at.strftime("%I:%M %p") if s.start_at else ""
+        end_time_str = s.end_at.strftime("%I:%M %p") if s.end_at else ""
+        time_display = f"{start_time_str} - {end_time_str}" if end_time_str and end_time_str != start_time_str else start_time_str
+
+        history.append({
+            "id": s.id,
+            "courseId": c.id,
+            "courseCode": c.code,
+            "courseTitle": c.title,
+            "title": f"{c.code}: {c.title}",
+            "session": c.session or "Default",
+            "semester": c.semester,
+            "date": s.start_at.strftime("%b %-d, %Y") if s.start_at else "",
+            "time": time_display,
+            "room": s.room or "KUET-CSE-KIOSK-01",
+            "total": total_students,
+            "present": present_count,
+            "percent": pct,
+            "attendees": attendees,
+        })
+
+    return history
 
 
 @router.get("/admin/courses")
@@ -601,7 +817,10 @@ async def bulk_assign_courses(
             select(Course).where(
                 Course.code == normalized_code,
                 Course.department == department.upper(),
-                Course.session == session,
+                or_(
+                    Course.session == session,
+                    Course.session == "Default",
+                ),
                 Course.semester == normalized_semester,
                 Course.is_active.is_(True),
             )
@@ -624,7 +843,9 @@ async def bulk_assign_courses(
             StudentRoster.is_active.is_(True),
             StudentRoster.department == course.department,
         )
-        if course.session != "Default":
+        if session and session != "Default":
+            roster_query = roster_query.where(StudentRoster.session == session)
+        elif course.session != "Default":
             roster_query = roster_query.where(StudentRoster.session == course.session)
         eligible_rosters = db.scalars(roster_query).all()
         eligible_rosters = [
@@ -633,7 +854,7 @@ async def bulk_assign_courses(
             and roster.profile.user
             and roster.profile.user.is_active
             and roster.profile.department == course.department
-            and (course.session == "Default" or not roster.profile.session or roster.profile.session == course.session)
+            and (not session or session == "Default" or not roster.profile.session or roster.profile.session == session)
             and roster.profile.current_semester == course.semester
         ]
         existing_roster_ids = set(db.scalars(
@@ -918,7 +1139,7 @@ async def bulk_upload_courses(
 @router.patch("/admin/courses/{course_id}/teacher")
 def assign_course_teacher(
     course_id: int,
-    body: CourseTeacherAssignmentIn,
+    body: dict,
     db: Session = Depends(get_db),
     _: User = Depends(system_admin_only),
 ):
@@ -926,14 +1147,51 @@ def assign_course_teacher(
     if not course:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found.")
 
-    if body.teacher_id is not None:
-        teacher = db.get(User, body.teacher_id)
-        if not teacher or teacher.role not in {"teacher", "admin"}:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Teacher not found.")
+    assignments_in = body.get("assignments")
+    if assignments_in is not None and isinstance(assignments_in, list):
+        db.query(CourseTeacher).filter(CourseTeacher.course_id == course.id).delete()
+        first_t = None
+        for a in assignments_in:
+            t_id = a.get("teacher_id") or a.get("teacherId")
+            sec = a.get("section") or "Both"
+            if t_id:
+                t_user = db.get(User, int(t_id))
+                if t_user:
+                    if not first_t:
+                        first_t = t_user.id
+                    db.add(CourseTeacher(
+                        course_id=course.id,
+                        teacher_id=t_user.id,
+                        section=sec,
+                        role="Instructor"
+                    ))
+        course.teacher_id = first_t
+    else:
+        teacher_id = body.get("teacher_id")
+        sec = body.get("section") or "Both"
+        if teacher_id is not None:
+            teacher = db.get(User, teacher_id)
+            if not teacher or teacher.role not in {"teacher", "admin"}:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "Teacher not found.")
+            course.teacher_id = teacher_id
+            ct = db.scalar(select(CourseTeacher).where(
+                CourseTeacher.course_id == course.id,
+                CourseTeacher.teacher_id == teacher.id,
+                CourseTeacher.section == sec
+            ))
+            if not ct:
+                db.add(CourseTeacher(
+                    course_id=course.id,
+                    teacher_id=teacher.id,
+                    section=sec,
+                    role="Instructor"
+                ))
+        else:
+            course.teacher_id = None
 
-    course.teacher_id = body.teacher_id
-    if body.section:
-        course.section = body.section
+    if body.get("section"):
+        course.section = body.get("section")
+
     db.commit()
     db.refresh(course)
     return _admin_course_out(course)
@@ -1033,6 +1291,7 @@ async def bulk_upload_teachers(
     _: User = Depends(admin_only),
 ):
     import io
+    import re
     import pandas as pd
     
     file_content = await file.read()
@@ -1051,7 +1310,13 @@ async def bulk_upload_teachers(
         if file.filename.lower().endswith('.csv') or mime_type == "text/csv":
             df = pd.read_csv(io.BytesIO(file_content))
         else:
-            df = pd.read_excel(io.BytesIO(file_content))
+            xl = pd.ExcelFile(io.BytesIO(file_content))
+            target_sheet = xl.sheet_names[0]
+            for s in xl.sheet_names:
+                if any(k in s.lower() for k in ["faculty", "teacher"]):
+                    target_sheet = s
+                    break
+            df = pd.read_excel(xl, sheet_name=target_sheet)
     except Exception as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Error parsing spreadsheet: {str(e)}")
         
@@ -1062,12 +1327,24 @@ async def bulk_upload_teachers(
                 for col in df.columns:
                     if col.lower().strip() == k.lower():
                         v = row[col]
-                        return str(v) if pd.notna(v) else default
+                        if pd.notna(v):
+                            v_str = str(v).strip()
+                            if v_str.endswith(".0") and v_str[:-2].isdigit():
+                                v_str = v_str[:-2]
+                            return v_str
+                        return default
             return default
             
+        raw_pw = get_val(["password", "pass", "pwd", "initial password", "default password", "temporary password"])
+        if raw_pw is not None:
+            raw_pw = str(raw_pw).strip()
+            if raw_pw.endswith(".0") and raw_pw[:-2].isdigit():
+                raw_pw = raw_pw[:-2]
+
         data = {
             "name": get_val(["name", "full name", "teacher name"]),
-            "email": get_val(["email", "academic email"]),
+            "email": get_val(["email", "academic email", "teacher email", "e-mail"]),
+            "password": raw_pw if raw_pw else None,
             "department": get_val(["department", "dept"]),
             "designation": get_val(["designation", "title", "position"]),
             "education": get_val(["education", "degree", "qualifications"]),
@@ -1076,7 +1353,7 @@ async def bulk_upload_teachers(
             "pabx_ext": get_val(["pabx ext", "pabx", "ext", "extension"]),
             "phone": get_val(["phone", "mobile", "contact", "mobile number"]),
             "website": get_val(["website", "web", "url", "link"]),
-            "picture": get_val(["picture", "image", "photo", "image link", "photo link"]),
+            "picture": get_val(["picture", "image", "photo", "image link", "photo link", "image url"]),
         }
         if data["name"] and data["email"]:
             extracted_data.append(data)
@@ -1085,29 +1362,77 @@ async def bulk_upload_teachers(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No valid teacher records found in the document. Ensure 'Name' and 'Email' columns exist.")
 
     added = 0
+    updated = 0
     skipped = 0
     skipped_items = []
 
     seen_emails = set()
     for data in extracted_data:
-        email = data["email"].strip().lower()
+        raw_email = (data["email"] or "").strip().lower()
+        if "," in raw_email or ";" in raw_email:
+            parts = [p.strip() for p in re.split(r"[,;]+", raw_email) if p.strip()]
+            kuet_parts = [p for p in parts if "@kuet.ac.bd" in p or "@cse.kuet.ac.bd" in p]
+            email = kuet_parts[0] if kuet_parts else (parts[0] if parts else "")
+        else:
+            email = raw_email
+
         name = data["name"].strip()
         dept = (data["department"] or "General").strip().upper()
         designation = (data["designation"] or "Lecturer").strip()
-        
-        if email in seen_emails or db.scalar(select(User).where(User.email == email)):
-            skipped += 1
-            skipped_items.append({"data": data, "reason": "duplicate_email"})
+        raw_pw = data.get("password")
+        pw_hash = hash_password(raw_pw) if raw_pw else None
+
+        existing_user = db.scalar(select(User).where(User.email == email))
+        if not existing_user and "@kuet.ac.bd" in email:
+            alt_email = email.replace("@kuet.ac.bd", "@cse.kuet.ac.bd") if "@cse.kuet.ac.bd" not in email else email.replace("@cse.kuet.ac.bd", "@kuet.ac.bd")
+            existing_user = db.scalar(select(User).where(User.email == alt_email))
+
+        if existing_user:
+            if pw_hash:
+                existing_user.password_hash = pw_hash
+            if data.get("picture"):
+                existing_user.picture = data["picture"]
+            if name:
+                existing_user.name = name
+
+            prof = db.scalar(select(TeacherProfile).where(TeacherProfile.user_id == existing_user.id))
+            if not prof:
+                prof = TeacherProfile(user_id=existing_user.id, name=existing_user.name, email=existing_user.email)
+                db.add(prof)
+            prof.name = name
+            if dept:
+                prof.department = dept
+            if designation:
+                prof.designation = designation
+            if data.get("education"):
+                prof.education = data["education"]
+            if data.get("professional_membership"):
+                prof.professional_membership = data["professional_membership"]
+            if data.get("research_fields"):
+                prof.research_fields = data["research_fields"]
+            if data.get("pabx_ext"):
+                prof.pabx_ext = data["pabx_ext"]
+            if data.get("phone"):
+                prof.phone = data["phone"]
+            if data.get("website"):
+                prof.website = data["website"]
+
+            updated += 1
             continue
-            
+
+        if email in seen_emails:
+            skipped += 1
+            skipped_items.append({"data": data, "reason": "duplicate_in_file"})
+            continue
+
         seen_emails.add(email)
-        
+
         user = User(
             email=email,
             name=name,
             role="teacher",
             picture=data.get("picture") or None,
-            password_hash=None,  # password can be set later or use default
+            password_hash=pw_hash,
             is_active=True,
         )
         db.add(user)
@@ -1141,6 +1466,7 @@ async def bulk_upload_teachers(
     return {
         "detail": "Bulk upload completed.",
         "added": added,
+        "updated": updated,
         "skipped": skipped,
         "total": len(extracted_data),
         "skipped_items": skipped_items,
@@ -1355,6 +1681,25 @@ def create_student(
         is_active=True,
     )
     db.add(roster)
+
+    raw_pwd = (body.password or "").strip() if body.password else None
+    pwd_hash = hash_password(raw_pwd) if raw_pwd else None
+
+    if not linked_user:
+        linked_user = User(
+            email=email,
+            name=body.name,
+            role="student",
+            password_hash=pwd_hash,
+            is_active=True,
+        )
+        db.add(linked_user)
+    else:
+        if pwd_hash:
+            linked_user.password_hash = pwd_hash
+        linked_user.name = body.name
+        linked_user.is_active = True
+
     db.commit()
     db.refresh(roster)
     return {
@@ -1429,6 +1774,7 @@ async def bulk_upload_students(
             "session": get_value(row, ["session", "academic session"]),
             "department": get_value(row, ["department", "dept"]),
             "phone": get_value(row, ["phone", "mobile", "contact"]),
+            "password": get_value(row, ["password", "pass", "login password"]),
         }
         try:
             body = AdminStudentCreateIn(**raw)
@@ -1452,6 +1798,23 @@ async def bulk_upload_students(
                 phone=body.phone,
                 is_active=True,
             ))
+            raw_pwd = (body.password or "").strip() if body.password else None
+            pwd_hash = hash_password(raw_pwd) if raw_pwd else None
+            if not linked_user:
+                linked_user = User(
+                    email=email,
+                    name=body.name,
+                    role="student",
+                    password_hash=pwd_hash,
+                    is_active=True,
+                )
+                db.add(linked_user)
+            else:
+                if pwd_hash:
+                    linked_user.password_hash = pwd_hash
+                linked_user.name = body.name
+                linked_user.is_active = True
+
             seen_rolls.add(body.roll)
             seen_emails.add(email)
             added += 1
@@ -1564,6 +1927,21 @@ def update_student_roster(
         raise HTTPException(status.HTTP_409_CONFLICT, "This email is already used by a staff account.")
     if roster.profile and linked_user and linked_user.id != roster.profile.user_id:
         raise HTTPException(status.HTTP_409_CONFLICT, "This email is already linked to another student account.")
+
+    raw_pwd = (body.password or "").strip() if body.password else None
+    if raw_pwd:
+        pwd_hash = hash_password(raw_pwd)
+        if not linked_user:
+            linked_user = User(
+                email=email,
+                name=body.name,
+                role="student",
+                password_hash=pwd_hash,
+                is_active=True,
+            )
+            db.add(linked_user)
+        else:
+            linked_user.password_hash = pwd_hash
 
     roster.full_name = body.name
     roster.roll = body.roll
