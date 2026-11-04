@@ -238,59 +238,38 @@ export default function FaceLab() {
     }
 
     const startZxingScanner = async () => {
-      // Try ZXing first; if it fails (e.g., missing package), fall back to native BarcodeDetector
-      try {
-        const { BrowserQRCodeReader } = await import('@zxing/browser')
-        const { BarcodeFormat, DecodeHintType } = await import('@zxing/library')
-        if (cancelled) return
-
-        const video = videoRef.current
-        if (!video) return
-        const hints = new Map([
-          [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]],
-          [DecodeHintType.TRY_HARDER, true],
-        ])
-        const reader = new BrowserQRCodeReader(hints)
-        const controls = await reader.decodeFromVideoElement(video, (result) => {
-          if (!cancelled && result) submitToken(result.getText())
-        })
-        if (cancelled) controls.stop()
-        else scannerControls = controls
-        return
-      } catch (zxError) {
-        // ZXing not available – use native BarcodeDetector if supported
-        if (typeof window?.BarcodeDetector === 'function') {
-          const video = videoRef.current
-          if (!video) return
-          const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
-          let rafId
-          const scanLoop = async () => {
-            if (cancelled) return
-            try {
-              const detections = await detector.detect(video)
-              if (detections.length) {
-                submitToken(detections[0].rawValue)
-              } else {
-                rafId = requestAnimationFrame(scanLoop)
-              }
-            } catch (nativeErr) {
-              console.error('Native QR detector failed:', nativeErr)
-              setError('QR scanner could not start. Please ensure camera permission is granted.')
-            }
-          }
-          rafId = requestAnimationFrame(scanLoop)
-          scannerControls = {
-            stop: () => {
-              cancelAnimationFrame(rafId)
-              detector?.reset?.()
-            },
-          }
-        } else {
-          console.error('QR scanner could not start (ZXing missing):', zxError)
-          setError('QR scanner could not start. Install @zxing/browser or use a recent Chrome/Edge browser.')
-        }
+  // Use the native BarcodeDetector API if available. This removes the need for @zxing packages.
+  if (typeof window?.BarcodeDetector !== 'function') {
+    setError('QR scanner unavailable – your browser does not support the native BarcodeDetector API. Please use a recent Chrome/Edge browser.')
+    return
+  }
+  const video = videoRef.current
+  if (!video) return
+  const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
+  let rafId
+  const scanLoop = async () => {
+    if (cancelled) return
+    try {
+      const detections = await detector.detect(video)
+      if (detections.length) {
+        submitToken(detections[0].rawValue)
+      } else {
+        rafId = requestAnimationFrame(scanLoop)
       }
+    } catch (nativeErr) {
+      console.error('Native QR detector failed:', nativeErr)
+      setError('QR scanner could not start. Please ensure camera permission is granted.')
     }
+  }
+  rafId = requestAnimationFrame(scanLoop)
+  scannerControls = {
+    stop: () => {
+      cancelAnimationFrame(rafId)
+      detector?.reset?.()
+    },
+  }
+}
+
 
     startZxingScanner()
     return () => {
