@@ -53,11 +53,42 @@ def _registered_face_inputs(roster: StudentRoster) -> list[bytes | str]:
     """Return all registration samples, falling back to the legacy database photo."""
     paths = json.loads(roster.face_sample_paths or "[]")
     project_root = Path(__file__).resolve().parents[2].parent
-    inputs: list[bytes | str] = [
-        str((project_root / path).resolve())
-        for path in paths
-        if isinstance(path, str)
-    ]
+    dept = (roster.department or "").strip()
+    inputs: list[bytes | str] = []
+
+    for path in paths:
+        if not isinstance(path, str):
+            continue
+        p = Path(path)
+        # 1. Direct path check
+        direct = (project_root / p).resolve()
+        if direct.is_file():
+            inputs.append(str(direct))
+            continue
+        # 2. Check in picture/{dept}/{filename}
+        if dept:
+            dept_file = (project_root / "picture" / dept / p.name).resolve()
+            if dept_file.is_file():
+                inputs.append(str(dept_file))
+                continue
+        # 3. Check directly in picture/{filename}
+        pic_file = (project_root / "picture" / p.name).resolve()
+        if pic_file.is_file():
+            inputs.append(str(pic_file))
+            continue
+
+    # Also check if roster.photo_path is available on disk
+    if not inputs and roster.photo_path:
+        photo_p = Path(roster.photo_path)
+        for cand in [
+            (project_root / photo_p).resolve(),
+            (project_root / "picture" / dept / photo_p.name).resolve() if dept else None,
+            (project_root / "picture" / photo_p.name).resolve(),
+        ]:
+            if cand and cand.is_file():
+                inputs.append(str(cand))
+                break
+
     return inputs or ([roster.photo_data] if roster.photo_data else [])
 
 
@@ -525,9 +556,14 @@ async def recognize_face(
     image: Optional[UploadFile] = File(None),
     image_base64: Optional[str] = Form(None),
     threshold: float = Form(DEFAULT_SIMILARITY_THRESHOLD),
+    department: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
-    """Identify a student by matching against their admin-approved roster photo."""
+    """Identify a student by matching against their registered face photos.
+    
+    If department is provided, candidate matching is restricted to that department's
+    student images, reducing the face recognition search space.
+    """
     query_bytes = _decode_image_payload(image, image_base64)
     face_svc = get_face_service()
 
@@ -535,7 +571,7 @@ async def recognize_face(
     if query_emb is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No clear face detected in the query camera feed.")
 
-    roster_records = db.execute(
+    stmt = (
         select(StudentRoster, StudentProfile, User)
         .join(StudentProfile, StudentProfile.roster_id == StudentRoster.id)
         .join(User, User.id == StudentProfile.user_id)
@@ -545,12 +581,17 @@ async def recognize_face(
             User.is_active.is_(True),
             User.role == "student",
         )
-    ).all()
+    )
+    if department and department.strip():
+        stmt = stmt.where(func.upper(StudentRoster.department) == department.strip().upper())
+
+    roster_records = db.execute(stmt).all()
     if not roster_records:
+        dept_msg = f" for department {department.strip().upper()}" if department and department.strip() else ""
         return {
             "matched": False,
             "similarity": 0.0,
-            "message": "No active registered students with admin-approved photos were found.",
+            "message": f"No active registered students with admin-approved photos were found{dept_msg}.",
             "top_match": None,
         }
 
@@ -600,3 +641,49 @@ async def recognize_face(
         "top_match": student_data,
         "message": f"Identified as {student_data['name']} (Roll: {student_data['roll']})" if matched and student_data else "No match found above threshold.",
     }
+
+
+@router.post("/recognize-department")
+async def recognize_face_by_department(
+    department: str = Form(...),
+    image: Optional[UploadFile] = File(None),
+    image_base64: Optional[str] = Form(None),
+    threshold: float = Form(DEFAULT_SIMILARITY_THRESHOLD),
+    db: Session = Depends(get_db),
+):
+    """Identify a student by matching only against images in picture/{department}/ (reduced search space)."""
+    return await recognize_face(
+        image=image,
+        image_base64=image_base64,
+        threshold=threshold,
+        department=department,
+        db=db,
+    )
+
+
+def scan_department_folder_embeddings(
+    face_svc,
+    department: str,
+    picture_root: Path | None = None,
+) -> list[tuple[str, str, np.ndarray, Path]]:
+    """Scan and extract embeddings for all student images in picture/{department}/."""
+    if picture_root is None:
+        picture_root = settings.picture_dir
+    dept_dir = picture_root / department.strip()
+    if not dept_dir.is_dir():
+        return []
+
+    results = []
+    for ext in ("*.jpg", "*.jpeg", "*.png"):
+        for img_path in dept_dir.glob(ext):
+            stem = img_path.stem
+            parts = stem.split("_", 1)
+            roll = parts[0]
+            pose = parts[1] if len(parts) > 1 else "official"
+            try:
+                emb = face_svc.extract_embedding(str(img_path))
+                if emb is not None:
+                    results.append((roll, pose, emb, img_path))
+            except Exception as exc:
+                logger.warning("Failed extracting embedding from %s: %s", img_path, exc)
+    return results

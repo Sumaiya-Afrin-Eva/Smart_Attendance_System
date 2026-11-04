@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+import shutil
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -9,10 +11,8 @@ from sqlalchemy import select
 from .config import settings
 from .database import Base, SessionLocal, engine
 from .models import (
-    AdminSetting, Enrollment, StudentProfile, StudentRoster, StudentSemesterFaceEnrollment, SystemMigration,
+    AdminSetting, Course, Enrollment, StudentProfile, StudentRoster, StudentSemesterFaceEnrollment, SystemMigration,
 )
-from .routers import auth, courses, face, students
-from .models import AdminSetting
 from .routers import auth, courses, face, routine, students
 
 
@@ -81,16 +81,20 @@ def ensure_database_schema() -> None:
         roster_photo_dir = settings.picture_dir
         roster_photo_dir.mkdir(parents=True, exist_ok=True)
         stored_photos = conn.exec_driver_sql(
-            "SELECT id, photo_data, photo_mime_type, photo_path FROM student_roster "
+            "SELECT id, photo_data, photo_mime_type, photo_path, department, roll FROM student_roster "
             "WHERE photo_data IS NOT NULL"
         ).fetchall()
-        for roster_id, photo_data, mime_type, stored_path in stored_photos:
+        for roster_id, photo_data, mime_type, stored_path, dept, roll in stored_photos:
             suffix = ".png" if mime_type == "image/png" else ".jpg"
-            photo_path = roster_photo_dir / f"{roster_id}{suffix}"
+            dept_name = (dept or "GENERAL").strip()
+            dept_folder = roster_photo_dir / dept_name
+            dept_folder.mkdir(parents=True, exist_ok=True)
+            name = roll if roll else str(roster_id)
+            photo_path = dept_folder / f"{name}{suffix}"
             if not photo_path.is_file() or photo_path.stat().st_size != len(photo_data):
                 photo_path.write_bytes(photo_data)
-            relative_path = f"picture/{photo_path.name}"
-            if stored_path != relative_path:
+            relative_path = f"picture/{dept_name}/{photo_path.name}"
+            if not stored_path or not (settings.picture_dir.parent / stored_path).is_file():
                 conn.exec_driver_sql(
                     "UPDATE student_roster SET photo_path = ? WHERE id = ?",
                     (relative_path, roster_id),
@@ -419,10 +423,93 @@ def backfill_legacy_semester_face_enrollments() -> None:
         db.commit()
 
 
+def migrate_student_pictures_to_departments() -> None:
+    """Organize picture/ into department folders (e.g. picture/CSE/) and standardize face sample names to roll_pose.jpg."""
+    with SessionLocal() as db:
+        picture_dir = settings.picture_dir
+        picture_dir.mkdir(parents=True, exist_ok=True)
+
+        # Pre-create folders for all known departments
+        known_depts = set(db.scalars(select(StudentRoster.department)).all())
+        known_depts.update(db.scalars(select(Course.department)).all())
+        known_depts.update(["CSE", "EEE", "ME", "CE", "ECE"])
+        for d in known_depts:
+            if d:
+                dept_dir = picture_dir / d.strip()
+                dept_dir.mkdir(parents=True, exist_ok=True)
+                gitkeep = dept_dir / ".gitkeep"
+                if not gitkeep.exists():
+                    gitkeep.touch()
+
+        migration_name = "dept-folders-and-pose-naming-v1"
+        if db.get(SystemMigration, migration_name):
+            return
+
+        pose_names = ["look_straight", "turn_left", "turn_right", "tilt_up", "tilt_down"]
+        rosters = db.scalars(select(StudentRoster)).all()
+        for roster in rosters:
+            dept = (roster.department or "GENERAL").strip()
+            dept_dir = picture_dir / dept
+            dept_dir.mkdir(parents=True, exist_ok=True)
+
+            if roster.face_sample_paths:
+                try:
+                    old_paths = json.loads(roster.face_sample_paths)
+                except Exception:
+                    old_paths = []
+                new_paths = []
+                for idx, old_p in enumerate(old_paths):
+                    if not isinstance(old_p, str):
+                        continue
+                    suffix = Path(old_p).suffix or ".jpg"
+                    pose = pose_names[idx] if idx < len(pose_names) else f"pose_{idx + 1}"
+                    new_filename = f"{roster.roll}_{pose}{suffix}"
+                    target_file = dept_dir / new_filename
+                    src_candidates = [
+                        settings.picture_dir.parent / old_p,
+                        picture_dir / Path(old_p).name,
+                        dept_dir / Path(old_p).name,
+                        dept_dir / new_filename,
+                    ]
+                    found = False
+                    for src in src_candidates:
+                        if src.is_file():
+                            if src.resolve() != target_file.resolve():
+                                shutil.copy2(src, target_file)
+                            found = True
+                            break
+                    if found or target_file.is_file():
+                        new_paths.append(f"picture/{dept}/{new_filename}")
+                    elif roster.photo_data and idx == 0:
+                        target_file.write_bytes(roster.photo_data)
+                        new_paths.append(f"picture/{dept}/{new_filename}")
+
+                if new_paths:
+                    roster.face_sample_paths = json.dumps(new_paths)
+
+            # Official photo
+            suffix = ".png" if roster.photo_mime_type == "image/png" else ".jpg"
+            official_name = f"{roster.roll}{suffix}"
+            official_file = dept_dir / official_name
+            if not official_file.is_file() and roster.photo_data:
+                official_file.write_bytes(roster.photo_data)
+            elif not official_file.is_file() and roster.photo_path:
+                old_official = settings.picture_dir.parent / roster.photo_path
+                if old_official.is_file():
+                    shutil.copy2(old_official, official_file)
+
+            if official_file.is_file():
+                roster.photo_path = f"picture/{dept}/{official_name}"
+
+        db.add(SystemMigration(name=migration_name))
+        db.commit()
+
+
 # Creates the tables on first run (fine for this project; use Alembic for real migrations)
 Base.metadata.create_all(bind=engine)
 ensure_database_schema()
 backfill_legacy_semester_face_enrollments()
+migrate_student_pictures_to_departments()
 settings.storage_dir.mkdir(parents=True, exist_ok=True)
 settings.picture_dir.mkdir(parents=True, exist_ok=True)
 ensure_seed_settings()
