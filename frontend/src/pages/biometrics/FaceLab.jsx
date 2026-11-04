@@ -238,6 +238,7 @@ export default function FaceLab() {
     }
 
     const startZxingScanner = async () => {
+      // Try ZXing first; if it fails (e.g., missing package), fall back to native BarcodeDetector
       try {
         const { BrowserQRCodeReader } = await import('@zxing/browser')
         const { BarcodeFormat, DecodeHintType } = await import('@zxing/library')
@@ -255,10 +256,38 @@ export default function FaceLab() {
         })
         if (cancelled) controls.stop()
         else scannerControls = controls
-      } catch (scanError) {
-        if (!cancelled) {
-          console.error('QR scanner could not start:', scanError)
-          setError('QR scanner could not start. Check camera permission and reload the kiosk.')
+        return
+      } catch (zxError) {
+        // ZXing not available – use native BarcodeDetector if supported
+        if (typeof window?.BarcodeDetector === 'function') {
+          const video = videoRef.current
+          if (!video) return
+          const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
+          let rafId
+          const scanLoop = async () => {
+            if (cancelled) return
+            try {
+              const detections = await detector.detect(video)
+              if (detections.length) {
+                submitToken(detections[0].rawValue)
+              } else {
+                rafId = requestAnimationFrame(scanLoop)
+              }
+            } catch (nativeErr) {
+              console.error('Native QR detector failed:', nativeErr)
+              setError('QR scanner could not start. Please ensure camera permission is granted.')
+            }
+          }
+          rafId = requestAnimationFrame(scanLoop)
+          scannerControls = {
+            stop: () => {
+              cancelAnimationFrame(rafId)
+              detector?.reset?.()
+            },
+          }
+        } else {
+          console.error('QR scanner could not start (ZXing missing):', zxError)
+          setError('QR scanner could not start. Install @zxing/browser or use a recent Chrome/Edge browser.')
         }
       }
     }
