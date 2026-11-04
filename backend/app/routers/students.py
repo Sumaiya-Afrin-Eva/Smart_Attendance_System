@@ -1,14 +1,15 @@
 """Everything a logged-in student can do with their own data."""
 import json
-import jwt
-from pathlib import Path
+import re
 from collections import defaultdict
 from datetime import datetime, time, timedelta
 from datetime import timezone
+from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from sqlalchemy import delete, select
+import jwt
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -30,6 +31,7 @@ student_only = require_role("student")
 ATTENDANCE_QR_VALID_SECONDS = 30
 ATTENDANCE_QR_ISSUER = "smart-attendance"
 ATTENDANCE_QR_AUDIENCE = "attendance-kiosk"
+ANDROID_DEVICE_ID_PATTERN = re.compile(r"[0-9a-fA-F]{16}")
 
 
 def _profile_or_404(user: User) -> StudentProfile:
@@ -52,8 +54,15 @@ def _profile_out(p: StudentProfile, user: User) -> dict:
 
 
 @router.get("/attendance-qr")
-def issue_attendance_qr(user: User = Depends(student_only), db: Session = Depends(get_db)):
+def issue_attendance_qr(
+    device_id: str = Header(..., alias="X-Device-ID"),
+    user: User = Depends(student_only),
+    db: Session = Depends(get_db),
+):
     """Issue a short-lived signed QR token for the student's active semester."""
+    if not ANDROID_DEVICE_ID_PATTERN.fullmatch(device_id):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "A valid Android device ID is required.")
+
     profile = user.profile
     if not profile or not profile.roster_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Complete student registration before requesting an attendance QR.")
@@ -80,6 +89,8 @@ def issue_attendance_qr(user: User = Depends(student_only), db: Session = Depend
             status.HTTP_403_FORBIDDEN,
             "Complete face enrollment for your current semester before requesting an attendance QR.",
         )
+
+    _bind_student_device(profile, device_id, db)
 
     now = datetime.now(timezone.utc)
     expires_at = int(now.timestamp()) + ATTENDANCE_QR_VALID_SECONDS
@@ -109,6 +120,45 @@ def issue_attendance_qr(user: User = Depends(student_only), db: Session = Depend
             "semester": profile.current_semester,
         },
     }
+
+
+def _bind_student_device(profile: StudentProfile, device_id: str, db: Session) -> None:
+    if profile.device_id is not None:
+        if profile.device_id != device_id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This account is bound to a different phone. Contact your instructor if you changed your phone.",
+            )
+        return
+
+    try:
+        result = db.execute(
+            update(StudentProfile)
+            .where(StudentProfile.id == profile.id, StudentProfile.device_id.is_(None))
+            .values(device_id=device_id, device_bound_at=datetime.now())
+        )
+        if result.rowcount == 0:
+            db.rollback()
+            db.refresh(profile)
+            if profile.device_id != device_id:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "This account is bound to a different phone. Contact your instructor if you changed your phone.",
+                )
+            return
+        db.commit()
+        db.refresh(profile)
+    except IntegrityError:
+        db.rollback()
+        owner_id = db.scalar(select(StudentProfile.id).where(StudentProfile.device_id == device_id))
+        if owner_id is None:
+            raise
+        if owner_id != profile.id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This phone is registered to another account.",
+            ) from None
+        db.refresh(profile)
 
 
 # ---------------------------------------------------------------- profile

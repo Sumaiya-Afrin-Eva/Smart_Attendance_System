@@ -13,7 +13,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean, DateTime as SQLDateTime, Float, ForeignKey, Integer, LargeBinary, String, Text,
-    TypeDecorator, UniqueConstraint,
+    Index, TypeDecorator, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -110,6 +110,7 @@ class StudentRoster(Base):
 
 class StudentProfile(Base):
     __tablename__ = "student_profiles"
+    __table_args__ = (Index("uq_student_profiles_device_id", "device_id", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True)
@@ -122,10 +123,22 @@ class StudentProfile(Base):
     section: Mapped[str | None] = mapped_column(String(5))
     current_semester: Mapped[str] = mapped_column(String(5))  # "3-2"
     phone: Mapped[str | None] = mapped_column(String(20))
+    device_id: Mapped[str | None] = mapped_column(String(64), default=None)
+    device_bound_at: Mapped[datetime | None] = mapped_column(ISODateTime(), default=None)
     updated_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now, onupdate=datetime.now)
 
     user: Mapped[User] = relationship(back_populates="profile")
     roster: Mapped[StudentRoster | None] = relationship(back_populates="profile")
+
+
+class DeviceReset(Base):
+    __tablename__ = "device_resets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    old_device_id: Mapped[str] = mapped_column(String(64))
+    reset_by: Mapped[str] = mapped_column(String(255))
+    reset_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
 
 
 class StudentSemesterFaceEnrollment(Base):
@@ -152,6 +165,16 @@ class ConsumedAttendanceQr(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     jti: Mapped[str] = mapped_column(String(36), unique=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("class_sessions.id"), index=True)
+    expires_at: Mapped[int] = mapped_column(Integer, index=True)
+    used_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
+
+
+class ConsumedKioskQrFallback(Base):
+    __tablename__ = "consumed_kiosk_qr_fallbacks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    jti: Mapped[str] = mapped_column(String(36), unique=True, index=True)
     session_id: Mapped[int] = mapped_column(ForeignKey("class_sessions.id"), index=True)
     expires_at: Mapped[int] = mapped_column(Integer, index=True)
     used_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)

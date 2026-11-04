@@ -27,6 +27,7 @@
     <string name="qr_refreshes_in">New code in</string>
     <string name="initial_qr_countdown">00:30</string>
     <string name="qr_security_notice">This code is signed by the attendance server, expires in 30 seconds, and can only be used once.</string>
+    <string name="device_id_unavailable">Could not verify this phone. Please update Android and try again.</string>
     <string name="student_details">Student details</string>
     <string name="student_name_placeholder">Student name</string>
     <string name="student_roll_placeholder">Roll number</string>

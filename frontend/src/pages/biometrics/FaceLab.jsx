@@ -38,6 +38,7 @@ export default function FaceLab() {
   const [cameraActive, setCameraActive] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [scanMode, setScanMode] = useState('face')
+  const [qrFallbackToken, setQrFallbackToken] = useState(null)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
   const [courseCode, setCourseCode] = useState('')
@@ -171,6 +172,8 @@ export default function FaceLab() {
     setOpening(true)
     setError('')
     setResult(null)
+    setQrFallbackToken(null)
+    setScanMode('face')
     setLiveness({ human: false, liveness: false, message: 'Start the camera to verify a live face.' })
     try {
       const { data } = await api.post('/face/kiosk/open', { course_code: courseCode })
@@ -190,12 +193,13 @@ export default function FaceLab() {
     setRecentLogs([])
     setError('')
     setScanMode('face')
+    setQrFallbackToken(null)
     qrScanLockRef.current = false
     setLiveness({ human: false, liveness: false, message: 'Start the camera to verify a live face.' })
   }
 
   const handleQrToken = useCallback(async (token) => {
-    if (qrScanLockRef.current || !activeClass) return
+    if (qrScanLockRef.current || !activeClass || !qrFallbackToken) return
     qrScanLockRef.current = true
     setScanning(true)
     setError('')
@@ -205,6 +209,7 @@ export default function FaceLab() {
       const { data } = await api.post('/face/kiosk/qr-scan', {
         session_id: activeClass.session_id,
         token,
+        fallback_token: qrFallbackToken,
       }, {
         timeout: 10000,
         skipNetworkRetry: true,
@@ -221,12 +226,19 @@ export default function FaceLab() {
       setError(errorMessage(err, 'QR verification failed. Ask the student to refresh their code.'))
     } finally {
       setScanning(false)
-      window.setTimeout(() => { qrScanLockRef.current = false }, 1200)
+      window.setTimeout(() => {
+        qrScanLockRef.current = false
+        lastQrTokenRef.current = null
+      }, 1200)
+      setQrFallbackToken(null)
+      setScanMode('face')
+      setLiveness({ human: false, liveness: false, message: 'Look at the camera, then blink and move your head slightly.' })
+      setLivenessRetryKey((key) => key + 1)
     }
-  }, [activeClass])
+  }, [activeClass, qrFallbackToken])
 
   useEffect(() => {
-    if (!cameraActive || !activeClass || scanMode !== 'qr') return undefined
+    if (!cameraActive || !activeClass || scanMode !== 'qr' || !qrFallbackToken) return undefined
     let cancelled = false
 
     let scannerControls
@@ -269,7 +281,7 @@ export default function FaceLab() {
       scannerControls?.stop()
       qrScanLockRef.current = false
     }
-  }, [cameraActive, activeClass, scanMode, handleQrToken])
+  }, [cameraActive, activeClass, scanMode, qrFallbackToken, handleQrToken])
 
   // Capture a frame and record attendance for the opened course session.
   const handleScan = async () => {
@@ -304,6 +316,13 @@ export default function FaceLab() {
         skipNetworkRetry: true,
       })
       setResult(res.data)
+      if (res.data?.matched) {
+        setQrFallbackToken(null)
+      } else if (res.data?.fallback_token) {
+        setQrFallbackToken(res.data.fallback_token)
+        setScanMode('qr')
+        setLiveness({ human: false, liveness: false, message: 'Face not recognized. Scan the student’s QR code to continue.' })
+      }
 
       if (res.data?.matched && res.data?.student) {
         const newLog = {
@@ -481,11 +500,13 @@ export default function FaceLab() {
               onClick={() => {
                 setError('')
                 setResult(null)
+                setQrFallbackToken(null)
                 setScanMode('face')
                 setLiveness({ human: false, liveness: false, message: 'Start the camera to verify a live face.' })
               }}
+              disabled={scanMode === 'qr'}
               aria-pressed={scanMode === 'face'}
-              className={`rounded-xl px-3 py-2.5 text-sm font-bold transition ${scanMode === 'face' ? 'bg-emerald-800 text-white' : 'text-stone-600 hover:bg-stone-50'}`}
+              className={`rounded-xl px-3 py-2.5 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${scanMode === 'face' ? 'bg-emerald-800 text-white' : 'text-stone-600 hover:bg-stone-50'}`}
             >
               Face attendance
             </button>
@@ -494,13 +515,15 @@ export default function FaceLab() {
               onClick={() => {
                 setError('')
                 setResult(null)
+                if (!qrFallbackToken) return
                 setScanMode('qr')
                 setLiveness({ human: false, liveness: false, message: 'Point the kiosk camera at a student QR code.' })
               }}
+              disabled={!qrFallbackToken || scanMode === 'qr'}
               aria-pressed={scanMode === 'qr'}
-              className={`rounded-xl px-3 py-2.5 text-sm font-bold transition ${scanMode === 'qr' ? 'bg-emerald-800 text-white' : 'text-stone-600 hover:bg-stone-50'}`}
+              className={`rounded-xl px-3 py-2.5 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${scanMode === 'qr' ? 'bg-emerald-800 text-white' : 'text-stone-600 hover:bg-stone-50'}`}
             >
-              Student QR
+              {qrFallbackToken ? 'Student QR fallback' : 'QR unlocks after face check'}
             </button>
           </div>
 
@@ -650,7 +673,9 @@ export default function FaceLab() {
                       <p className="text-xs font-bold">No Match Found</p>
                     </div>
                     <p className="text-xs text-amber-800 leading-relaxed">
-                      Face did not match any enrolled student with sufficient confidence (threshold 0.55). Please look directly at the camera and try again.
+                      {qrFallbackToken
+                        ? 'QR fallback is now active. Scan the student’s QR code to continue.'
+                        : 'Face did not match any enrolled student with sufficient confidence (threshold 0.55). Please look directly at the camera and try again.'}
                     </p>
                   </div>
                 )

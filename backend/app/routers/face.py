@@ -10,14 +10,15 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 import jwt
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -27,6 +28,7 @@ from ..models import (
     Attendance,
     ClassSession,
     ConsumedAttendanceQr,
+    ConsumedKioskQrFallback,
     Course,
     CourseRosterAssignment,
     Enrollment,
@@ -47,6 +49,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/face", tags=["face"])
 ATTENDANCE_QR_ISSUER = "smart-attendance"
 ATTENDANCE_QR_AUDIENCE = "attendance-kiosk"
+KIOSK_QR_FALLBACK_AUDIENCE = "attendance-kiosk-qr-fallback"
+KIOSK_QR_FALLBACK_VALID_SECONDS = 30
 
 
 def _registered_face_inputs(roster: StudentRoster) -> list[bytes | str]:
@@ -105,6 +109,7 @@ class KioskOpenRequest(BaseModel):
 class KioskQrScanRequest(BaseModel):
     session_id: int
     token: str = Field(min_length=1, max_length=4096)
+    fallback_token: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
 def _eligible_students(db: Session, course_id: int):
@@ -129,9 +134,92 @@ def _qr_error(detail: str = "This attendance QR is invalid or has expired.") -> 
     return HTTPException(status.HTTP_401_UNAUTHORIZED, detail)
 
 
+def _create_kiosk_qr_fallback(session_id: int, db: Session) -> str:
+    now = int(datetime.now(timezone.utc).timestamp())
+    db.execute(delete(ConsumedKioskQrFallback).where(ConsumedKioskQrFallback.expires_at < now))
+    db.commit()
+    return jwt.encode(
+        {
+            "session_id": session_id,
+            "jti": str(uuid4()),
+            "iat": now,
+            "exp": now + KIOSK_QR_FALLBACK_VALID_SECONDS,
+            "iss": ATTENDANCE_QR_ISSUER,
+            "aud": KIOSK_QR_FALLBACK_AUDIENCE,
+            "scope": "attendance:qr-fallback",
+        },
+        settings.jwt_secret,
+        algorithm="HS256",
+    )
+
+
 @router.post("/kiosk/qr-scan")
 def scan_kiosk_qr(body: KioskQrScanRequest, db: Session = Depends(get_db)):
     """Verify and consume one student QR token, then record attendance for this class."""
+    if body.fallback_token is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Face verification is required before scanning a QR code.",
+        )
+
+    try:
+        fallback_claims = jwt.decode(
+            body.fallback_token,
+            settings.jwt_secret,
+            algorithms=["HS256"],
+            audience=KIOSK_QR_FALLBACK_AUDIENCE,
+            issuer=ATTENDANCE_QR_ISSUER,
+            options={"require": ["session_id", "jti", "iat", "exp", "scope"]},
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Face verification is required before scanning a QR code.",
+        ) from None
+    except jwt.PyJWTError:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Face verification is required before scanning a QR code.",
+        ) from None
+
+    fallback_jti = fallback_claims.get("jti")
+    if (
+        fallback_claims.get("scope") != "attendance:qr-fallback"
+        or fallback_claims.get("session_id") != body.session_id
+        or not isinstance(fallback_jti, str)
+        or not fallback_jti
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Face verification is required before scanning a QR code.",
+        )
+
+    class_session = db.get(ClassSession, body.session_id)
+    if (
+        class_session is None
+        or class_session.status != "completed"
+        or class_session.start_at.date() != datetime.now().date()
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Today's kiosk class session was not found. Open the kiosk again.")
+    course = db.get(Course, class_session.course_id)
+    if course is None or not course.is_active:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "The selected course is no longer active.")
+
+    fallback_used = ConsumedKioskQrFallback(
+        jti=fallback_jti,
+        session_id=body.session_id,
+        expires_at=int(fallback_claims["exp"]),
+    )
+    db.add(fallback_used)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This QR fallback was already used. Verify the face again to retry.",
+        ) from None
+
     try:
         claims = jwt.decode(
             body.token,
@@ -148,18 +236,6 @@ def scan_kiosk_qr(body: KioskQrScanRequest, db: Session = Depends(get_db)):
 
     if claims.get("scope") != "attendance:mark":
         raise _qr_error()
-
-    class_session = db.get(ClassSession, body.session_id)
-    if (
-        class_session is None
-        or class_session.status != "completed"
-        or class_session.start_at.date() != datetime.now().date()
-    ):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Today's kiosk class session was not found. Open the kiosk again.")
-
-    course = db.get(Course, class_session.course_id)
-    if course is None or not course.is_active:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "The selected course is no longer active.")
 
     try:
         student_id = int(claims["sub"])
@@ -401,6 +477,7 @@ async def scan_kiosk(
             "similarity": round(live_similarity, 4),
             "similarity_percent": round(max(0.0, live_similarity) * 100, 2),
             "threshold": threshold,
+            "fallback_token": _create_kiosk_qr_fallback(session_id, db),
             "message": "The face changed after live verification. Please verify again using the camera.",
         }
 
@@ -429,6 +506,7 @@ async def scan_kiosk(
             "similarity": round(similarity, 4),
             "similarity_percent": round(max(0.0, similarity) * 100, 2),
             "threshold": threshold,
+            "fallback_token": _create_kiosk_qr_fallback(session_id, db),
             "message": "Face not verified. No attendance was recorded; please try again.",
         }
 

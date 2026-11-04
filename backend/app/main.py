@@ -4,16 +4,14 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
 from .config import settings
 from .database import Base, SessionLocal, engine
 from .models import (
     AdminSetting, Enrollment, StudentProfile, StudentRoster, StudentSemesterFaceEnrollment, SystemMigration,
 )
-from .routers import auth, courses, face, students
-from .models import AdminSetting
-from .routers import auth, courses, face, routine, students
+from .routers import auth, courses, devices, face, routine, students
 
 
 def ensure_seed_settings() -> None:
@@ -226,6 +224,21 @@ def ensure_database_schema() -> None:
     migrate_course_code_uniqueness()
 
 
+def migrate_student_device_binding() -> None:
+    """Add nullable device binding fields to existing student profile tables."""
+    columns = {column["name"] for column in inspect(engine).get_columns("student_profiles")}
+    with engine.begin() as conn:
+        if "device_id" not in columns:
+            conn.exec_driver_sql("ALTER TABLE student_profiles ADD COLUMN device_id VARCHAR(64)")
+        if "device_bound_at" not in columns:
+            conn.exec_driver_sql("ALTER TABLE student_profiles ADD COLUMN device_bound_at TIMESTAMP")
+    device_index = next(
+        index for index in StudentProfile.__table__.indexes
+        if index.name == "uq_student_profiles_device_id"
+    )
+    device_index.create(bind=engine, checkfirst=True)
+
+
 def migrate_course_code_uniqueness() -> None:
     """Allow a course code to be reused in another session without losing history."""
     with engine.connect() as conn:
@@ -328,6 +341,7 @@ def backfill_legacy_semester_face_enrollments() -> None:
 
 # Creates the tables on first run (fine for this project; use Alembic for real migrations)
 Base.metadata.create_all(bind=engine)
+migrate_student_device_binding()
 ensure_database_schema()
 backfill_legacy_semester_face_enrollments()
 settings.storage_dir.mkdir(parents=True, exist_ok=True)
@@ -385,6 +399,7 @@ async def catch_all_errors(request: Request, exc: Exception):
 
 app.include_router(auth.router)
 app.include_router(courses.router)
+app.include_router(devices.router)
 app.include_router(routine.router)
 app.include_router(students.router)
 app.include_router(face.router)
