@@ -223,7 +223,10 @@ def google_login(body: GoogleLoginIn, db: Session = Depends(get_db)):
     if email.endswith("@" + settings.student_email_domain.lower()):
         user = _login_or_register_student(db, email, info.get("name", ""), info.get("picture"))
     elif email.endswith("@kuet.ac.bd"):
-        user = _login_or_register_staff(db, email, info.get("name", ""), info.get("picture"))
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Faculty and staff accounts must sign in using their registered email and password.",
+        )
     else:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
@@ -244,24 +247,24 @@ def dev_login(body: DevLoginIn, db: Session = Depends(get_db)):
 
 @router.post("/login")
 def password_login(body: PasswordLoginIn, db: Session = Depends(get_db)):
-    """Email + password login — for teachers and admins only.
+    """Email + password login — for students, teachers, and admins.
     The account must:
       1. Exist in the database (pre-created by admin).
-      2. Have role 'teacher' or 'admin'.
+      2. Have role 'student', 'teacher', 'admin', or 'system_admin'.
       3. Have a password set (admin must have assigned one).
       4. Match the stored bcrypt hash exactly.
     """
-    user = db.scalar(select(User).where(User.email == body.email.lower()))
+    email_clean = body.email.strip().lower()
+    user = db.scalar(select(User).where(User.email == email_clean))
+    if not user and "@kuet.ac.bd" in email_clean:
+        alt_email = email_clean.replace("@kuet.ac.bd", "@cse.kuet.ac.bd") if "@cse.kuet.ac.bd" not in email_clean else email_clean.replace("@cse.kuet.ac.bd", "@kuet.ac.bd")
+        user = db.scalar(select(User).where(User.email == alt_email))
 
-    # Reject if account doesn't exist, wrong role, no password set, or wrong password.
-    # We deliberately use the same generic error for all cases to prevent
-    # user-enumeration attacks.
-    if (
-        not user
-        or user.role not in {"teacher", "admin", "system_admin"}
-        or not user.password_hash
-        or not verify_password(body.password, user.password_hash)
-    ):
+    # Reject if account doesn't exist or wrong role
+    if not user or user.role not in {"student", "teacher", "admin", "system_admin"}:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password.")
+
+    if not user.password_hash or not verify_password(body.password, user.password_hash):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password.")
 
     if user.role in {"admin", "system_admin"}:
@@ -276,6 +279,14 @@ def password_login(body: PasswordLoginIn, db: Session = Depends(get_db)):
 
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been disabled. Contact the admin.")
+
+    if user.role == "student":
+        roster_record = db.scalar(select(StudentRoster).where(StudentRoster.email == user.email))
+        if not roster_record or not roster_record.is_active:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "This student email has not been approved by the admin or has been disabled.",
+            )
 
     return _session_response(db, user)
 

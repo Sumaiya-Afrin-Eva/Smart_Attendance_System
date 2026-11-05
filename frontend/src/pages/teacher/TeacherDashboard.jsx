@@ -1,4 +1,5 @@
-import { BookOpen, CalendarDays, ChartColumnBig, Clock3, GraduationCap, Users, FileText, ArrowRight } from 'lucide-react'
+import { BookOpen, CalendarDays, ChartColumnBig, Clock3, GraduationCap, Users, FileText, ArrowRight, CheckCircle2 } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 
 import { useState, useEffect } from 'react'
@@ -10,8 +11,6 @@ const baseStats = [
   { id: 'students_tracked', label: 'Students tracked', hint: 'Across all sections', icon: Users, tone: 'amber' },
   { id: 'avg_attendance', label: 'Avg. attendance', hint: 'Department benchmark', icon: ChartColumnBig, tone: 'violet' },
 ]
-
-
 
 function StatCard({ item }) {
   const Icon = item.icon
@@ -40,10 +39,12 @@ function StatCard({ item }) {
 
 export default function TeacherDashboard() {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const [stats, setStats] = useState(baseStats.map(s => ({ ...s, value: '...' })))
   const [upcoming, setUpcoming] = useState([])
   const [performance, setPerformance] = useState([])
   const [recent, setRecent] = useState([])
+  const [recentCheckins, setRecentCheckins] = useState([])
 
   useEffect(() => {
     async function fetchStats() {
@@ -53,6 +54,7 @@ export default function TeacherDashboard() {
         if (data.upcoming) setUpcoming(data.upcoming)
         if (data.performance) setPerformance(data.performance)
         if (data.recent) setRecent(data.recent)
+        if (data.recent_checkins) setRecentCheckins(data.recent_checkins)
       } catch (err) {
         console.error('Failed to load stats', err)
         setStats(baseStats.map(s => ({ ...s, value: '-' })))
@@ -70,7 +72,7 @@ export default function TeacherDashboard() {
             <h2 className="mt-2 font-display text-2xl font-bold text-stone-900">Welcome, {user?.name || 'Faculty'}</h2>
             <p className="mt-1 text-sm text-stone-500">Your classes, attendance trends, and student engagement are all in sync.</p>
           </div>
-          <button className="inline-flex items-center gap-2 rounded-xl bg-emerald-800 px-4 py-2.5 text-sm font-semibold text-white shadow-xs transition hover:bg-emerald-700 cursor-pointer">
+          <button onClick={() => navigate('/teacher/courses')} className="inline-flex items-center gap-2 rounded-xl bg-emerald-800 px-4 py-2.5 text-sm font-semibold text-white shadow-xs transition hover:bg-emerald-700 cursor-pointer">
             <CalendarDays size={16} />
             Create class session
           </button>
@@ -85,53 +87,133 @@ export default function TeacherDashboard() {
         <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
           <div className="flex items-center justify-between">
             <h3 className="font-display text-xl font-bold text-stone-900">Upcoming classes</h3>
-            <button className="inline-flex items-center gap-1 text-sm font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer">
+            <button onClick={() => navigate('/teacher/courses')} className="inline-flex items-center gap-1 text-sm font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer">
               View all <ArrowRight size={15} />
             </button>
           </div>
 
           <div className="mt-5 space-y-3">
-            {upcoming.map((item) => (
-              <div key={item.id} className="rounded-xl border border-stone-200 bg-stone-50/80 p-3.5">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-700">{item.course}</p>
-                    <h4 className="mt-1 text-base font-semibold text-stone-900">{item.title}</h4>
+            {upcoming.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-stone-200 bg-stone-50/50 p-6 text-center text-sm text-stone-500">
+                No upcoming classes scheduled.
+              </p>
+            ) : (
+              upcoming.map((item) => (
+                <div key={item.id} className="rounded-xl border border-stone-200 bg-stone-50/80 p-3.5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-700">{item.course}</p>
+                      <h4 className="mt-1 text-base font-semibold text-stone-900">{item.title}</h4>
+                    </div>
+                    <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-800">
+                      {item.section}
+                    </span>
                   </div>
-                  <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-semibold text-emerald-800">
-                    {item.section}
-                  </span>
-                </div>
 
-                <div className="mt-3 flex flex-wrap gap-3 text-sm text-stone-600">
-                  <span className="inline-flex items-center gap-1.5"><Clock3 size={14} className="text-stone-400" /> {item.time}</span>
-                  <span className="inline-flex items-center gap-1.5"><BookOpen size={14} className="text-stone-400" /> Room {item.room}</span>
+                  <div className="mt-3 flex flex-wrap gap-3 text-sm text-stone-600">
+                    <span className="inline-flex items-center gap-1.5"><Clock3 size={14} className="text-stone-400" /> {item.time}</span>
+                    <span className="inline-flex items-center gap-1.5"><BookOpen size={14} className="text-stone-400" /> Room {item.room}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
 
         <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
           <div className="flex items-center justify-between">
             <h3 className="font-display text-xl font-bold text-stone-900">Class health</h3>
-            <button className="text-sm font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer">Details</button>
+            <button onClick={() => navigate('/teacher/analytics')} className="text-sm font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer">Details</button>
           </div>
 
           <div className="mt-5 space-y-4">
-            {performance.map((item) => (
-              <div key={item.course}>
-                <div className="mb-1 flex items-center justify-between text-sm">
-                  <span className="font-semibold text-stone-800">{item.course}</span>
-                  <span className="text-stone-500">{item.percent}%</span>
+            {performance.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-stone-200 bg-stone-50/50 p-6 text-center text-sm text-stone-500">
+                Attendance health will calculate after class check-ins.
+              </p>
+            ) : (
+              performance.map((item) => (
+                <div key={item.course}>
+                  <div className="mb-1 flex items-center justify-between text-sm">
+                    <span className="font-semibold text-stone-800">{item.course}</span>
+                    <span className="text-stone-500">{item.percent}%</span>
+                  </div>
+                  <div className="h-2.5 overflow-hidden rounded-full bg-stone-200">
+                    <div className="h-full rounded-full bg-emerald-600" style={{ width: `${item.percent}%` }} />
+                  </div>
+                  <p className="mt-1 text-xs text-stone-500">{item.status}</p>
                 </div>
-                <div className="h-2.5 overflow-hidden rounded-full bg-stone-200">
-                  <div className="h-full rounded-full bg-emerald-600" style={{ width: `${item.percent}%` }} />
-                </div>
-                <p className="mt-1 text-xs text-stone-500">{item.status}</p>
-              </div>
-            ))}
+              ))
+            )}
           </div>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-600"></span>
+              </span>
+              <h3 className="font-display text-xl font-bold text-stone-900">Recent student check-ins</h3>
+            </div>
+            <p className="mt-1 text-sm text-stone-500">
+              Live face-verified student attendance logs for your assigned courses.
+            </p>
+          </div>
+          <button
+            onClick={() => navigate('/teacher/history')}
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+          >
+            View full ledger <ArrowRight size={15} />
+          </button>
+        </div>
+
+        <div className="mt-5">
+          {recentCheckins.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-stone-200 bg-stone-50/50 p-6 text-center text-sm text-stone-500">
+              No recent student check-in records found.
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {recentCheckins.map((student) => (
+                <div
+                  key={student.id}
+                  onClick={() => navigate('/teacher/history')}
+                  className="flex flex-col justify-between rounded-xl border border-stone-200 bg-stone-50/70 p-4 transition hover:bg-stone-100 hover:border-emerald-300 cursor-pointer shadow-2xs"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="font-bold text-stone-900">{student.student_name}</p>
+                      <p className="text-xs text-stone-500">
+                        Roll: <span className="font-semibold text-stone-700">{student.roll}</span> {student.department ? `· ${student.department}` : ''}
+                      </p>
+                    </div>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/20">
+                      <CheckCircle2 size={12} /> {student.status}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 rounded-lg bg-white p-2.5 border border-stone-200/80 text-xs">
+                    <p className="font-semibold text-emerald-800 truncate">{student.course_code}: {student.course_title}</p>
+                    <div className="mt-1 flex items-center justify-between text-stone-500">
+                      <span>{student.method}</span>
+                      {student.confidence && (
+                        <span className="font-semibold text-emerald-700">{student.confidence}</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between text-[11px] text-stone-400">
+                    <span>{student.date}</span>
+                    <span className="font-semibold text-stone-600">{student.time}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 
@@ -139,22 +221,28 @@ export default function TeacherDashboard() {
         <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
           <div className="flex items-center justify-between">
             <h3 className="font-display text-xl font-bold text-stone-900">Recent class records</h3>
-            <button className="text-sm font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer">Open history</button>
+            <button onClick={() => navigate('/teacher/history')} className="text-sm font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer">Open history</button>
           </div>
 
           <div className="mt-5 space-y-3">
-            {recent.map((item) => (
-              <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl border border-stone-200 bg-stone-50/80 p-3.5">
-                <div>
-                  <p className="font-semibold text-stone-800">{item.class}</p>
-                  <p className="text-xs text-stone-500">{item.date}</p>
+            {recent.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-stone-200 bg-stone-50/50 p-6 text-center text-sm text-stone-500">
+                No recent class records found.
+              </p>
+            ) : (
+              recent.map((item) => (
+                <div key={item.id} onClick={() => navigate('/teacher/history')} className="flex items-center justify-between gap-3 rounded-xl border border-stone-200 bg-stone-50/80 p-3.5 hover:bg-stone-100 transition cursor-pointer">
+                  <div>
+                    <p className="font-semibold text-stone-800">{item.class}</p>
+                    <p className="text-xs text-stone-500">{item.date}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-bold text-emerald-700">{item.score}</p>
+                    <p className="text-xs text-stone-500">{item.students}</p>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <p className="font-bold text-emerald-700">{item.score}</p>
-                  <p className="text-xs text-stone-500">{item.students}</p>
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
 
@@ -164,22 +252,22 @@ export default function TeacherDashboard() {
           </div>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <button className="rounded-xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/60 cursor-pointer">
+            <button onClick={() => navigate('/teacher/courses')} className="rounded-xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/60 cursor-pointer">
               <GraduationCap size={18} className="text-emerald-700" />
               <p className="mt-3 font-semibold text-stone-900">Create new class</p>
               <p className="mt-1 text-xs text-stone-500">Add course, room, timetable and student list.</p>
             </button>
-            <button className="rounded-xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/60 cursor-pointer">
+            <button onClick={() => navigate('/teacher/my-courses')} className="rounded-xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/60 cursor-pointer">
               <Users size={18} className="text-emerald-700" />
               <p className="mt-3 font-semibold text-stone-900">Manage roster</p>
-              <p className="mt-1 text-xs text-stone-500">Review roll range, sections, and batch allocation.</p>
+              <p className="mt-1 text-xs text-stone-500">Review assigned courses and student enrollment.</p>
             </button>
-            <button className="rounded-xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/60 cursor-pointer">
+            <button onClick={() => navigate('/teacher/history')} className="rounded-xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/60 cursor-pointer">
               <FileText size={18} className="text-emerald-700" />
               <p className="mt-3 font-semibold text-stone-900">View history</p>
-              <p className="mt-1 text-xs text-stone-500">Access earlier sessions and student attendance logs.</p>
+              <p className="mt-1 text-xs text-stone-500">Access live sessions and student attendance sheets.</p>
             </button>
-            <button className="rounded-xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/60 cursor-pointer">
+            <button onClick={() => navigate('/teacher/analytics')} className="rounded-xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-emerald-300 hover:bg-emerald-50/60 cursor-pointer">
               <ChartColumnBig size={18} className="text-emerald-700" />
               <p className="mt-3 font-semibold text-stone-900">Analytics</p>
               <p className="mt-1 text-xs text-stone-500">Track attendance percentage and class trend.</p>

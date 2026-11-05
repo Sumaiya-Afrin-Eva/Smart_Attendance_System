@@ -45,12 +45,23 @@ export default function AdminRoutine() {
   const [noticeType, setNoticeType] = useState('success') // success | error
 
   // Filters
-  const [selectedDept, setSelectedDept] = useState('CSE')
-  const [selectedSem, setSelectedSem] = useState('3-1')
-  const [selectedSec, setSelectedSec] = useState('A')
+  const [selectedDept, setSelectedDept] = useState('All')
   const [selectedDay, setSelectedDay] = useState('All')
+  const [selectedTeacher, setSelectedTeacher] = useState('All')
   const [search, setSearch] = useState('')
-  const [viewMode, setViewMode] = useState('grid') // grid | table
+  const [viewMode, setViewMode] = useState('grid') // grid | faculty | table
+
+  // Available teachers for filtering
+  const availableTeachers = useMemo(() => {
+    const list = new Set()
+    routine.forEach((r) => {
+      if (r.teacherName && r.teacherName !== 'TBA') list.add(r.teacherName)
+    })
+    teachers.forEach((t) => {
+      if (t.name) list.add(t.name)
+    })
+    return Array.from(list).sort()
+  }, [routine, teachers])
 
   // Manual Modal state
   const [showManualModal, setShowManualModal] = useState(false)
@@ -74,9 +85,6 @@ export default function AdminRoutine() {
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [uploadFile, setUploadFile] = useState(null)
   const [uploading, setUploading] = useState(false)
-  const [defaultDept, setDefaultDept] = useState('CSE')
-  const [defaultSem, setDefaultSem] = useState('3-1')
-  const [defaultSec, setDefaultSec] = useState('A')
 
   // Fetch initial routine, courses, and teachers
   useEffect(() => {
@@ -120,9 +128,19 @@ export default function AdminRoutine() {
   const filteredRoutine = useMemo(() => {
     return routine.filter((slot) => {
       const matchDept = selectedDept === 'All' || slot.department === selectedDept
-      const matchSem = selectedSem === 'All' || slot.semester === selectedSem
-      const matchSec = selectedSec === 'All' || slot.section === selectedSec
       const matchDay = selectedDay === 'All' || slot.day === selectedDay
+      let matchTeacher = selectedTeacher === 'All'
+      if (!matchTeacher && slot.teacherName) {
+        if (slot.teacherName === selectedTeacher) {
+          matchTeacher = true
+        } else {
+          const cleanSelected = selectedTeacher.replace(/^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*/i, '').trim().toLowerCase()
+          const cleanSlot = slot.teacherName.replace(/^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*/i, '').trim().toLowerCase()
+          if (cleanSelected === cleanSlot || (cleanSelected.length > 5 && (cleanSlot.includes(cleanSelected) || cleanSelected.includes(cleanSlot)))) {
+            matchTeacher = true
+          }
+        }
+      }
       const query = search.trim().toLowerCase()
       const matchSearch =
         !query ||
@@ -131,9 +149,9 @@ export default function AdminRoutine() {
         slot.teacherName?.toLowerCase().includes(query) ||
         slot.room?.toLowerCase().includes(query)
 
-      return matchDept && matchSem && matchSec && matchDay && matchSearch
+      return matchDept && matchDay && matchTeacher && matchSearch
     })
-  }, [routine, selectedDept, selectedSem, selectedSec, selectedDay, search])
+  }, [routine, selectedDept, selectedDay, selectedTeacher, search])
 
   // Group by day for the grid view
   const routineByDay = useMemo(() => {
@@ -153,16 +171,40 @@ export default function AdminRoutine() {
     return map
   }, [filteredRoutine])
 
+  // Group by teacher for the faculty schedule view
+  const routineByTeacher = useMemo(() => {
+    const map = {}
+    filteredRoutine.forEach((item) => {
+      const tName = item.teacherName || 'Unassigned Faculty'
+      if (!map[tName]) map[tName] = []
+      map[tName].push(item)
+    })
+    const dayOrder = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 }
+    Object.keys(map).forEach((k) => {
+      map[k].sort((a, b) => {
+        const dDiff = (dayOrder[a.day] ?? 99) - (dayOrder[b.day] ?? 99)
+        if (dDiff !== 0) return dDiff
+        return (a.startTime || '').localeCompare(b.startTime || '')
+      })
+    })
+    return map
+  }, [filteredRoutine])
+
   // Statistics
   const stats = useMemo(() => {
     const uniqueCourses = new Set(filteredRoutine.map((r) => r.courseCode)).size
     const uniqueTeachers = new Set(filteredRoutine.map((r) => r.teacherName).filter(Boolean)).size
     const uniqueRooms = new Set(filteredRoutine.map((r) => r.room).filter(Boolean)).size
+    const theoryCount = filteredRoutine.filter((r) => (r.courseType || '').toLowerCase() === 'theory').length
+    const labCount = filteredRoutine.filter((r) => (r.courseType || '').toLowerCase().includes('lab') || (r.courseType || '').toLowerCase().includes('sessional')).length
+
     return {
       totalSlots: filteredRoutine.length,
       courses: uniqueCourses,
       teachers: uniqueTeachers,
       rooms: uniqueRooms,
+      theoryCount,
+      labCount,
     }
   }, [filteredRoutine])
 
@@ -171,8 +213,8 @@ export default function AdminRoutine() {
     setEditingId(null)
     setForm({
       department: selectedDept !== 'All' ? selectedDept : 'CSE',
-      semester: selectedSem !== 'All' ? selectedSem : '3-1',
-      section: selectedSec !== 'All' ? selectedSec : 'A',
+      semester: '1-1',
+      section: 'A',
       day: selectedDay !== 'All' ? selectedDay : 'Sunday',
       start_time: '08:00 AM',
       end_time: '08:50 AM',
@@ -261,22 +303,20 @@ export default function AdminRoutine() {
 
   // Clear filtered slots
   async function handleClearRoutine() {
-    const confirmText = `Are you sure you want to clear routine slots for ${selectedDept} ${selectedSem} (Section ${selectedSec})?`
+    const isFiltered = selectedDept !== 'All'
+    const confirmText = isFiltered
+      ? `Are you sure you want to delete all routine slots for department ${selectedDept}?`
+      : 'Are you sure you want to delete all routine slots?'
     if (!window.confirm(confirmText)) return
 
     try {
-      await api.delete('/admin/routine/all', {
-        params: {
-          department: selectedDept,
-          semester: selectedSem,
-          section: selectedSec,
-        },
-      })
+      const params = isFiltered ? { department: selectedDept } : {}
+      await api.delete('/admin/routine/all', { params })
       const { data } = await api.get('/admin/routine')
       setRoutine(data)
-      showNotice('Selected routine schedule cleared.')
+      showNotice(isFiltered ? `Routine slots for ${selectedDept} deleted.` : 'All routine slots deleted successfully.')
     } catch (err) {
-      showNotice(errorMessage(err, 'Failed to clear routine.'), 'error')
+      showNotice(errorMessage(err, 'Failed to delete routine.'), 'error')
     }
   }
 
@@ -294,11 +334,6 @@ export default function AdminRoutine() {
 
     try {
       const { data } = await api.post('/admin/routine/bulk-upload', formData, {
-        params: {
-          default_department: defaultDept,
-          default_semester: defaultSem,
-          default_section: defaultSec,
-        },
         headers: { 'Content-Type': 'multipart/form-data' },
       })
 
@@ -354,9 +389,7 @@ export default function AdminRoutine() {
     ])
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((e) => e.join(','))].join('\n')
     const encodedUri = encodeURI(csvContent)
-    const link = document.createElement('a')
-    link.setAttribute('href', encodedUri)
-    link.setAttribute('download', `class_routine_${selectedDept}_${selectedSem}.csv`)
+    link.setAttribute('download', `class_routine_${selectedDept.toLowerCase()}.csv`)
     document.body.appendChild(link)
     link.click()
     link.remove()
@@ -433,7 +466,7 @@ export default function AdminRoutine() {
         </div>
 
         {/* Quick Stats Grid */}
-        <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4 md:gap-4 pt-6 border-t border-slate-100">
+        <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3 md:gap-4 pt-6 border-t border-slate-100">
           <div className="rounded-2xl bg-slate-50/80 p-4 border border-slate-100">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Scheduled Slots</span>
             <div className="mt-1 flex items-baseline gap-2">
@@ -453,13 +486,6 @@ export default function AdminRoutine() {
             <div className="mt-1 flex items-baseline gap-2">
               <span className="text-2xl font-black text-teal-700">{stats.teachers}</span>
               <span className="text-xs text-slate-500">teachers</span>
-            </div>
-          </div>
-          <div className="rounded-2xl bg-slate-50/80 p-4 border border-slate-100">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Rooms & Labs</span>
-            <div className="mt-1 flex items-baseline gap-2">
-              <span className="text-2xl font-black text-indigo-700">{stats.rooms}</span>
-              <span className="text-xs text-slate-500">venues</span>
             </div>
           </div>
         </div>
@@ -487,27 +513,6 @@ export default function AdminRoutine() {
             </select>
 
             <select
-              value={selectedSem}
-              onChange={(e) => setSelectedSem(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-2xs focus:border-emerald-500 focus:outline-none"
-            >
-              <option value="All">All Terms</option>
-              {SEMESTERS.map((s) => (
-                <option key={s} value={s}>Term {s}</option>
-              ))}
-            </select>
-
-            <select
-              value={selectedSec}
-              onChange={(e) => setSelectedSec(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-2xs focus:border-emerald-500 focus:outline-none"
-            >
-              {SECTIONS.map((sec) => (
-                <option key={sec} value={sec}>Section {sec}</option>
-              ))}
-            </select>
-
-            <select
               value={selectedDay}
               onChange={(e) => setSelectedDay(e.target.value)}
               className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-2xs focus:border-emerald-500 focus:outline-none"
@@ -515,6 +520,17 @@ export default function AdminRoutine() {
               <option value="All">All Days</option>
               {DAYS.map((d) => (
                 <option key={d} value={d}>{d}</option>
+              ))}
+            </select>
+
+            <select
+              value={selectedTeacher}
+              onChange={(e) => setSelectedTeacher(e.target.value)}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-2xs focus:border-emerald-500 focus:outline-none max-w-[170px] truncate"
+            >
+              <option value="All">All Teachers</option>
+              {availableTeachers.map((t) => (
+                <option key={t} value={t}>{t}</option>
               ))}
             </select>
           </div>
@@ -547,6 +563,18 @@ export default function AdminRoutine() {
                 Grid
               </button>
               <button
+                onClick={() => setViewMode('faculty')}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition-all ${
+                  viewMode === 'faculty'
+                    ? 'bg-white text-emerald-800 shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="Grouped by Faculty (Matches Excel format)"
+              >
+                <UserCheck className="h-3.5 w-3.5" />
+                Faculty
+              </button>
+              <button
                 onClick={() => setViewMode('table')}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition-all ${
                   viewMode === 'table'
@@ -556,7 +584,7 @@ export default function AdminRoutine() {
                 title="List Table"
               >
                 <List className="h-3.5 w-3.5" />
-                List
+                Table
               </button>
             </div>
 
@@ -569,14 +597,15 @@ export default function AdminRoutine() {
               CSV
             </button>
 
-            {filteredRoutine.length > 0 && (
+            {routine.length > 0 && (
               <button
+                type="button"
                 onClick={handleClearRoutine}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50/60 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100/70 transition-colors"
-                title="Clear filtered schedule"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100 hover:border-rose-400 transition-colors shadow-2xs"
+                title="Delete all routine slots"
               >
-                <Trash2 className="h-3.5 w-3.5" />
-                Clear
+                <Trash2 className="h-3.5 w-3.5 text-rose-600" />
+                Clear Routine
               </button>
             )}
           </div>
@@ -602,7 +631,7 @@ export default function AdminRoutine() {
           <p className="mt-1 text-xs text-slate-500 max-w-md">
             {routine.length === 0
               ? 'No class routines exist yet. Upload your timetable using an Excel or CSV file, or add class periods manually.'
-              : `No class routine slots match the selected filters (${selectedDept} ${selectedSem} Sec ${selectedSec}). Add routine entries manually or import your schedule via Excel.`}
+              : 'No class routine slots match the selected filters. Try changing your department, day, or teacher filter.'}
           </p>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2.5">
             <button
@@ -759,6 +788,118 @@ export default function AdminRoutine() {
               </div>
             )
           })}
+        </div>
+      ) : viewMode === 'faculty' ? (
+        /* FACULTY TIMETABLE VIEW (Matches Excel format) */
+        <div className="space-y-4">
+          {Object.keys(routineByTeacher).length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+              No faculty class slots match current filters.
+            </div>
+          ) : (
+            Object.keys(routineByTeacher).map((tName) => {
+              const teacherSlots = routineByTeacher[tName] || []
+              const teacherTheory = teacherSlots.filter((s) => (s.courseType || '').toLowerCase() === 'theory').length
+              const teacherLab = teacherSlots.length - teacherTheory
+
+              return (
+                <div
+                  key={tName}
+                  className="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-2xs transition-all hover:border-slate-300"
+                >
+                  {/* Faculty Header */}
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 bg-slate-50/70 px-5 py-3.5 gap-2">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-700 font-bold text-xs text-white shadow-2xs">
+                        {tName.replace(/^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*/i, '').slice(0, 2).toUpperCase()}
+                      </div>
+                      <div>
+                        <h3 className="font-extrabold text-sm text-slate-900">{tName}</h3>
+                        <p className="text-[11px] text-slate-500 font-medium">Department of Computer Science & Engineering</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800">
+                        {teacherSlots.length} Total Periods
+                      </span>
+                      <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">
+                        {teacherTheory} Theory · {teacherLab} Lab
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Slots Table for this teacher */}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-100 bg-white text-slate-400 font-bold uppercase tracking-wider text-[10px]">
+                          <th className="px-5 py-2.5">Day</th>
+                          <th className="px-5 py-2.5">Time</th>
+                          <th className="px-5 py-2.5">Course</th>
+                          <th className="px-5 py-2.5">Slot Type</th>
+                          <th className="px-5 py-2.5">Term & Section</th>
+                          <th className="px-5 py-2.5">Room</th>
+                          <th className="px-5 py-2.5 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {teacherSlots.map((slot) => {
+                          const isLab = (slot.courseType || '').toLowerCase().includes('lab') || (slot.courseType || '').toLowerCase().includes('sessional')
+                          return (
+                            <tr key={slot.id} className="hover:bg-slate-50/60 transition-colors">
+                              <td className="px-5 py-3 font-bold text-slate-800">{slot.day}</td>
+                              <td className="px-5 py-3 font-semibold text-emerald-800">
+                                {slot.startTime} - {slot.endTime}
+                              </td>
+                              <td className="px-5 py-3 font-black text-slate-900">
+                                {slot.courseCode}
+                                {slot.courseTitle && (
+                                  <span className="block text-[11px] font-normal text-slate-500">{slot.courseTitle}</span>
+                                )}
+                              </td>
+                              <td className="px-5 py-3">
+                                <span
+                                  className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-bold ${
+                                    isLab
+                                      ? 'bg-amber-100 text-amber-800'
+                                      : 'bg-emerald-100 text-emerald-800'
+                                  }`}
+                                >
+                                  {isLab ? 'Sessional / Lab' : 'Theory'}
+                                </span>
+                              </td>
+                              <td className="px-5 py-3 font-medium text-slate-600">
+                                Term {slot.semester} · Sec {slot.section}
+                              </td>
+                              <td className="px-5 py-3 font-medium text-slate-600">{slot.room || 'TBA'}</td>
+                              <td className="px-5 py-3 text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <button
+                                    onClick={() => openEditModal(slot)}
+                                    className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-emerald-700"
+                                    title="Edit"
+                                  >
+                                    <Edit2 className="h-3.5 w-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDeleteSlot(slot.id, slot.courseCode)}
+                                    className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                                    title="Delete"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )
+            })
+          )}
         </div>
       ) : (
         /* LIST TABLE VIEW */
@@ -1091,51 +1232,46 @@ export default function AdminRoutine() {
                 </p>
               </div>
 
-              {/* Default fallbacks if file columns lack them */}
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700">Default Dept</label>
-                  <select
-                    value={defaultDept}
-                    onChange={(e) => setDefaultDept(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-800 focus:outline-none"
-                  >
-                    {DEPARTMENTS.map((d) => (
-                      <option key={d} value={d}>{d}</option>
-                    ))}
-                  </select>
+              {/* Expected Column Format Guide */}
+              <div className="rounded-2xl bg-emerald-50/60 p-4 border border-emerald-200/80 text-xs text-slate-700 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-extrabold text-emerald-950 flex items-center gap-1.5 text-xs">
+                    <FileSpreadsheet className="h-4 w-4 text-emerald-700" />
+                    Expected Spreadsheet Columns
+                  </span>
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                    KUET Routine Format
+                  </span>
                 </div>
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700">Default Semester</label>
-                  <select
-                    value={defaultSem}
-                    onChange={(e) => setDefaultSem(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-800 focus:outline-none"
-                  >
-                    {SEMESTERS.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700">Default Section</label>
-                  <select
-                    value={defaultSec}
-                    onChange={(e) => setDefaultSec(e.target.value)}
-                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-800 focus:outline-none"
-                  >
-                    <option value="A">Section A</option>
-                    <option value="B">Section B</option>
-                  </select>
-                </div>
-              </div>
 
-              {/* Column Format Guide */}
-              <div className="rounded-xl bg-slate-50 p-3 border border-slate-200/70 text-[11px] text-slate-600 space-y-1">
-                <span className="font-bold text-slate-800 block">Expected Column Headers in Spreadsheet:</span>
-                <p className="font-mono text-[10px] text-slate-700 bg-white p-2 rounded-lg border border-slate-200">
-                  Day | Start Time | End Time | Course Code | Course Title | Course Type | Teacher | Room
-                </p>
+                <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-emerald-200 bg-white p-3 font-mono text-[11px] font-semibold text-emerald-900 shadow-2xs">
+                  <span className="rounded-md bg-emerald-50 border border-emerald-200/80 px-2.5 py-1">Teacher / Lab / Class</span>
+                  <span className="text-emerald-400 font-bold">|</span>
+                  <span className="rounded-md bg-emerald-50 border border-emerald-200/80 px-2.5 py-1">Day</span>
+                  <span className="text-emerald-400 font-bold">|</span>
+                  <span className="rounded-md bg-emerald-50 border border-emerald-200/80 px-2.5 py-1">Start Time</span>
+                  <span className="text-emerald-400 font-bold">|</span>
+                  <span className="rounded-md bg-emerald-50 border border-emerald-200/80 px-2.5 py-1">End Time</span>
+                  <span className="text-emerald-400 font-bold">|</span>
+                  <span className="rounded-md bg-emerald-50 border border-emerald-200/80 px-2.5 py-1">Course</span>
+                  <span className="text-emerald-400 font-bold">|</span>
+                  <span className="rounded-md bg-emerald-50 border border-emerald-200/80 px-2.5 py-1">Slot Type</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[10px] text-emerald-900 pt-1">
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                    Auto-assigns courses to teacher portals
+                  </div>
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                    Auto-detects academic terms (1-1 to 4-2)
+                  </div>
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                    Supports 24h & 12h times (e.g. 10:40, 13:10)
+                  </div>
+                </div>
               </div>
 
               {/* Modal Actions */}
@@ -1146,7 +1282,7 @@ export default function AdminRoutine() {
                   className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 hover:underline"
                 >
                   <Download className="h-3.5 w-3.5" />
-                  Get Sample CSV
+                  Get Sample CSV / Template
                 </button>
 
                 <div className="flex items-center gap-2">

@@ -231,7 +231,7 @@ export default function TeacherManagement() {
         headers: { 'Content-Type': 'multipart/form-data' }
       })
       
-      setNotice(`Successfully added ${data.added} teachers. Skipped ${data.skipped} items (duplicates or errors).`)
+      setNotice(`Successfully processed teachers: ${data.added || 0} added, ${data.updated || 0} updated. Skipped ${data.skipped || 0} items.`)
       setUploadFile(null)
       // Re-fetch teachers
       const { data: newTeachers } = await api.get('/admin/teachers')
@@ -464,7 +464,7 @@ export default function TeacherManagement() {
             <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-stone-300 bg-stone-50 p-8 text-center hover:bg-stone-100 transition-colors cursor-pointer relative">
               <UploadCloud size={40} className="mb-3 text-stone-400" />
               <p className="text-sm font-semibold text-stone-700 mb-1">Click to upload an Excel spreadsheet</p>
-              <p className="text-xs text-stone-500 mb-4">Supports .xlsx, .xls, or .csv containing teacher details (Name, Email, Department, Designation)</p>
+              <p className="text-xs text-stone-500 mb-4">Supports .xlsx, .xls, or .csv containing teacher details (Name, Email, Password, Department, Designation). Passwords are securely hashed into the database.</p>
               
               <input type="file" onChange={(e) => setUploadFile(e.target.files[0])} accept=".xlsx,.xls,.csv" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" required />
               

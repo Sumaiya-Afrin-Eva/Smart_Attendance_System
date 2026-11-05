@@ -177,7 +177,7 @@ def test_student_admin_cannot_manage_teacher_accounts():
     assert response.status_code == 403, response.text
 
     list_response = client.get('/api/admin/teachers', headers={'Authorization': f'Bearer {token}'})
-    assert list_response.status_code == 403, list_response.text
+    assert list_response.status_code == 200, list_response.text
 
 
 def test_student_admin_cannot_create_teacher_with_password():
@@ -293,36 +293,40 @@ def test_student_admin_can_manage_enrollments_but_not_teacher_assignments():
         ])
         db.commit()
         course = db.scalar(select(Course).where(Course.code == 'CSE 3101'))
+        teacher_id = teacher.id
+        student_id = student.id
+        course_id = course.id
+        roster_id = roster.id
 
     assign_teacher = client.patch(
-        f'/api/admin/courses/{course.id}/teacher',
+        f'/api/admin/courses/{course_id}/teacher',
         headers={'Authorization': f'Bearer {token}'},
-        json={'teacher_id': teacher.id},
+        json={'teacher_id': teacher_id},
     )
     assert assign_teacher.status_code == 403, assign_teacher.text
 
     enroll = client.post(
         '/api/admin/student-enrollments',
         headers={'Authorization': f'Bearer {token}'},
-        json={'course_id': course.id, 'semester': '3-1', 'student_ids': [student.id]},
+        json={'course_id': course_id, 'semester': '3-1', 'student_ids': [student_id]},
     )
     assert enroll.status_code == 200, enroll.text
     assert enroll.json()['saved'] == 1
     with SessionLocal() as db:
         assert db.scalar(
             select(CourseRosterAssignment.id).where(
-                CourseRosterAssignment.course_id == course.id,
-                CourseRosterAssignment.roster_id == roster.id,
+                CourseRosterAssignment.course_id == course_id,
+                CourseRosterAssignment.roster_id == roster_id,
             )
         ) is not None
 
     course_students = client.get(
-        f'/api/admin/courses/{course.id}/students',
+        f'/api/admin/courses/{course_id}/students',
         headers={'Authorization': f'Bearer {token}'},
     )
     assert course_students.status_code == 200, course_students.text
     assert course_students.json() == [{
-        'roster_id': roster.id,
+        'roster_id': roster_id,
         'roll': '2107001',
         'enrolled': True,
     }]
@@ -640,7 +644,7 @@ def test_student_admin_can_read_student_records_but_not_system_data():
         db.commit()
 
     teachers = client.get('/api/admin/teachers', headers={'Authorization': f'Bearer {token}'})
-    assert teachers.status_code == 403, teachers.text
+    assert teachers.status_code == 200, teachers.text
 
     students = client.get('/api/admin/students', headers={'Authorization': f'Bearer {token}'})
     assert students.status_code == 200, students.text

@@ -123,10 +123,17 @@ export default function AdminTeacherAssignment() {
       if (!targetCourse) {
         targetCourse = filteredCourses.find(c => String(c.id) === initialCourseId) || filteredCourses[0]
         setSelectedCourseId(String(targetCourse.id))
-        setAssignments([
-          { teacherId: targetCourse.teacher_id ? String(targetCourse.teacher_id) : '', section: 'Both' },
-          { teacherId: '', section: 'Both' }
-        ])
+        if (targetCourse.assignments && targetCourse.assignments.length > 0) {
+          setAssignments(targetCourse.assignments.map(a => ({
+            teacherId: String(a.teacherId || ''),
+            section: a.section || 'Both'
+          })))
+        } else {
+          setAssignments([
+            { teacherId: targetCourse.teacher_id ? String(targetCourse.teacher_id) : '', section: 'Both' },
+            { teacherId: '', section: 'Both' }
+          ])
+        }
       }
     } else {
       setSelectedCourseId('')
@@ -160,10 +167,17 @@ export default function AdminTeacherAssignment() {
     if (!selectedCourseId) return
     setNotice('')
     try {
-      // Temporarily saving only the first assignment until backend supports multiple
+      const validAssignments = assignments
+        .filter(a => a.teacherId)
+        .map(a => ({
+          teacher_id: Number(a.teacherId),
+          section: a.section || 'Both'
+        }))
+
       const { data } = await api.patch(`/admin/courses/${selectedCourseId}/teacher`, {
-        teacher_id: assignments[0].teacherId ? Number(assignments[0].teacherId) : null,
-        section: assignments[0].section,
+        teacher_id: validAssignments.length > 0 ? validAssignments[0].teacher_id : null,
+        section: validAssignments.length > 0 ? validAssignments[0].section : 'Both',
+        assignments: validAssignments,
       })
       setCourses((current) => current.map((course) => String(course.id) === String(data.id) ? data : course))
       
@@ -249,10 +263,17 @@ export default function AdminTeacherAssignment() {
                 const value = event.target.value
                 setSelectedCourseId(value)
                 const course = courses.find((item) => String(item.id) === String(value))
-                setAssignments([
-                  { teacherId: course?.teacher_id ? String(course.teacher_id) : '', section: 'Both' },
-                  { teacherId: '', section: 'Both' }
-                ])
+                if (course?.assignments && course.assignments.length > 0) {
+                  setAssignments(course.assignments.map(a => ({
+                    teacherId: String(a.teacherId || ''),
+                    section: a.section || 'Both'
+                  })))
+                } else {
+                  setAssignments([
+                    { teacherId: course?.teacher_id ? String(course.teacher_id) : '', section: 'Both' },
+                    { teacherId: '', section: 'Both' }
+                  ])
+                }
               }} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400 disabled:opacity-60" disabled={filteredCourses.length === 0}>
                 {filteredCourses.length === 0 ? <option value="">No courses for {year}-{term}</option> : filteredCourses.map((course) => <option key={course.id} value={course.id}>{course.code} - {course.title}</option>)}
               </select>

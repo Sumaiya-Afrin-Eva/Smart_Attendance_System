@@ -537,7 +537,8 @@ def test_registration_requires_matching_roster_photo_and_offered_session_term():
         )
         db.add(course)
         db.flush()
-        db.add(CourseRosterAssignment(course_id=course.id, roster_id=roster_id))
+        course_id = course.id
+        db.add(CourseRosterAssignment(course_id=course_id, roster_id=roster_id))
         db.commit()
 
     body["current_semester"] = "3-1"
@@ -556,7 +557,7 @@ def test_registration_requires_matching_roster_photo_and_offered_session_term():
         assert db.scalar(
             select(Enrollment.id).where(
                 Enrollment.student_id == student.id,
-                Enrollment.course_id == course.id,
+                Enrollment.course_id == course_id,
             )
         ) is not None
 
@@ -1140,3 +1141,91 @@ def test_legacy_roster_photo_path_is_migrated_to_sqlite_blob(tmp_path, monkeypat
         "website",
     }.issubset(teacher_columns)
     assert "status" in course_columns
+
+
+def test_student_password_login_and_admin_management(tmp_path, monkeypatch):
+    reset_db()
+    monkeypatch.setattr(settings, "storage_dir", tmp_path)
+    client = TestClient(app)
+    admin_headers = headers_for("admin@kuet.ac.bd")
+
+    # 1. Admin creates a student with email, password, and other details
+    res = client.post(
+        "/api/admin/students",
+        headers=admin_headers,
+        json={
+            "name": "Sadia Islam",
+            "roll": "2107055",
+            "email": "sadia2107055@stud.kuet.ac.bd",
+            "session": "2021-2022",
+            "department": "CSE",
+            "phone": "01712345678",
+            "password": "Password123!",
+        },
+    )
+    assert res.status_code == 200, res.text
+    roster_id = res.json()["id"]
+
+    # Verify user was created with role="student" and password_hash
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(User.email == "sadia2107055@stud.kuet.ac.bd"))
+        assert user is not None
+        assert user.role == "student"
+        assert user.password_hash is not None
+        assert verify_password("Password123!", user.password_hash)
+
+    # 2. Student logs in with wrong password -> 401
+    bad_login = client.post(
+        "/api/auth/login",
+        json={"email": "sadia2107055@stud.kuet.ac.bd", "password": "WrongPassword!"},
+    )
+    assert bad_login.status_code == 401
+
+    # 3. Student logs in with correct password -> 200
+    good_login = client.post(
+        "/api/auth/login",
+        json={"email": "sadia2107055@stud.kuet.ac.bd", "password": "Password123!"},
+    )
+    assert good_login.status_code == 200, good_login.text
+    login_data = good_login.json()
+    assert "access_token" in login_data
+    assert login_data["user"]["email"] == "sadia2107055@stud.kuet.ac.bd"
+    assert login_data["user"]["role"] == "student"
+
+    # 4. Admin updates student password
+    update_res = client.put(
+        f"/api/admin/students/{roster_id}",
+        headers=admin_headers,
+        json={
+            "name": "Sadia Islam",
+            "roll": "2107055",
+            "email": "sadia2107055@stud.kuet.ac.bd",
+            "session": "2021-2022",
+            "department": "CSE",
+            "phone": "01712345678",
+            "password": "NewSecretPassword456!",
+        },
+    )
+    assert update_res.status_code == 200, update_res.text
+
+    # Old password fails
+    old_pw_res = client.post(
+        "/api/auth/login",
+        json={"email": "sadia2107055@stud.kuet.ac.bd", "password": "Password123!"},
+    )
+    assert old_pw_res.status_code == 401
+
+    # New password succeeds
+    new_pw_res = client.post(
+        "/api/auth/login",
+        json={"email": "sadia2107055@stud.kuet.ac.bd", "password": "NewSecretPassword456!"},
+    )
+    assert new_pw_res.status_code == 200, new_pw_res.text
+
+    # 5. Student can still use dev login / Google login
+    dev_res = client.post(
+        "/api/auth/dev-login",
+        json={"email": "sadia2107055@stud.kuet.ac.bd", "name": "Sadia Islam"},
+    )
+    assert dev_res.status_code == 200
+    assert dev_res.json()["user"]["email"] == "sadia2107055@stud.kuet.ac.bd"

@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+import shutil
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -9,7 +11,7 @@ from sqlalchemy import inspect, select
 from .config import settings
 from .database import Base, SessionLocal, engine
 from .models import (
-    AdminSetting, Enrollment, StudentProfile, StudentRoster, StudentSemesterFaceEnrollment, SystemMigration,
+    AdminSetting, Course, Enrollment, StudentProfile, StudentRoster, StudentSemesterFaceEnrollment, SystemMigration,
 )
 from .routers import auth, courses, devices, face, routine, students
 
@@ -79,16 +81,20 @@ def ensure_database_schema() -> None:
         roster_photo_dir = settings.picture_dir
         roster_photo_dir.mkdir(parents=True, exist_ok=True)
         stored_photos = conn.exec_driver_sql(
-            "SELECT id, photo_data, photo_mime_type, photo_path FROM student_roster "
+            "SELECT id, photo_data, photo_mime_type, photo_path, department, roll FROM student_roster "
             "WHERE photo_data IS NOT NULL"
         ).fetchall()
-        for roster_id, photo_data, mime_type, stored_path in stored_photos:
+        for roster_id, photo_data, mime_type, stored_path, dept, roll in stored_photos:
             suffix = ".png" if mime_type == "image/png" else ".jpg"
-            photo_path = roster_photo_dir / f"{roster_id}{suffix}"
+            dept_name = (dept or "GENERAL").strip()
+            dept_folder = roster_photo_dir / dept_name
+            dept_folder.mkdir(parents=True, exist_ok=True)
+            name = roll if roll else str(roster_id)
+            photo_path = dept_folder / f"{name}{suffix}"
             if not photo_path.is_file() or photo_path.stat().st_size != len(photo_data):
                 photo_path.write_bytes(photo_data)
-            relative_path = f"picture/{photo_path.name}"
-            if stored_path != relative_path:
+            relative_path = f"picture/{dept_name}/{photo_path.name}"
+            if not stored_path or not (settings.picture_dir.parent / stored_path).is_file():
                 conn.exec_driver_sql(
                     "UPDATE student_roster SET photo_path = ? WHERE id = ?",
                     (relative_path, roster_id),
@@ -170,22 +176,28 @@ def ensure_database_schema() -> None:
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_teachers_user_id ON teachers (user_id)")
 
         # Backfill teachers into teachers table for any teacher in users table
-        conn.exec_driver_sql("""
-            INSERT OR IGNORE INTO teachers (
-                user_id, name, email, department, designation, status, created_at, updated_at
-            )
-            SELECT
-                id, name, email, 'CSE', 'Professor',
-                CASE WHEN is_active = 1 THEN 'Active' ELSE 'Disabled' END,
-                created_at, created_at
-            FROM users
-            WHERE role = 'teacher' AND id NOT IN (SELECT user_id FROM teachers)
-        """)
+        if {"name", "email", "role"}.issubset(col_names):
+            conn.exec_driver_sql("""
+                INSERT OR IGNORE INTO teachers (
+                    user_id, name, email, department, designation, status, created_at, updated_at
+                )
+                SELECT
+                    id, name, email, 'CSE', 'Professor',
+                    CASE WHEN is_active = 1 THEN 'Active' ELSE 'Disabled' END,
+                    created_at, created_at
+                FROM users
+                WHERE role = 'teacher' AND id NOT IN (SELECT user_id FROM teachers)
+            """)
 
         # Ensure separate roles for both administrators
         if {"role", "email"}.issubset(col_names):
             conn.exec_driver_sql("UPDATE users SET role = 'system_admin' WHERE email = 'sysadmin@kuet.ac.bd'")
             conn.exec_driver_sql("UPDATE users SET role = 'admin', name = 'Student Administrator' WHERE email = 'admin@kuet.ac.bd'")
+            from .security import hash_password
+            admin_pwd = hash_password("admin123")
+            sysadmin_pwd = hash_password("sysadmin123")
+            conn.exec_driver_sql(f"UPDATE users SET password_hash = '{admin_pwd}' WHERE email = 'admin@kuet.ac.bd' AND (password_hash IS NULL OR password_hash = 'x')")
+            conn.exec_driver_sql(f"UPDATE users SET password_hash = '{sysadmin_pwd}' WHERE email = 'sysadmin@kuet.ac.bd' AND (password_hash IS NULL OR password_hash = 'x')")
 
         # Drop legacy teacher columns from users table so users only holds account fields
         teacher_cols_to_drop = [
@@ -221,7 +233,94 @@ def ensure_database_schema() -> None:
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_class_routines_day ON class_routines (day)")
         conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_class_routines_code ON class_routines (course_code)")
 
+        # Ensure course_teachers table exists
+        conn.exec_driver_sql("""
+            CREATE TABLE IF NOT EXISTS course_teachers (
+                id INTEGER PRIMARY KEY,
+                course_id INTEGER REFERENCES courses(id) ON DELETE CASCADE,
+                teacher_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                section VARCHAR(10) DEFAULT 'Both',
+                role VARCHAR(40) DEFAULT 'Instructor',
+                created_at TIMESTAMP,
+                UNIQUE(course_id, teacher_id, section)
+            )
+        """)
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_course_teachers_course ON course_teachers (course_id)")
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_course_teachers_teacher ON course_teachers (teacher_id)")
+
     migrate_course_code_uniqueness()
+    sync_course_teachers_from_routine()
+
+
+def sync_course_teachers_from_routine() -> None:
+    """Sync teacher course assignments from ClassRoutine and Course into course_teachers."""
+    from .database import SessionLocal
+    from .models import ClassRoutine, Course, CourseTeacher, User
+    from .routers.routine import _find_teacher_user
+    from sqlalchemy import select
+
+    try:
+        with SessionLocal() as db:
+            seen = set()
+            for ct in db.scalars(select(CourseTeacher)).all():
+                seen.add((ct.course_id, ct.teacher_id, ct.section))
+
+            # 1. Existing Course.teacher_id
+            for c in db.scalars(select(Course).where(Course.teacher_id.isnot(None))).all():
+                key = (c.id, c.teacher_id, c.section or "Both")
+                if key not in seen:
+                    db.add(CourseTeacher(
+                        course_id=c.id,
+                        teacher_id=c.teacher_id,
+                        section=c.section or "Both",
+                        role="Primary Instructor"
+                    ))
+                    seen.add(key)
+
+            # 2. Existing ClassRoutine slots
+            for r in db.scalars(select(ClassRoutine)).all():
+                if not r.teacher_name or not r.teacher_name.strip():
+                    continue
+                teacher_user = _find_teacher_user(r.teacher_name, db)
+                if not teacher_user:
+                    continue
+
+                matched_c = db.scalar(select(Course).where(Course.code == r.course_code))
+                c_type = r.course_type or "Theory"
+                if not matched_c:
+                    matched_c = Course(
+                        code=r.course_code,
+                        title=r.course_title or f"{r.course_code} ({c_type})",
+                        credit=3.0 if c_type == "Theory" else 1.5,
+                        department=r.department or "CSE",
+                        semester=r.semester or "1-1",
+                        course_type=c_type,
+                        session=r.session or "Default",
+                        section=r.section or "A",
+                        teacher_id=teacher_user.id,
+                        is_active=True,
+                        status="Active",
+                    )
+                    db.add(matched_c)
+                    db.flush()
+                elif not matched_c.teacher_id:
+                    matched_c.teacher_id = teacher_user.id
+
+                sec = r.section or "Both"
+                key = (matched_c.id, teacher_user.id, sec)
+                if key not in seen:
+                    db.add(CourseTeacher(
+                        course_id=matched_c.id,
+                        teacher_id=teacher_user.id,
+                        section=sec,
+                        role="Instructor"
+                    ))
+                    seen.add(key)
+
+            db.commit()
+    except Exception as e:
+        import logging
+        logging.getLogger("uvicorn.error").warning(f"Error syncing course teachers: {e}")
 
 
 def migrate_student_device_binding() -> None:
@@ -339,11 +438,94 @@ def backfill_legacy_semester_face_enrollments() -> None:
         db.commit()
 
 
+def migrate_student_pictures_to_departments() -> None:
+    """Organize picture/ into department folders (e.g. picture/CSE/) and standardize face sample names to roll_pose.jpg."""
+    with SessionLocal() as db:
+        picture_dir = settings.picture_dir
+        picture_dir.mkdir(parents=True, exist_ok=True)
+
+        # Pre-create folders for all known departments
+        known_depts = set(db.scalars(select(StudentRoster.department)).all())
+        known_depts.update(db.scalars(select(Course.department)).all())
+        known_depts.update(["CSE", "EEE", "ME", "CE", "ECE"])
+        for d in known_depts:
+            if d:
+                dept_dir = picture_dir / d.strip()
+                dept_dir.mkdir(parents=True, exist_ok=True)
+                gitkeep = dept_dir / ".gitkeep"
+                if not gitkeep.exists():
+                    gitkeep.touch()
+
+        migration_name = "dept-folders-and-pose-naming-v1"
+        if db.get(SystemMigration, migration_name):
+            return
+
+        pose_names = ["look_straight", "turn_left", "turn_right", "tilt_up", "tilt_down"]
+        rosters = db.scalars(select(StudentRoster)).all()
+        for roster in rosters:
+            dept = (roster.department or "GENERAL").strip()
+            dept_dir = picture_dir / dept
+            dept_dir.mkdir(parents=True, exist_ok=True)
+
+            if roster.face_sample_paths:
+                try:
+                    old_paths = json.loads(roster.face_sample_paths)
+                except Exception:
+                    old_paths = []
+                new_paths = []
+                for idx, old_p in enumerate(old_paths):
+                    if not isinstance(old_p, str):
+                        continue
+                    suffix = Path(old_p).suffix or ".jpg"
+                    pose = pose_names[idx] if idx < len(pose_names) else f"pose_{idx + 1}"
+                    new_filename = f"{roster.roll}_{pose}{suffix}"
+                    target_file = dept_dir / new_filename
+                    src_candidates = [
+                        settings.picture_dir.parent / old_p,
+                        picture_dir / Path(old_p).name,
+                        dept_dir / Path(old_p).name,
+                        dept_dir / new_filename,
+                    ]
+                    found = False
+                    for src in src_candidates:
+                        if src.is_file():
+                            if src.resolve() != target_file.resolve():
+                                shutil.copy2(src, target_file)
+                            found = True
+                            break
+                    if found or target_file.is_file():
+                        new_paths.append(f"picture/{dept}/{new_filename}")
+                    elif roster.photo_data and idx == 0:
+                        target_file.write_bytes(roster.photo_data)
+                        new_paths.append(f"picture/{dept}/{new_filename}")
+
+                if new_paths:
+                    roster.face_sample_paths = json.dumps(new_paths)
+
+            # Official photo
+            suffix = ".png" if roster.photo_mime_type == "image/png" else ".jpg"
+            official_name = f"{roster.roll}{suffix}"
+            official_file = dept_dir / official_name
+            if not official_file.is_file() and roster.photo_data:
+                official_file.write_bytes(roster.photo_data)
+            elif not official_file.is_file() and roster.photo_path:
+                old_official = settings.picture_dir.parent / roster.photo_path
+                if old_official.is_file():
+                    shutil.copy2(old_official, official_file)
+
+            if official_file.is_file():
+                roster.photo_path = f"picture/{dept}/{official_name}"
+
+        db.add(SystemMigration(name=migration_name))
+        db.commit()
+
+
 # Creates the tables on first run (fine for this project; use Alembic for real migrations)
 Base.metadata.create_all(bind=engine)
 migrate_student_device_binding()
 ensure_database_schema()
 backfill_legacy_semester_face_enrollments()
+migrate_student_pictures_to_departments()
 settings.storage_dir.mkdir(parents=True, exist_ok=True)
 settings.picture_dir.mkdir(parents=True, exist_ok=True)
 ensure_seed_settings()

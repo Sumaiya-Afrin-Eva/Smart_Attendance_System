@@ -1,14 +1,15 @@
 import io
+import re
 from datetime import datetime
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import ClassRoutine, Course, User
+from ..models import ClassRoutine, Course, CourseTeacher, TeacherProfile, User
 from ..security import get_current_user, require_role
 
 router = APIRouter(prefix="/api", tags=["routine"])
@@ -179,6 +180,27 @@ def create_routine_slot(
     db.add(routine)
     db.commit()
     db.refresh(routine)
+
+    if teacher:
+        t_user = _find_teacher_user(teacher, db)
+        c_obj = db.scalar(select(Course).where(Course.code == c_code))
+        if t_user and c_obj:
+            if not c_obj.teacher_id:
+                c_obj.teacher_id = t_user.id
+            ct = db.scalar(select(CourseTeacher).where(
+                CourseTeacher.course_id == c_obj.id,
+                CourseTeacher.teacher_id == t_user.id,
+                CourseTeacher.section == (sec or "Both")
+            ))
+            if not ct:
+                db.add(CourseTeacher(
+                    course_id=c_obj.id,
+                    teacher_id=t_user.id,
+                    section=sec or "Both",
+                    role="Instructor"
+                ))
+                db.commit()
+
     return _routine_out(routine)
 
 
@@ -223,20 +245,6 @@ def update_routine_slot(
     return _routine_out(slot)
 
 
-@router.delete("/admin/routine/{routine_id}")
-def delete_routine_slot(
-    routine_id: int,
-    db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
-):
-    slot = db.get(ClassRoutine, routine_id)
-    if not slot:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Routine slot not found.")
-    db.delete(slot)
-    db.commit()
-    return {"detail": "Routine slot deleted successfully."}
-
-
 @router.delete("/admin/routine/all")
 def clear_routine_slots(
     department: str | None = None,
@@ -258,48 +266,163 @@ def clear_routine_slots(
     return {"detail": "Selected routine slots cleared."}
 
 
+@router.delete("/admin/routine/{routine_id}")
+def delete_routine_slot(
+    routine_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(system_admin_only),
+):
+    slot = db.get(ClassRoutine, routine_id)
+    if not slot:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Routine slot not found.")
+    db.delete(slot)
+    db.commit()
+    return {"detail": "Routine slot deleted successfully."}
+
+
+def _format_time_str(val: str) -> str:
+    s = str(val).strip()
+    if not s or s.lower() in ("nan", "none"):
+        return ""
+    for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p", "%I:%M:%S %p", "%H.%M"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            return dt.strftime("%I:%M %p")
+        except ValueError:
+            pass
+    return s
+
+
+def _derive_semester_from_code(code: str) -> str | None:
+    m = re.search(r"(\d)(\d)\d{2}", code)
+    if m:
+        year_d, term_d = m.group(1), m.group(2)
+        if year_d in "1234" and term_d in "12":
+            return f"{year_d}-{term_d}"
+    return None
+
+
+def _clean_course_code(raw_code: str) -> str:
+    """Normalize course code and remove any single trailing letter suffix like 'c'
+    (e.g. CSE 4121c -> CSE 4121, CSE 2122c (TE) -> CSE 2122 (TE)).
+    Never treats the suffix as a section.
+    """
+    cleaned = raw_code.strip()
+    m = re.match(r"^([A-Za-z]+\s*\d{3,4})[A-Za-z](\s*\(.*?\))?$", cleaned)
+    if m:
+        dept_num = m.group(1).strip().upper()
+        suffix = f" {m.group(2).strip()}" if m.group(2) else ""
+        base = dept_num + suffix
+    else:
+        base = cleaned
+    base = re.sub(r"^([A-Za-z]+)(\d)", r"\1 \2", base)
+    base = re.sub(r"\s+", " ", base).strip()
+    return base
+
+
+def _find_teacher_user(teacher_name: str, db: Session) -> User | None:
+    if not teacher_name or teacher_name.lower() in ("nan", "none", "tba"):
+        return None
+    name_clean = teacher_name.strip()
+    t = db.scalar(
+        select(User).where(
+            User.role.in_(["teacher", "faculty"]),
+            func.lower(User.name) == name_clean.lower()
+        )
+    )
+    if t:
+        return t
+    prof = db.scalar(
+        select(TeacherProfile).where(
+            func.lower(TeacherProfile.name) == name_clean.lower()
+        )
+    )
+    if prof and prof.user_id:
+        t = db.get(User, prof.user_id)
+        if t:
+            return t
+    clean_no_title = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", name_clean, flags=re.IGNORECASE).strip()
+    if clean_no_title:
+        t = db.scalar(
+            select(User).where(
+                User.role.in_(["teacher", "faculty"]),
+                User.name.ilike(f"%{clean_no_title}%")
+            )
+        )
+        if t:
+            return t
+    parts = [p for p in name_clean.replace(".", " ").split() if len(p) > 2 and p.lower() not in ("dr", "mr", "ms", "prof")]
+    for part in parts:
+        matches = db.scalars(
+            select(User).where(
+                User.role.in_(["teacher", "faculty"]),
+                User.name.ilike(f"%{part}%")
+            )
+        ).all()
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+
 @router.get("/admin/routine/template")
 def download_routine_template(_: User = Depends(system_admin_only)):
-    """Generate sample CSV template for routine excel upload."""
+    """Generate sample CSV template for routine excel upload matching KUET CSE Department format."""
     sample_data = [
         {
+            "Teacher / Lab / Class": "Dr. M. M. A. Hashem",
             "Day": "Sunday",
-            "Start Time": "08:00 AM",
-            "End Time": "08:50 AM",
-            "Course Code": "CSE 3101",
-            "Course Title": "Theory of Computation",
-            "Course Type": "Theory",
-            "Teacher": "Dr. M. M. A. Hashem",
-            "Room": "Room 301",
-            "Department": "CSE",
-            "Semester": "3-1",
-            "Section": "A",
+            "Start Time": "10:40",
+            "End Time": "11:30",
+            "Course": "CSE 1107",
+            "Slot Type": "Theory (1 period)",
         },
         {
+            "Teacher / Lab / Class": "Dr. M. M. A. Hashem",
             "Day": "Sunday",
-            "Start Time": "08:50 AM",
-            "End Time": "09:40 AM",
-            "Course Code": "CSE 3103",
-            "Course Title": "Microprocessors and Microcontrollers",
-            "Course Type": "Theory",
-            "Teacher": "Dr. K. M. Azharul Hasan",
-            "Room": "Room 301",
-            "Department": "CSE",
-            "Semester": "3-1",
-            "Section": "A",
+            "Start Time": "12:20",
+            "End Time": "13:10",
+            "Course": "CSE 1107",
+            "Slot Type": "Theory (1 period)",
         },
         {
+            "Teacher / Lab / Class": "Dr. M. M. A. Hashem",
             "Day": "Monday",
-            "Start Time": "09:40 AM",
-            "End Time": "12:10 PM",
-            "Course Code": "CSE 3104",
-            "Course Title": "Microprocessors Lab",
-            "Course Type": "Lab",
-            "Teacher": "Dr. Kazi Md. Rokibul Alam",
-            "Room": "Lab 2",
-            "Department": "CSE",
-            "Semester": "3-1",
-            "Section": "A",
+            "Start Time": "08:50",
+            "End Time": "09:40",
+            "Course": "CSE 1107",
+            "Slot Type": "Theory (1 period)",
+        },
+        {
+            "Teacher / Lab / Class": "Dr. K. M. Azharul Hasan",
+            "Day": "Sunday",
+            "Start Time": "10:40",
+            "End Time": "13:10",
+            "Course": "CSE 4122",
+            "Slot Type": "Sessional / Lab (3 periods)",
+        },
+        {
+            "Teacher / Lab / Class": "Dr. K. M. Azharul Hasan",
+            "Day": "Tuesday",
+            "Start Time": "08:50",
+            "End Time": "09:40",
+            "Course": "CSE 4121c",
+            "Slot Type": "Theory (1 period)",
+        },
+        {
+            "Teacher / Lab / Class": "Dr. Kazi Md. Rokibul Alam",
+            "Day": "Sunday",
+            "Start Time": "10:40",
+            "End Time": "13:10",
+            "Course": "CSE 4116",
+            "Slot Type": "Sessional / Lab (3 periods)",
+        },
+        {
+            "Teacher / Lab / Class": "Dr. Muhammad Sheikh Sadi",
+            "Day": "Monday",
+            "Start Time": "09:40",
+            "End Time": "10:30",
+            "Course": "CSE 2103c",
+            "Slot Type": "Theory (1 period)",
         },
     ]
     df = pd.DataFrame(sample_data)
@@ -309,7 +432,7 @@ def download_routine_template(_: User = Depends(system_admin_only)):
     return StreamingResponse(
         iter([stream.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=class_routine_template.csv"},
+        headers={"Content-Disposition": "attachment; filename=kuet_cse_routine_template.csv"},
     )
 
 
@@ -341,25 +464,29 @@ async def bulk_upload_routine(
             f"Error parsing file: {str(e)}"
         )
 
-    # Standardize column headers
+    # Standardize column headers to map to standard routine fields
     cols_map = {}
     for col in df.columns:
-        clean = str(col).strip().lower().replace("_", " ").replace("-", " ")
-        if "day" in clean or "weekday" in clean:
+        raw_str = str(col).strip()
+        clean = raw_str.lower().replace("_", " ").replace("-", " ")
+        if "teacher" in clean or "instructor" in clean or "faculty" in clean:
+            cols_map[col] = "teacher_name"
+        elif "day" in clean or "weekday" in clean:
             cols_map[col] = "day"
         elif "start" in clean or "from" in clean:
             cols_map[col] = "start_time"
         elif "end" in clean or "to" in clean:
             cols_map[col] = "end_time"
-        elif "code" in clean or "course code" in clean:
-            cols_map[col] = "course_code"
-        elif "title" in clean or "course name" in clean:
-            cols_map[col] = "course_title"
-        elif "type" in clean:
+        elif "type" in clean or "slot" in clean:
             cols_map[col] = "course_type"
-        elif "teacher" in clean or "faculty" in clean or "instructor" in clean:
-            cols_map[col] = "teacher_name"
-        elif "room" in clean or "lab" in clean:
+        elif clean in ("course", "code", "subject", "course no", "course num", "course id") or "course code" in clean or "course" in clean:
+            if "title" in clean or "name" in clean:
+                cols_map[col] = "course_title"
+            else:
+                cols_map[col] = "course_code"
+        elif "title" in clean or "name" in clean:
+            cols_map[col] = "course_title"
+        elif "room" in clean or "hall" in clean or "building" in clean:
             cols_map[col] = "room"
         elif "dept" in clean or "department" in clean:
             cols_map[col] = "department"
@@ -374,66 +501,203 @@ async def bulk_upload_routine(
     df.fillna("", inplace=True)
 
     added = 0
+    updated = 0
     skipped = 0
     skipped_items = []
+    seen_course_teachers = set()
 
     for index, row in df.iterrows():
         row_dict = row.to_dict()
-        day = _normalize_day(str(row_dict.get("day", "")))
-        start_t = str(row_dict.get("start_time", "")).strip()
-        end_t = str(row_dict.get("end_time", "")).strip()
-        c_code = str(row_dict.get("course_code", "")).strip().upper()
-        dept = str(row_dict.get("department", default_department or "")).strip().upper()
-        sem = str(row_dict.get("semester", default_semester or "")).strip()
-        sec = str(row_dict.get("section", default_section or "A")).strip().upper() or "A"
-        c_title = str(row_dict.get("course_title", "")).strip()
-        c_type = str(row_dict.get("course_type", "Theory")).strip() or "Theory"
-        teacher = str(row_dict.get("teacher_name", "")).strip()
-        room = str(row_dict.get("room", "")).strip()
-        session_val = str(row_dict.get("session", "2025-2026")).strip() or "2025-2026"
-
-        if not day or not start_t or not c_code:
+        raw_course = str(row_dict.get("course_code", "")).strip()
+        if not raw_course or raw_course.lower() in ("nan", "none"):
             skipped += 1
-            skipped_items.append({"row": index + 2, "reason": "Missing required fields (Day, Start Time, or Course Code)"})
+            skipped_items.append({"row": index + 2, "reason": "Missing Course Code"})
             continue
 
-        if not dept:
-            dept = "CSE"
-        if not sem:
-            sem = "3-1"
+        day = _normalize_day(str(row_dict.get("day", "")))
+        raw_start = str(row_dict.get("start_time", "")).strip()
+        raw_end = str(row_dict.get("end_time", "")).strip()
+        if not day or not raw_start or raw_start.lower() in ("nan", "none"):
+            skipped += 1
+            skipped_items.append({"row": index + 2, "reason": "Missing Day or Start Time"})
+            continue
 
-        # Try to resolve title if missing
-        if not c_title:
-            matched_c = db.scalar(select(Course).where(Course.code == c_code))
-            if matched_c:
+        start_t = _format_time_str(raw_start)
+        end_t = _format_time_str(raw_end) if raw_end and raw_end.lower() not in ("nan", "none") else start_t
+
+        base_code = _clean_course_code(raw_course)
+
+        raw_type = str(row_dict.get("course_type", "")).strip()
+        lower_type = raw_type.lower()
+        if "sessional" in lower_type or "lab" in lower_type:
+            c_type = "Lab"
+        elif "theory" in lower_type:
+            c_type = "Theory"
+        else:
+            c_type = "Theory"
+
+        m_dept = re.match(r"^([A-Za-z]+)", base_code)
+        derived_dept = m_dept.group(1).upper() if m_dept else (default_department or "CSE")
+        dept = str(row_dict.get("department", "")).strip().upper() or derived_dept or (default_department or "CSE")
+
+        derived_sem = _derive_semester_from_code(base_code)
+        sem = str(row_dict.get("semester", "")).strip() or derived_sem or (default_semester or "1-1")
+
+        raw_sec = str(row_dict.get("section", "")).strip().upper()
+        sec = raw_sec if raw_sec and raw_sec.lower() not in ("nan", "none") else (default_section or "A")
+        room = str(row_dict.get("room", "")).strip()
+        if not room or room.lower() in ("nan", "none"):
+            room = "TBA"
+        session_val = str(row_dict.get("session", "2025-2026")).strip() or "2025-2026"
+
+        raw_teacher = str(row_dict.get("teacher_name", "")).strip()
+        if raw_teacher.lower() in ("nan", "none"):
+            raw_teacher = ""
+
+        teacher_user = _find_teacher_user(raw_teacher, db) if raw_teacher else None
+        teacher_display_name = teacher_user.name if teacher_user else (raw_teacher or None)
+
+        matched_c = db.scalar(select(Course).where(Course.code == base_code))
+        c_title = str(row_dict.get("course_title", "")).strip()
+        if matched_c:
+            if not c_title or c_title.lower() in ("nan", "none"):
                 c_title = matched_c.title
-                if not teacher and matched_c.teacher_id:
-                    t_u = db.get(User, matched_c.teacher_id)
-                    if t_u:
-                        teacher = t_u.name
+            if teacher_user and not matched_c.teacher_id:
+                matched_c.teacher_id = teacher_user.id
+            if sem and matched_c.semester != sem:
+                matched_c.semester = sem
+        else:
+            if not c_title or c_title.lower() in ("nan", "none"):
+                c_title = f"{base_code} ({c_type})"
+            matched_c = Course(
+                code=base_code,
+                title=c_title,
+                credit=3.0 if c_type == "Theory" else 1.5,
+                department=dept,
+                semester=sem,
+                course_type=c_type,
+                session=session_val,
+                section=sec,
+                teacher_id=teacher_user.id if teacher_user else None,
+                is_active=True,
+                status="Active",
+            )
+            db.add(matched_c)
+            db.flush()
 
-        routine = ClassRoutine(
-            department=dept,
-            semester=sem,
-            section=sec,
-            day=day,
-            start_time=start_t,
-            end_time=end_t or start_t,
-            course_code=c_code,
-            course_title=c_title or None,
-            course_type=c_type,
-            teacher_name=teacher or None,
-            room=room or None,
-            session=session_val,
+        if teacher_user and matched_c:
+            ct_key = (matched_c.id, teacher_user.id, sec)
+            if ct_key not in seen_course_teachers:
+                ct = db.scalar(
+                    select(CourseTeacher).where(
+                        CourseTeacher.course_id == matched_c.id,
+                        CourseTeacher.teacher_id == teacher_user.id,
+                        CourseTeacher.section == sec
+                    )
+                )
+                if not ct:
+                    db.add(CourseTeacher(
+                        course_id=matched_c.id,
+                        teacher_id=teacher_user.id,
+                        section=sec,
+                        role="Instructor"
+                    ))
+                    db.flush()
+                seen_course_teachers.add(ct_key)
+
+        existing_query = select(ClassRoutine).where(
+            ClassRoutine.day == day,
+            ClassRoutine.start_time == start_t,
+            ClassRoutine.course_code == base_code,
+            ClassRoutine.section == sec,
         )
-        db.add(routine)
-        added += 1
+        if teacher_display_name:
+            existing_query = existing_query.where(ClassRoutine.teacher_name == teacher_display_name)
+        else:
+            existing_query = existing_query.where(
+                (ClassRoutine.teacher_name.is_(None)) | (ClassRoutine.teacher_name == "")
+            )
+        existing_slot = db.scalar(existing_query)
+        if existing_slot:
+            existing_slot.end_time = end_t
+            existing_slot.teacher_name = teacher_display_name
+            existing_slot.course_title = c_title
+            existing_slot.course_type = c_type
+            existing_slot.semester = sem
+            existing_slot.department = dept
+            if room and room != "TBA":
+                existing_slot.room = room
+            updated += 1
+        else:
+            routine = ClassRoutine(
+                department=dept,
+                semester=sem,
+                section=sec,
+                day=day,
+                start_time=start_t,
+                end_time=end_t,
+                course_code=base_code,
+                course_title=c_title,
+                course_type=c_type,
+                teacher_name=teacher_display_name,
+                room=room,
+                session=session_val,
+            )
+            db.add(routine)
+            added += 1
 
     db.commit()
     return {
-        "detail": "Bulk upload completed.",
+        "detail": "Bulk routine upload and teacher assignment completed successfully.",
         "added": added,
+        "updated": updated,
         "skipped": skipped,
         "total": len(df),
         "skipped_items": skipped_items,
     }
+
+
+@router.get("/teacher/routine")
+def get_teacher_routine(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role("teacher", "admin", "system_admin")),
+):
+    """Retrieve the logged-in teacher's personalized weekly routine schedule."""
+    ct_courses = db.scalars(
+        select(Course.code).join(CourseTeacher, CourseTeacher.course_id == Course.id).where(
+            CourseTeacher.teacher_id == user.id
+        )
+    ).all()
+    direct_courses = db.scalars(select(Course.code).where(Course.teacher_id == user.id)).all()
+    assigned_codes = set(ct_courses) | set(direct_courses)
+
+    slots = db.scalars(select(ClassRoutine)).all()
+    teacher_slots = []
+
+    user_name_lower = (user.name or "").lower().strip()
+    clean_user = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", user_name_lower, flags=re.I).strip()
+
+    for s in slots:
+        slot_t_name = (s.teacher_name or "").lower().strip()
+        clean_slot_t = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", slot_t_name, flags=re.I).strip()
+
+        name_match = False
+        if slot_t_name and user_name_lower:
+            if slot_t_name == user_name_lower or (clean_user and clean_user == clean_slot_t):
+                name_match = True
+            elif clean_user and len(clean_user) > 4 and (clean_user in clean_slot_t or clean_slot_t in clean_user):
+                name_match = True
+
+        course_match = s.course_code in assigned_codes
+
+        if name_match:
+            teacher_slots.append(s)
+        elif not slot_t_name and course_match:
+            teacher_slots.append(s)
+
+    sorted_slots = sorted(
+        teacher_slots,
+        key=lambda r: (DAY_ORDER.get(r.day, 99), r.start_time or "")
+    )
+    return [_routine_out(r) for r in sorted_slots]
+

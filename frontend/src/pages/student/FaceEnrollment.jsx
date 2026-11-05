@@ -8,11 +8,11 @@ import { useProfile } from '../../lib/queries'
 const LIVENESS_POLL_INTERVAL_MS = 150
 
 const captureSteps = [
-  { title: 'Look straight at the camera', detail: 'Keep your head straight and look directly into the camera.' },
-  { title: 'Turn your head slightly left', detail: 'Slowly turn your face a little to your left.' },
-  { title: 'Turn your head slightly right', detail: 'Slowly turn your face a little to your right.' },
-  { title: 'Tilt your face slightly up', detail: 'Raise your chin slightly while keeping your face in the frame.' },
-  { title: 'Tilt your face slightly down', detail: 'Lower your chin slightly and hold still.' },
+  { name: 'look_straight', title: 'Look straight at the camera', detail: 'Keep your head straight and look directly into the camera.' },
+  { name: 'turn_left', title: 'Turn your head slightly left', detail: 'Slowly turn your face a little to your left.' },
+  { name: 'turn_right', title: 'Turn your head slightly right', detail: 'Slowly turn your face a little to your right.' },
+  { name: 'tilt_up', title: 'Tilt your face slightly up', detail: 'Raise your chin slightly while keeping your face in the frame.' },
+  { name: 'tilt_down', title: 'Tilt your face slightly down', detail: 'Lower your chin slightly and hold still.' },
 ]
 
 export default function FaceEnrollment() {
@@ -145,7 +145,9 @@ export default function FaceEnrollment() {
     canvas.getContext('2d').drawImage(videoRef.current, 0, 0)
     canvas.toBlob((blob) => {
       if (!blob) return
-      setSamples((current) => [...current, new File([blob], `face-view-${current.length + 1}.jpg`, { type: 'image/jpeg' })])
+      const step = captureSteps[samples.length]
+      const fileName = step ? `${step.name}.jpg` : `face-view-${samples.length + 1}.jpg`
+      setSamples((current) => [...current, new File([blob], fileName, { type: 'image/jpeg' })])
       setStatus(samples.length + 1 < captureSteps.length ? `Great. Next: ${captureSteps[samples.length + 1].title}.` : 'All five photos are captured. Review and complete enrollment.')
     }, 'image/jpeg', 0.92)
   }

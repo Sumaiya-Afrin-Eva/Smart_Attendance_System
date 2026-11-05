@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, ImagePlus, Mail, Plus, RotateCcw, UploadCloud, UserRound, X } from 'lucide-react'
+import { ArrowLeft, Eye, EyeOff, ImagePlus, Lock, Mail, Plus, RotateCcw, UploadCloud, UserRound, X } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
 
-const emptyForm = { name: '', roll: '', email: '', session: '', department: 'CSE', phone: '' }
+const emptyForm = { name: '', roll: '', email: '', password: '', session: '', department: 'CSE', phone: '' }
 
 export default function StudentRosterForm() {
   const { studentId } = useParams()
   const navigate = useNavigate()
   const editing = Boolean(studentId)
   const [form, setForm] = useState(emptyForm)
+  const [showPassword, setShowPassword] = useState(false)
   const [photo, setPhoto] = useState(null)
   const [photoName, setPhotoName] = useState('')
   const [loading, setLoading] = useState(editing)
@@ -33,6 +34,7 @@ export default function StudentRosterForm() {
           name: student.name ?? '',
           roll: student.roll ?? '',
           email: student.email ?? '',
+          password: '',
           session: student.session ?? '',
           department: student.department ?? 'CSE',
           phone: student.phone ?? '',
@@ -78,13 +80,13 @@ export default function StudentRosterForm() {
     setSaving(true)
     setNotice('')
     try {
-      if (!photo) {
-        setNotice('Choose an official student photo.')
-        return
+      const payload = { ...form }
+      if (editing && !payload.password) {
+        delete payload.password
       }
       const { data } = editing
-        ? await api.put(`/admin/students/${studentId}`, form)
-        : await api.post('/admin/students', form)
+        ? await api.put(`/admin/students/${studentId}`, payload)
+        : await api.post('/admin/students', payload)
 
       if (photo) {
         const formData = new FormData()
@@ -186,6 +188,35 @@ export default function StudentRosterForm() {
               <Mail size={16} className="shrink-0 text-stone-400" />
               <input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} className="w-full bg-transparent outline-none text-stone-700" placeholder="student@stud.kuet.ac.bd" required />
             </div>
+          </label>
+
+          <label className="block space-y-1.5">
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">
+              Login Password {editing ? '(leave blank to keep current)' : ''}
+            </span>
+            <div className="flex items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3.5 py-3 focus-within:border-emerald-400">
+              <Lock size={16} className="shrink-0 text-stone-400" />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={form.password}
+                onChange={(event) => setForm({ ...form, password: event.target.value })}
+                className="w-full bg-transparent outline-none text-stone-700 placeholder:text-stone-400 text-sm"
+                placeholder={editing ? 'Leave blank to keep existing password' : 'Enter password for student login (min 6 chars)'}
+                minLength={6}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="text-stone-400 hover:text-stone-600 focus:outline-none cursor-pointer"
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+            <p className="text-[11px] text-stone-400">
+              {editing
+                ? 'Only fill this in if you want to set a new password for this student.'
+                : 'Student will be able to manually sign in with their email and this password, or via Google.'}
+            </p>
           </label>
 
           <label className="block space-y-1.5">

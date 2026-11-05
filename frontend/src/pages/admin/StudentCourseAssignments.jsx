@@ -4,6 +4,8 @@ import api, { errorMessage } from '../../lib/api'
 
 export default function StudentCourseAssignments() {
   const [courses, setCourses] = useState([])
+  const [sessions, setSessions] = useState([])
+  const [semesters, setSemesters] = useState([])
   const [selectedSession, setSelectedSession] = useState('')
   const [selectedSemester, setSelectedSemester] = useState('')
   const [selectedCourseId, setSelectedCourseId] = useState('')
@@ -15,30 +17,39 @@ export default function StudentCourseAssignments() {
   const [uploading, setUploading] = useState(false)
 
   useEffect(() => {
-    async function loadCourses() {
+    async function loadData() {
       try {
-        const { data } = await api.get('/admin/courses')
-        setCourses(data)
+        const [{ data: metaData }, { data: coursesData }] = await Promise.all([
+          api.get('/meta'),
+          api.get('/admin/courses'),
+        ])
+        setCourses(coursesData)
+
+        // Real academic sessions (2022-2023, 2023-2024, etc.), excluding 'Default'
+        const metaSessions = (metaData?.sessions ?? []).filter((s) => s && s !== 'Default')
+        const courseSessions = (coursesData ?? [])
+          .map((c) => c.session)
+          .filter((s) => s && s !== 'Default' && /^\d{4}-\d{4}$/.test(s))
+        const combinedSessions = [...new Set([...metaSessions, ...courseSessions])].sort()
+        setSessions(combinedSessions.length ? combinedSessions : ['2022-2023', '2023-2024', '2024-2025', '2025-2026', '2026-2027'])
+
+        const metaSemesters = metaData?.semesters?.length
+          ? metaData.semesters
+          : ['1-1', '1-2', '2-1', '2-2', '3-1', '3-2', '4-1', '4-2']
+        setSemesters(metaSemesters)
       } catch (error) {
-        setNotice(errorMessage(error, 'Could not load active courses.'))
+        setNotice(errorMessage(error, 'Could not load courses or academic sessions.'))
       } finally {
         setLoading(false)
       }
     }
-    loadCourses()
+    loadData()
   }, [])
 
-  const sessions = useMemo(
-    () => [...new Set(courses.map((course) => course.session).filter(Boolean))].sort(),
-    [courses],
-  )
-  const semesters = useMemo(
-    () => [...new Set(courses.map((course) => course.semester).filter(Boolean))].sort(),
-    [courses],
-  )
   const filteredCourses = useMemo(
     () => courses.filter((course) => (
-      course.session === selectedSession && course.semester === selectedSemester
+      course.semester === selectedSemester &&
+      (!course.session || course.session === 'Default' || course.session === selectedSession)
     )),
     [courses, selectedSession, selectedSemester],
   )
@@ -168,7 +179,7 @@ export default function StudentCourseAssignments() {
               >
                 {filteredCourses.map((course) => (
                   <option key={course.id} value={course.id}>
-                    {course.code} — {course.title} · {course.session} · {course.semester}
+                    {course.code} — {course.title} ({course.department} {course.semester})
                   </option>
                 ))}
               </select>

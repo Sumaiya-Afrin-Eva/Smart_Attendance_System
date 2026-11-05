@@ -73,11 +73,11 @@ export default function AdminCourses() {
         const [{ data: metaData }, { data: courseData }, { data: teacherData }] = await Promise.all([
           api.get('/meta'),
           api.get('/admin/courses'),
-          api.get('/admin/teachers'),
+          api.get('/admin/teachers').catch(() => ({ data: [] })),
         ])
         setMeta(metaData)
         setCourses(courseData)
-        setTeachers(teacherData)
+        setTeachers(teacherData || [])
         if (courseData.length) {
           setSelectedCourseId(String(courseData[0].id))
         }

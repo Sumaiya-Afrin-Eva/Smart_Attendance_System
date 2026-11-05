@@ -201,7 +201,6 @@ def save_profile(body: ProfileIn, user: User = Depends(student_only), db: Sessio
     offered = db.scalar(
         select(Course.id).where(
             Course.department == roster.department,
-            Course.session == roster.session,
             Course.semester == body.current_semester,
             Course.is_active.is_(True),
         ).limit(1)
@@ -209,7 +208,7 @@ def save_profile(body: ProfileIn, user: User = Depends(student_only), db: Sessio
     if offered is None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "This year-term is not offered for your approved department and session.",
+            "This year-term is not offered for your approved department.",
         )
 
     profile = user.profile or StudentProfile(user_id=user.id)
@@ -231,7 +230,6 @@ def save_profile(body: ProfileIn, user: User = Depends(student_only), db: Sessio
             CourseRosterAssignment.roster_id == roster.id,
             Course.is_active.is_(True),
             Course.department == roster.department,
-            Course.session == roster.session,
             Course.semester == body.current_semester,
         )
     ).all()
@@ -248,6 +246,35 @@ def save_profile(body: ProfileIn, user: User = Depends(student_only), db: Sessio
         raise HTTPException(status.HTTP_409_CONFLICT, "This roll number is already registered to another account.")
     db.refresh(user)
     return {"profile": _profile_out(profile, user), "onboarding": onboarding_status(db, user)}
+
+
+POSE_NAMES = [
+    "look_straight",
+    "turn_left",
+    "turn_right",
+    "tilt_up",
+    "tilt_down",
+]
+
+
+def _resolve_pose_name(photo: UploadFile, index: int) -> str:
+    original = Path(photo.filename or "").stem.lower().strip()
+    for pose in POSE_NAMES:
+        if pose in original:
+            return pose
+    if "left" in original:
+        return "turn_left"
+    if "right" in original:
+        return "turn_right"
+    if "up" in original:
+        return "tilt_up"
+    if "down" in original:
+        return "tilt_down"
+    if "straight" in original:
+        return "look_straight"
+    if 0 <= index < len(POSE_NAMES):
+        return POSE_NAMES[index]
+    return f"pose_{index + 1}"
 
 
 @router.post("/face-samples")
@@ -282,18 +309,26 @@ async def upload_face_samples(
 
     picture_root = settings.picture_dir.resolve()
     picture_root.mkdir(parents=True, exist_ok=True)
+    dept = (roster.department or "GENERAL").strip()
+    dept_dir = picture_root / dept
+    dept_dir.mkdir(parents=True, exist_ok=True)
+
     old_paths = json.loads(roster.face_sample_paths or "[]")
     paths: list[str] = []
-    for index, (content, mime_type) in enumerate(validated, start=1):
+    new_filenames: set[str] = set()
+    for index, ((content, mime_type), photo) in enumerate(zip(validated, photos)):
         suffix = ".png" if mime_type == "image/png" else ".jpg"
-        filename = f"{roster.roll}_{uuid4().hex}_{index}{suffix}"
-        (picture_root / filename).write_bytes(content)
-        paths.append(f"picture/{filename}")
+        pose_name = _resolve_pose_name(photo, index)
+        filename = f"{roster.roll}_{pose_name}{suffix}"
+        new_filenames.add(filename)
+        (dept_dir / filename).write_bytes(content)
+        paths.append(f"picture/{dept}/{filename}")
 
     for relative_path in old_paths:
         old_file = (settings.picture_dir.parent / relative_path).resolve()
-        if old_file.parent == picture_root and old_file.is_file():
-            old_file.unlink()
+        if (old_file.parent == picture_root or picture_root in old_file.parents) and old_file.is_file():
+            if old_file.name not in new_filenames:
+                old_file.unlink(missing_ok=True)
 
     roster.face_sample_paths = json.dumps(paths)
     roster.face_enrollment_version = FACE_ENROLLMENT_VERSION

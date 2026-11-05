@@ -10,10 +10,11 @@ import { useAuth } from '../context/AuthContext'
 export const NAV = {
   teacher: [
     { to: '/teacher', label: 'Dashboard', icon: LayoutDashboard, end: true },
-    { to: '/teacher/biometrics', label: 'Classroom Kiosk', icon: Scan },
+    { to: '/teacher/routine', label: 'Class Routine', icon: CalendarDays },
     { to: '/teacher/my-courses', label: 'Your courses', icon: BookOpen },
     { to: '/teacher/courses', label: 'Manage Classes', icon: FileText },
     { to: '/teacher/history', label: 'Class History', icon: FileText },
+    { to: '/teacher/biometrics', label: 'Classroom Kiosk', icon: Scan },
     { to: '/teacher/analytics', label: 'Analytics', icon: Radio },
     { to: '/teacher/settings', label: 'Settings', icon: Settings },
   ],
@@ -178,7 +179,7 @@ export default function DashboardLayout() {
         )}
 
         {/* Nav Links */}
-        <nav aria-label="Main navigation" className="mt-1 flex-1 space-y-1.5 px-3.5">
+        <nav aria-label="Main navigation" className="mt-1 flex-1 space-y-1.5 px-3.5 overflow-y-auto min-h-0">
           {navItems.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
@@ -215,7 +216,7 @@ export default function DashboardLayout() {
 
         {/* Telemetry Card */}
         {!collapsed && (
-          <div className="mx-3.5 mb-3.5 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5 shadow-2xs">
+          <div className="mx-3.5 mb-2.5 shrink-0 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 shadow-2xs">
             {user?.role === 'admin' ? (
               <>
                 <div className="flex items-center justify-between text-xs">
@@ -224,7 +225,7 @@ export default function DashboardLayout() {
                   </span>
                   <span className="font-bold text-emerald-800">Active</span>
                 </div>
-                <p className="mt-1.5 text-xs text-stone-500">Admin-approved student roster</p>
+                <p className="mt-1 text-xs text-stone-500">Admin-approved student roster</p>
               </>
             ) : (
               <>
@@ -234,7 +235,7 @@ export default function DashboardLayout() {
                   </span>
                   <span className="font-bold text-emerald-800">Online</span>
                 </div>
-                <div className="mt-1.5 flex items-center justify-between text-xs text-stone-500">
+                <div className="mt-1 flex items-center justify-between text-xs text-stone-500">
                   <span>Edge Sync Protocol</span>
                   <span className="font-mono text-emerald-800 font-semibold">Active</span>
                 </div>
@@ -244,7 +245,7 @@ export default function DashboardLayout() {
         )}
 
         {/* Logout Button (Replaced User Info) */}
-        <div className="border-t border-[#f0eee6] p-3.5 mt-auto">
+        <div className="border-t border-[#f0eee6] p-3.5 mt-auto shrink-0">
           <button
             onClick={handleLogout}
             title={collapsed ? 'Logout' : undefined}
@@ -303,6 +304,13 @@ export default function DashboardLayout() {
                 <p className="text-sm font-semibold text-stone-900">{user?.name}</p>
                 <p className="text-xs text-stone-500 capitalize">{ROLE_LABEL[user?.role] || user?.role}</p>
               </div>
+              <button
+                onClick={handleLogout}
+                title="Sign Out"
+                className="flex h-9 w-9 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-500 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 shadow-2xs cursor-pointer ml-1"
+              >
+                <LogOut size={15} />
+              </button>
             </div>
           </div>
         </header>

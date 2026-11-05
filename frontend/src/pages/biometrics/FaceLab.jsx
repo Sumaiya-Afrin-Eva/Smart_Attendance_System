@@ -250,30 +250,38 @@ export default function FaceLab() {
     }
 
     const startZxingScanner = async () => {
-      try {
-        const { BrowserQRCodeReader } = await import('@zxing/browser')
-        const { BarcodeFormat, DecodeHintType } = await import('@zxing/library')
-        if (cancelled) return
-
-        const video = videoRef.current
-        if (!video) return
-        const hints = new Map([
-          [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.QR_CODE]],
-          [DecodeHintType.TRY_HARDER, true],
-        ])
-        const reader = new BrowserQRCodeReader(hints)
-        const controls = await reader.decodeFromVideoElement(video, (result) => {
-          if (!cancelled && result) submitToken(result.getText())
-        })
-        if (cancelled) controls.stop()
-        else scannerControls = controls
-      } catch (scanError) {
-        if (!cancelled) {
-          console.error('QR scanner could not start:', scanError)
-          setError('QR scanner could not start. Check camera permission and reload the kiosk.')
-        }
+  // Use the native BarcodeDetector API if available. This removes the need for @zxing packages.
+  if (typeof window?.BarcodeDetector !== 'function') {
+    setError('QR scanner unavailable – your browser does not support the native BarcodeDetector API. Please use a recent Chrome/Edge browser.')
+    return
+  }
+  const video = videoRef.current
+  if (!video) return
+  const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
+  let rafId
+  const scanLoop = async () => {
+    if (cancelled) return
+    try {
+      const detections = await detector.detect(video)
+      if (detections.length) {
+        submitToken(detections[0].rawValue)
+      } else {
+        rafId = requestAnimationFrame(scanLoop)
       }
+    } catch (nativeErr) {
+      console.error('Native QR detector failed:', nativeErr)
+      setError('QR scanner could not start. Please ensure camera permission is granted.')
     }
+  }
+  rafId = requestAnimationFrame(scanLoop)
+  scannerControls = {
+    stop: () => {
+      cancelAnimationFrame(rafId)
+      detector?.reset?.()
+    },
+  }
+}
+
 
     startZxingScanner()
     return () => {

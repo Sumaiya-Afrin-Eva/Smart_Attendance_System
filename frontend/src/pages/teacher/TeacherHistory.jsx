@@ -1,132 +1,38 @@
-import { useMemo, useState } from 'react'
-import { Clock3, BookOpen, Users, ArrowRight } from 'lucide-react'
-
-const attendanceHistory = [
-  {
-    id: 1,
-    courseCode: 'CSE 3101',
-    courseTitle: 'Database Systems',
-    title: 'CSE 3101: Database Systems',
-    session: '2024-2025',
-    semester: '3-2',
-    date: 'Sep 28, 2026',
-    time: '10:30 AM - 12:00 PM',
-    room: 'CSE-401',
-    total: 48,
-    present: 45,
-    percent: 93.8,
-    attendees: [
-      { roll: '2207001', name: 'Ayesha Rahman' },
-      { roll: '2207002', name: 'Nabil Hasan' },
-      { roll: '2207005', name: 'Sadia Akter' },
-      { roll: '2207010', name: 'Tanvir Ahmed' },
-      { roll: '2207012', name: 'Mim Rahman' },
-      { roll: '2207021', name: 'Mahmudul Hassan' },
-      { roll: '2207028', name: 'Faria Islam' },
-      { roll: '2207034', name: 'Rakib Hossain' },
-      { roll: '2207037', name: 'Marium Sultana' },
-      { roll: '2207040', name: 'Shafkat Alam' },
-      { roll: '2207045', name: 'Nusrat Jahan' },
-      { roll: '2207048', name: 'Hasan Ali' },
-    ],
-  },
-  {
-    id: 2,
-    courseCode: 'CSE 3105',
-    courseTitle: 'Operating Systems',
-    title: 'CSE 3105: Operating Systems',
-    session: '2023-2024',
-    semester: '3-2',
-    date: 'Sep 24, 2026',
-    time: '09:00 AM - 10:30 AM',
-    room: 'CSE-303',
-    total: 46,
-    present: 42,
-    percent: 91.3,
-    attendees: [
-      { roll: '2207101', name: 'Rafid Karim' },
-      { roll: '2207104', name: 'Sanjida Chowdhury' },
-      { roll: '2207112', name: 'Imran Bhuiyan' },
-      { roll: '2207120', name: 'Nazia Sultana' },
-      { roll: '2207125', name: 'Sakib Ahmed' },
-      { roll: '2207130', name: 'Riya Akter' },
-      { roll: '2207138', name: 'Farhan Kabir' },
-      { roll: '2207141', name: 'Mitu Roy' },
-      { roll: '2207147', name: 'Zahidul Islam' },
-      { roll: '2207150', name: 'Mehnaz Hossain' },
-      { roll: '2207154', name: 'Arifur Rahman' },
-      { roll: '2207158', name: 'Tania Farin' },
-    ],
-  },
-  {
-    id: 3,
-    courseCode: 'CSE 3207',
-    courseTitle: 'Compiler Design',
-    title: 'CSE 3207: Compiler Design',
-    session: '2022-2023',
-    semester: '4-1',
-    date: 'Sep 22, 2026',
-    time: '01:00 PM - 02:30 PM',
-    room: 'CSE-207',
-    total: 45,
-    present: 40,
-    percent: 88.9,
-    attendees: [
-      { roll: '2207201', name: 'Jahid Hasan' },
-      { roll: '2207205', name: 'Sabiha Noor' },
-      { roll: '2207212', name: 'Tashfia Islam' },
-      { roll: '2207218', name: 'Sajid Hossain' },
-      { roll: '2207220', name: 'Maily Akter' },
-      { roll: '2207226', name: 'Jannat Ahmed' },
-      { roll: '2207232', name: 'Ishrak Chowdhury' },
-      { roll: '2207238', name: 'Naimul Islam' },
-      { roll: '2207244', name: 'Fahim Hossain' },
-      { roll: '2207249', name: 'Shahriar Alam' },
-      { roll: '2207253', name: 'Oishi Sarker' },
-      { roll: '2207258', name: 'Tanmoy Roy' },
-    ],
-  },
-  {
-    id: 4,
-    courseCode: 'CSE 3301',
-    courseTitle: 'Algorithms',
-    title: 'CSE 3301: Algorithms',
-    session: '2021-2022',
-    semester: null,
-    date: 'Jun 14, 2026',
-    time: '11:00 AM - 12:30 PM',
-    room: 'CSE-212',
-    total: 44,
-    present: 39,
-    percent: 88.6,
-    attendees: [
-      { roll: '2207301', name: 'Shuvo Das' },
-      { roll: '2207307', name: 'Moushumi Akter' },
-      { roll: '2207315', name: 'Asif Ahmed' },
-      { roll: '2207322', name: 'Ritu Sarkar' },
-      { roll: '2207328', name: 'Nafiul Hasan' },
-      { roll: '2207334', name: 'Sanjana Ali' },
-      { roll: '2207341', name: 'Md. Tanvir' },
-      { roll: '2207346', name: 'Nabila Islam' },
-      { roll: '2207349', name: 'Touhidur Rahman' },
-      { roll: '2207356', name: 'Amit Roy' },
-      { roll: '2207364', name: 'Rashida Sultana' },
-      { roll: '2207369', name: 'Shamiul Islam' },
-    ],
-  },
-]
-
-const academicSessions = ['All Sessions', '2021-2022', '2022-2023', '2023-2024', '2024-2025']
+import { useMemo, useState, useEffect } from 'react'
+import { Clock3, BookOpen, Users, ArrowRight, CheckCircle2, ShieldCheck } from 'lucide-react'
+import api from '../../lib/api'
 
 export default function TeacherHistory() {
+  const [sessions, setSessions] = useState([])
+  const [loading, setLoading] = useState(true)
   const [selectedSession, setSelectedSession] = useState('All Sessions')
-  const [expandedLedgerId, setExpandedLedgerId] = useState(1)
+  const [academicSessions, setAcademicSessions] = useState(['All Sessions'])
+  const [expandedLedgerId, setExpandedLedgerId] = useState(null)
   const [ledgerState, setLedgerState] = useState({})
 
+  useEffect(() => {
+    async function loadHistory() {
+      try {
+        const { data } = await api.get('/teacher/history')
+        setSessions(data)
+        if (data.length > 0) {
+          setExpandedLedgerId(data[0].id)
+          const foundSessions = ['All Sessions', ...new Set(data.map((d) => d.session).filter(Boolean))]
+          setAcademicSessions(foundSessions)
+        }
+      } catch (err) {
+        console.error('Failed to load teacher history', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadHistory()
+  }, [])
+
   const filteredSessions = useMemo(() => {
-    if (selectedSession === 'All Sessions') return attendanceHistory
-    return attendanceHistory.filter((entry) => entry.session === selectedSession)
-  }, [selectedSession])
+    if (selectedSession === 'All Sessions') return sessions
+    return sessions.filter((entry) => entry.session === selectedSession)
+  }, [sessions, selectedSession])
 
   const toggleLedger = (id) => {
     setExpandedLedgerId((current) => (current === id ? null : id))
@@ -185,7 +91,11 @@ export default function TeacherHistory() {
       </section>
 
       <section className="space-y-4">
-        {filteredSessions.length === 0 ? (
+        {loading ? (
+          <div className="rounded-2xl border border-stone-200 bg-white p-12 text-center text-sm font-medium text-stone-500 shadow-2xs">
+            Loading attendance history and class logs...
+          </div>
+        ) : filteredSessions.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-stone-200 bg-white p-8 text-center text-sm text-stone-500">
             No class records found for this academic session.
           </div>
@@ -218,7 +128,7 @@ export default function TeacherHistory() {
                   <p className="mt-2 text-sm font-semibold text-stone-900">{session.present} / {session.total}</p>
                 </div>
                 <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
-                  <div className="flex items-center gap-2 text-stone-500"><ArrowRight size={15} /> <span className="text-xs font-semibold uppercase tracking-wider">Room</span></div>
+                  <div className="flex items-center gap-2 text-stone-500"><ArrowRight size={15} /> <span className="text-xs font-semibold uppercase tracking-wider">Room / Terminal</span></div>
                   <p className="mt-2 text-sm font-semibold text-stone-900">{session.room}</p>
                 </div>
               </div>
@@ -226,7 +136,7 @@ export default function TeacherHistory() {
               <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-stone-200 bg-stone-50/80 p-3">
                 <div>
                   <p className="text-sm font-semibold text-stone-800">Student attendance sheet</p>
-                  <p className="text-xs text-stone-500">All attendance records are preserved for this class.</p>
+                  <p className="text-xs text-stone-500">Live face verified check-in records for this class.</p>
                 </div>
                 <button
                   onClick={() => toggleLedger(session.id)}
@@ -249,7 +159,7 @@ export default function TeacherHistory() {
                 return (
                   <div className="mt-4 overflow-hidden rounded-xl border border-stone-200 bg-stone-50/80">
                     <div className="flex flex-col gap-3 border-b border-stone-200 bg-white px-4 py-3 md:flex-row md:items-center md:justify-between">
-                      <p className="text-sm font-semibold text-stone-900">Present students</p>
+                      <p className="text-sm font-semibold text-stone-900">Present students ({session.present})</p>
 
                       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                         <input
@@ -276,7 +186,7 @@ export default function TeacherHistory() {
 
                     <div className="flex items-center justify-between border-b border-stone-200 bg-stone-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-stone-500">
                       <span>{visibleStudents.length} matched</span>
-                      <span>{session.present} present</span>
+                      <span>{session.present} verified</span>
                     </div>
 
                     <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -286,14 +196,28 @@ export default function TeacherHistory() {
                         </div>
                       ) : (
                         visibleStudents.map((student) => (
-                          <div key={`${session.id}-${student.roll}`} className="flex items-center justify-between rounded-xl border border-stone-200 bg-white px-3 py-2">
-                            <div>
-                              <p className="text-lg font-bold text-stone-900">{student.roll}</p>
-                              <p className="mt-1 text-sm text-stone-500">{student.name}</p>
+                          <div key={`${session.id}-${student.roll}`} className="flex flex-col justify-between rounded-xl border border-stone-200 bg-white p-3.5 shadow-2xs">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <p className="text-base font-bold text-stone-900">{student.name}</p>
+                                <p className="text-xs font-medium text-stone-500">Roll: {student.roll} {student.department ? `· ${student.department}` : ''}</p>
+                              </div>
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/20">
+                                <CheckCircle2 size={12} /> {student.status}
+                              </span>
                             </div>
-                            <span className="rounded-full bg-emerald-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">
-                              Present
-                            </span>
+                            
+                            <div className="mt-3 flex items-center justify-between border-t border-stone-100 pt-2 text-[11px] text-stone-500">
+                              <span className="inline-flex items-center gap-1">
+                                <Clock3 size={12} className="text-stone-400" />
+                                {student.time || 'Checked in'}
+                              </span>
+                              {student.confidence && (
+                                <span className="font-semibold text-emerald-700">
+                                  {student.confidence} match
+                                </span>
+                              )}
+                            </div>
                           </div>
                         ))
                       )}

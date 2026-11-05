@@ -19,6 +19,9 @@ export default function Login() {
   const [adminName, setAdminName] = useState('')
   const [creatingAdmin, setCreatingAdmin] = useState(false)
   const [showPw, setShowPw] = useState(false)
+  const [studentEmail, setStudentEmail] = useState('')
+  const [studentPassword, setStudentPassword] = useState('')
+  const [showStudentPw, setShowStudentPw] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   
@@ -68,6 +71,11 @@ export default function Login() {
     submit(() => creatingAdmin
       ? bootstrapAdmin(email, adminName, password, accessCode)
       : login(email, password, accessCode))
+  }
+
+  const handleStudentSubmit = (e) => {
+    e.preventDefault()
+    submit(() => login(studentEmail, studentPassword))
   }
 
   const handleGoogle = (credential) => submit(() => loginWithGoogle(credential))
@@ -156,7 +164,7 @@ export default function Login() {
             </button>
           </div>
 
-          {/* ─── Tab 1: Student Google Single Sign-On ─── */}
+          {/* ─── Tab 1: Student Login (Google & Manual Password) ─── */}
           {tab === 'student' && (
             <div className="space-y-4 animate-fade-in">
               <div className="rounded-2xl border border-stone-200 bg-stone-50/70 p-4.5">
@@ -169,12 +177,94 @@ export default function Login() {
                   </span>
                 </div>
 
+                {/* Google Single Sign-On */}
                 <GoogleButton
                   onCredential={handleGoogle}
                   onDevLogin={handleDevLogin}
                   onError={setError}
                   disabled={loading}
                 />
+
+                {/* Elegant Divider */}
+                <div className="relative my-4">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-stone-200" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-stone-50/90 px-2 font-medium text-stone-400">
+                      or sign in with password
+                    </span>
+                  </div>
+                </div>
+
+                {/* Manual Email & Password Form */}
+                <form onSubmit={handleStudentSubmit} className="space-y-3">
+                  <div>
+                    <label
+                      htmlFor="student-email"
+                      className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-600"
+                    >
+                      Academic Email
+                    </label>
+                    <div className="relative">
+                      <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-400" />
+                      <input
+                        id="student-email"
+                        type="email"
+                        required
+                        value={studentEmail}
+                        onChange={(e) => setStudentEmail(e.target.value)}
+                        placeholder="student@stud.kuet.ac.bd"
+                        className="w-full rounded-xl border border-stone-200 bg-white pl-10 pr-3.5 py-2.5 text-xs sm:text-sm outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10 text-stone-800 placeholder:text-stone-400"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor="student-password"
+                      className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-600"
+                    >
+                      Password
+                    </label>
+                    <div className="relative">
+                      <Lock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-stone-400" />
+                      <input
+                        id="student-password"
+                        type={showStudentPw ? 'text' : 'password'}
+                        required
+                        value={studentPassword}
+                        onChange={(e) => setStudentPassword(e.target.value)}
+                        placeholder="••••••••••••"
+                        className="w-full rounded-xl border border-stone-200 bg-white pl-10 pr-10 py-2.5 text-xs sm:text-sm outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/10 text-stone-800 placeholder:text-stone-400"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowStudentPw(!showStudentPw)}
+                        aria-label={showStudentPw ? 'Hide password' : 'Show password'}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 p-1 cursor-pointer"
+                      >
+                        {showStudentPw ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full flex items-center justify-center gap-2 rounded-xl bg-emerald-800 px-4 py-2.5 text-xs sm:text-sm font-semibold text-white shadow-xs transition hover:bg-emerald-700 active:scale-[0.99] disabled:opacity-60 cursor-pointer"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin" />
+                        <span>Signing in...</span>
+                      </>
+                    ) : (
+                      <span>Sign In with Password</span>
+                    )}
+                  </button>
+                </form>
+
                 {error && (
                   <div
                     role="alert"
@@ -207,36 +297,6 @@ export default function Login() {
           {/* ─── Tab 2: Faculty & Staff Credentials Form ─── */}
           {tab === 'staff' && (
             <div className="space-y-4 animate-fade-in">
-              {!creatingAdmin && (
-                <>
-                <div className="rounded-2xl border border-stone-200 bg-stone-50/70 p-4.5">
-                  <div className="mb-3.5 flex items-center justify-between">
-                    <span className="text-xs sm:text-sm font-bold text-stone-800">
-                      KUET Faculty / Staff Account
-                    </span>
-                    <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">
-                      @kuet.ac.bd
-                    </span>
-                  </div>
-
-                  <GoogleButton
-                    variant="staff"
-                    onCredential={handleGoogle}
-                    onError={setError}
-                    disabled={loading}
-                  />
-                </div>
-
-                <div className="relative flex items-center py-1">
-                  <div className="flex-grow border-t border-stone-200" />
-                  <span className="mx-3 text-[11px] font-semibold uppercase tracking-[0.2em] text-stone-400">
-                    or continue with email
-                  </span>
-                  <div className="flex-grow border-t border-stone-200" />
-                </div>
-                </>
-              )}
-
               <form onSubmit={handleSubmit} className="space-y-4">
                 {creatingAdmin && (
                   <div>
