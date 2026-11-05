@@ -7,6 +7,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.provider.Settings;
 import android.view.View;
 import android.widget.ImageView;
 import android.widget.TextView;
@@ -177,7 +178,7 @@ public class MainActivity extends AppCompatActivity {
         networkExecutor.execute(() -> {
             try {
                 JSONObject payload = new JSONObject().put("credential", idToken);
-                JSONObject session = requestJson("POST", "auth/google", payload, null);
+                JSONObject session = requestJson("POST", "auth/google", payload, null, null);
                 JSONObject user = session.getJSONObject("user");
                 JSONObject onboarding = session.optJSONObject("onboarding");
                 String accessToken = session.getString("access_token");
@@ -225,7 +226,13 @@ public class MainActivity extends AppCompatActivity {
         long requestStartedAt = SystemClock.elapsedRealtime();
         networkExecutor.execute(() -> {
             try {
-                JSONObject response = requestJson("GET", "students/me/attendance-qr", null, backendAccessToken);
+                JSONObject response = requestJson(
+                        "GET",
+                        "students/me/attendance-qr",
+                        null,
+                        backendAccessToken,
+                        getAndroidDeviceId()
+                );
                 String token = response.getString("token");
                 int expiresIn = response.getInt("expires_in");
                 JSONObject student = response.getJSONObject("student");
@@ -316,7 +323,13 @@ public class MainActivity extends AppCompatActivity {
         statusText.setText(message);
     }
 
-    private JSONObject requestJson(String method, String path, JSONObject body, String bearerToken)
+    private JSONObject requestJson(
+            String method,
+            String path,
+            JSONObject body,
+            String bearerToken,
+            String deviceId
+    )
             throws IOException, JSONException {
         String baseUrl = BuildConfig.API_BASE_URL.endsWith("/")
                 ? BuildConfig.API_BASE_URL
@@ -328,6 +341,9 @@ public class MainActivity extends AppCompatActivity {
         connection.setRequestProperty("Accept", "application/json");
         if (bearerToken != null) {
             connection.setRequestProperty("Authorization", "Bearer " + bearerToken);
+        }
+        if (deviceId != null) {
+            connection.setRequestProperty("X-Device-ID", deviceId);
         }
         if (body != null) {
             connection.setDoOutput(true);
@@ -351,6 +367,14 @@ public class MainActivity extends AppCompatActivity {
         } finally {
             connection.disconnect();
         }
+    }
+
+    private String getAndroidDeviceId() throws IOException {
+        String deviceId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+        if (deviceId == null || !deviceId.matches("[0-9a-fA-F]{16}")) {
+            throw new IOException(getString(R.string.device_id_unavailable));
+        }
+        return deviceId;
     }
 
     private static String readStream(InputStream inputStream) throws IOException {

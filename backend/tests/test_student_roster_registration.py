@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_attendance.db"
 
@@ -17,8 +18,10 @@ from app.models import (
     Attendance,
     ClassSession,
     ConsumedAttendanceQr,
+    ConsumedKioskQrFallback,
     Course,
     CourseRosterAssignment,
+    DeviceReset,
     Enrollment,
     FaceSample,
     PasswordResetToken,
@@ -60,6 +63,23 @@ def token_for(email):
 
 def headers_for(email):
     return {"Authorization": f"Bearer {token_for(email)}"}
+
+
+def kiosk_qr_fallback_token(session_id):
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {
+            "session_id": session_id,
+            "jti": str(uuid4()),
+            "iat": int(now.timestamp()),
+            "exp": int((now + timedelta(seconds=30)).timestamp()),
+            "iss": "smart-attendance",
+            "aud": "attendance-kiosk-qr-fallback",
+            "scope": "attendance:qr-fallback",
+        },
+        settings.jwt_secret,
+        algorithm="HS256",
+    )
 
 
 def create_roster(client, headers, photo_bytes, phone=None):
@@ -737,26 +757,40 @@ def test_student_qr_marks_assigned_course_and_cannot_be_replayed():
         student_id = student.id
 
     student_headers = headers_for("student1@stud.kuet.ac.bd")
+    missing_device = client.get("/api/students/me/attendance-qr", headers=student_headers)
+    assert missing_device.status_code == 422
+    student_headers["X-Device-ID"] = "0123456789abcdef"
     issued = client.get("/api/students/me/attendance-qr", headers=student_headers)
     assert issued.status_code == 200, issued.text
     assert issued.json()["expires_in"] == 30
     assert issued.json()["student"]["roll"] == "2107001"
+    with SessionLocal() as db:
+        profile = db.scalar(select(StudentProfile).where(StudentProfile.user_id == student_id))
+        assert profile.device_id == "0123456789abcdef"
+        assert profile.device_bound_at is not None
 
     payload = {"session_id": session_id, "token": issued.json()["token"]}
+    blocked = client.post("/api/face/kiosk/qr-scan", json=payload)
+    assert blocked.status_code == 403
+    assert "Face verification is required" in blocked.json()["detail"]
+    payload["fallback_token"] = kiosk_qr_fallback_token(session_id)
     marked = client.post("/api/face/kiosk/qr-scan", json=payload)
     assert marked.status_code == 200, marked.text
     assert marked.json()["student"]["id"] == student_id
     assert marked.json()["student"]["roll"] == "2107001"
     assert marked.json()["attendance"]["already_marked"] is False
 
-    replay = client.post("/api/face/kiosk/qr-scan", json=payload)
+    replay_payload = {**payload, "fallback_token": kiosk_qr_fallback_token(session_id)}
+    replay = client.post("/api/face/kiosk/qr-scan", json=replay_payload)
     assert replay.status_code == 409, replay.text
+    assert "already been used" in replay.json()["detail"]
     with SessionLocal() as db:
         attendance = db.scalar(select(Attendance).where(Attendance.session_id == session_id))
         assert attendance is not None
         assert attendance.student_id == student_id
         assert attendance.method == "qr"
         assert db.scalar(select(ConsumedAttendanceQr.id)) is not None
+        assert db.scalar(select(ConsumedKioskQrFallback.id)) is not None
 
 
 def test_student_qr_requires_current_semester_face_enrollment_and_rejects_expired_token():
@@ -809,6 +843,7 @@ def test_student_qr_requires_current_semester_face_enrollment_and_rejects_expire
         student_id = student.id
 
     student_headers = headers_for("student1@stud.kuet.ac.bd")
+    student_headers["X-Device-ID"] = "0123456789abcdef"
     unavailable = client.get("/api/students/me/attendance-qr", headers=student_headers)
     assert unavailable.status_code == 403
 
@@ -829,10 +864,93 @@ def test_student_qr_requires_current_semester_face_enrollment_and_rejects_expire
     )
     expired = client.post(
         "/api/face/kiosk/qr-scan",
-        json={"session_id": session_id, "token": expired_token},
+        json={
+            "session_id": session_id,
+            "token": expired_token,
+            "fallback_token": kiosk_qr_fallback_token(session_id),
+        },
     )
     assert expired.status_code == 401
     assert "expired" in expired.json()["detail"].lower()
+
+
+def test_student_device_binding_is_one_to_one_and_admin_reset_is_audited():
+    reset_db()
+    client = TestClient(app)
+    with SessionLocal() as db:
+        students = [db.scalar(select(User).where(User.email == "student1@stud.kuet.ac.bd"))]
+        second_student = User(
+            email="student2@stud.kuet.ac.bd",
+            name="Student Two",
+            role="student",
+            is_active=True,
+        )
+        db.add(second_student)
+        db.flush()
+        students.append(second_student)
+        for index, student in enumerate(students, start=1):
+            roster = StudentRoster(
+                full_name=f"Student {index}",
+                roll=f"210700{index}",
+                email=student.email,
+                department="CSE",
+                session="2021-2022",
+                is_active=True,
+            )
+            db.add(roster)
+            db.flush()
+            student.profile = StudentProfile(
+                user_id=student.id,
+                roster_id=roster.id,
+                roll=roster.roll,
+                full_name=roster.full_name,
+                department=roster.department,
+                series="2021",
+                session=roster.session,
+                current_semester="3-2",
+            )
+            db.add(StudentSemesterFaceEnrollment(
+                user_id=student.id,
+                semester="3-2",
+                enrollment_version=1,
+            ))
+        db.commit()
+        first_roster_id = students[0].profile.roster_id
+
+    device_id = "0123456789abcdef"
+    first_headers = headers_for("student1@stud.kuet.ac.bd")
+    first_headers["X-Device-ID"] = device_id
+    first_issue = client.get("/api/students/me/attendance-qr", headers=first_headers)
+    assert first_issue.status_code == 200, first_issue.text
+
+    second_headers = headers_for("student2@stud.kuet.ac.bd")
+    second_headers["X-Device-ID"] = device_id
+    shared_device = client.get("/api/students/me/attendance-qr", headers=second_headers)
+    assert shared_device.status_code == 409
+    assert shared_device.json()["detail"] == "This phone is registered to another account."
+
+    first_headers["X-Device-ID"] = "fedcba9876543210"
+    changed_device = client.get("/api/students/me/attendance-qr", headers=first_headers)
+    assert changed_device.status_code == 409
+    assert "bound to a different phone" in changed_device.json()["detail"]
+
+    reset_path = f"/api/admin/students/{first_roster_id}/reset-device"
+    student_reset = client.post(reset_path, headers=first_headers)
+    assert student_reset.status_code == 403
+    admin_headers = headers_for("admin@kuet.ac.bd")
+    reset = client.post(reset_path, headers=admin_headers)
+    assert reset.status_code == 200, reset.text
+    with SessionLocal() as db:
+        profile = db.scalar(select(StudentProfile).where(StudentProfile.roster_id == first_roster_id))
+        audit = db.scalar(select(DeviceReset).where(DeviceReset.student_id == profile.user_id))
+        assert profile.device_id is None
+        assert profile.device_bound_at is None
+        assert audit.old_device_id == device_id
+        assert audit.reset_by == "admin@kuet.ac.bd"
+
+    second_headers["X-Device-ID"] = device_id
+    rebound = client.get("/api/students/me/attendance-qr", headers=second_headers)
+    assert rebound.status_code == 200, rebound.text
 
 
 def test_admin_bootstrap_and_login_require_server_access_code(monkeypatch):
@@ -972,7 +1090,10 @@ def test_legacy_roster_photo_path_is_migrated_to_sqlite_blob(tmp_path, monkeypat
     legacy_photo.write_bytes(photo_bytes)
     legacy_engine = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
     with legacy_engine.begin() as conn:
-        conn.exec_driver_sql("CREATE TABLE users (id INTEGER PRIMARY KEY)")
+        conn.exec_driver_sql(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, role TEXT, "
+            "is_active BOOLEAN, created_at TIMESTAMP)"
+        )
         conn.exec_driver_sql(
             "CREATE TABLE student_profiles (id INTEGER PRIMARY KEY, user_id INTEGER, face_status TEXT)"
         )
@@ -985,6 +1106,7 @@ def test_legacy_roster_photo_path_is_migrated_to_sqlite_blob(tmp_path, monkeypat
     monkeypatch.setattr(main_module, "engine", legacy_engine)
     monkeypatch.setattr(settings, "database_url", "sqlite:///legacy.db")
     main_module.ensure_database_schema()
+    main_module.migrate_student_device_binding()
 
     with legacy_engine.connect() as conn:
         migrated_data, mime_type = conn.exec_driver_sql(
@@ -1002,9 +1124,14 @@ def test_legacy_roster_photo_path_is_migrated_to_sqlite_blob(tmp_path, monkeypat
         course_columns = {
             column[1] for column in conn.exec_driver_sql("PRAGMA table_info(courses)").fetchall()
         }
+        device_indexes = {
+            index[1]: index[2] for index in conn.exec_driver_sql("PRAGMA index_list(student_profiles)").fetchall()
+        }
     assert migrated_data == photo_bytes
     assert mime_type == "image/jpeg"
     assert "face_status" in profile_columns
+    assert {"device_id", "device_bound_at"}.issubset(profile_columns)
+    assert device_indexes["uq_student_profiles_device_id"] == 1
     assert {
         "education",
         "professional_membership",
