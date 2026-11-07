@@ -55,7 +55,7 @@ EMBEDDING_DIM = 512
 class FaceService:
     """Service for face detection, 512-d ArcFace embedding extraction, and cosine similarity matching."""
 
-    LIVENESS_READY_SECONDS = 1.0
+    LIVENESS_READY_SECONDS = 0.5
     LIVENESS_VALID_SECONDS = 8.0
     EMBEDDING_CACHE_SIZE = 2048
 
@@ -308,7 +308,7 @@ class FaceService:
                 self.update_blink_state(state, ear)
 
                 previous = state.get("position", position)
-                movement_detected = abs(position[0] - previous[0]) > 0.012 or abs(position[1] - previous[1]) > 0.012
+                movement_detected = abs(position[0] - previous[0]) > 0.008 or abs(position[1] - previous[1]) > 0.008
                 if movement_detected:
                     state["movement"] = True
                 state["position"] = position

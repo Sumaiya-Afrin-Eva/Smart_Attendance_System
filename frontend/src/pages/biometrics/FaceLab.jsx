@@ -15,9 +15,12 @@ import {
 } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
 
-const LIVENESS_POLL_INTERVAL_MS = 150
+// Polling intervals & frame sizes:
+// Using 320px width and 280ms polling keeps network payloads small and CPU fast
+// so liveness checks complete in milliseconds without clogging the network.
+const LIVENESS_POLL_INTERVAL_MS = 280
 
-const captureFrame = (video, maxWidth = 640) => new Promise((resolve, reject) => {
+const captureFrame = (video, maxWidth = 320) => new Promise((resolve, reject) => {
   const scale = Math.min(1, maxWidth / video.videoWidth)
   const canvas = document.createElement('canvas')
   canvas.width = Math.round(video.videoWidth * scale)
@@ -31,7 +34,7 @@ const captureFrame = (video, maxWidth = 640) => new Promise((resolve, reject) =>
   canvas.toBlob((blob) => {
     if (blob) resolve(blob)
     else reject(new Error('Could not capture a camera frame.'))
-  }, 'image/jpeg', 0.78)
+  }, 'image/jpeg', 0.70)
 })
 
 export default function FaceLab() {
