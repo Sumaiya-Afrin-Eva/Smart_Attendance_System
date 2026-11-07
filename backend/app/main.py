@@ -532,13 +532,22 @@ ensure_seed_settings()
 
 app = FastAPI(title="Smart Attendance API", version="0.1.0")
 
+def _cors_origins() -> list[str]:
+    """Build the allowed-origins list.
+
+    If FRONTEND_ORIGINS contains the special value '*', we allow all origins
+    (useful when the kiosk connects through a dynamic Cloudflare tunnel URL and
+    the Vite proxy makes the request appear same-origin anyway).
+    """
+    extra = [o.strip() for o in settings.frontend_origins.split(",") if o.strip()]
+    if "*" in extra:
+        return ["*"]
+    return list({settings.frontend_origin, *extra})
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        settings.frontend_origin,
-        *[origin.strip() for origin in settings.frontend_origins.split(",") if origin.strip()],
-    ],
-    allow_credentials=True,
+    allow_origins=_cors_origins(),
+    allow_credentials="*" not in _cors_origins(),   # credentials=True only when origins are explicit
     allow_methods=["*"],
     allow_headers=["*"],
 )

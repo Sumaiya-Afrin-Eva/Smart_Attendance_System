@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
+# Auto-generated kiosk env (created by kiosk/start-kiosk.sh at runtime)
+.env.kiosk
 
 # Editor directories and files
 .vscode/*

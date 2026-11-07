@@ -9,6 +9,7 @@ trap "trap - SIGTERM && kill -- -$$" SIGINT SIGTERM EXIT
 echo "-> Starting Backend (FastAPI on port 8000)"
 cd backend
 source venv/bin/activate
+# host 0.0.0.0 so the kiosk on another laptop can reach this API over LAN
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 &
 BACKEND_PID=$!
 cd ..
