@@ -57,15 +57,34 @@ cd ..
 echo "  Backend PID: $BACKEND_PID"
 
 # Wait for FastAPI to be ready
+wait_for_backend() {
+  local attempts="${1:-30}"
+  for i in $(seq 1 "$attempts"); do
+    if curl -fsS http://127.0.0.1:8000/api/health > /dev/null 2>&1 || \
+       curl -fsS http://127.0.0.1:8000/docs       > /dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 echo "  Waiting for backend to start..."
-for i in {1..20}; do
-  if curl -sf http://127.0.0.1:8000/api/health > /dev/null 2>&1 || \
-     curl -sf http://127.0.0.1:8000/docs       > /dev/null 2>&1; then
-    echo "  ✓ Backend is ready"
-    break
-  fi
-  sleep 1
-done
+if ! wait_for_backend 30; then
+  echo ""
+  echo "  ✗ ERROR: FastAPI backend did not become healthy on http://127.0.0.1:8000"
+  echo "    Check the backend process and logs before starting Cloudflare Tunnel."
+  echo "    Common causes: missing dependencies, database error, port conflict, or uvicorn crash."
+  echo ""
+  echo "    Quick checks:"
+  echo "      cd backend && python -m pip install -r requirements.txt"
+  echo "      cd backend && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+  echo "      curl -v http://127.0.0.1:8000/api/health"
+  echo ""
+  exit 1
+fi
+
+echo "  ✓ Backend is ready"
 
 # ── 2. Cloudflare Tunnel ─────────────────────────────────────
 if command -v cloudflared &> /dev/null; then

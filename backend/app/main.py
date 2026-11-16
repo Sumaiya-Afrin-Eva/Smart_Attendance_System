@@ -56,6 +56,16 @@ def ensure_database_schema() -> None:
             conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN photo_mime_type VARCHAR(40)")
         if "phone" not in roster_col_names:
             conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN phone VARCHAR(20)")
+        if "roll" not in roster_col_names:
+            conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN roll VARCHAR(20) DEFAULT ''")
+        if "department" not in roster_col_names:
+            conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN department VARCHAR(40) DEFAULT ''")
+        if "session" not in roster_col_names:
+            conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN session VARCHAR(20) DEFAULT ''")
+        if "full_name" not in roster_col_names:
+            conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN full_name VARCHAR(120) DEFAULT ''")
+        if "email" not in roster_col_names:
+            conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN email VARCHAR(255) DEFAULT ''")
         if "photo_path" not in roster_col_names:
             conn.exec_driver_sql("ALTER TABLE student_roster ADD COLUMN photo_path VARCHAR(500)")
         if "face_sample_paths" not in roster_col_names:
@@ -150,6 +160,8 @@ def ensure_database_schema() -> None:
             conn.exec_driver_sql("ALTER TABLE class_sessions ADD COLUMN roll_start VARCHAR(20) DEFAULT ''")
         if "roll_end" not in session_col_names:
             conn.exec_driver_sql("ALTER TABLE class_sessions ADD COLUMN roll_end VARCHAR(20) DEFAULT ''")
+        if "teacher_id" not in session_col_names:
+            conn.exec_driver_sql("ALTER TABLE class_sessions ADD COLUMN teacher_id INTEGER REFERENCES users(id)")
 
         # Ensure separate teachers table exists and is backfilled from users table
         conn.exec_driver_sql("""
@@ -190,6 +202,11 @@ def ensure_database_schema() -> None:
             """)
 
         # Ensure separate roles for both administrators
+        if "password_hash" not in col_names:
+            conn.exec_driver_sql("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)")
+        if "is_active" not in col_names:
+            conn.exec_driver_sql("ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1")
+        col_names = {column[1] for column in conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()}
         if {"role", "email"}.issubset(col_names):
             conn.exec_driver_sql("UPDATE users SET role = 'system_admin' WHERE email = 'sysadmin@kuet.ac.bd'")
             conn.exec_driver_sql("UPDATE users SET role = 'admin', name = 'Student Administrator' WHERE email = 'admin@kuet.ac.bd'")

@@ -142,8 +142,11 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
     # 1. Active courses
     active_courses = len(courses)
 
-    # 2. Total classes (sessions)
-    total_classes = db.query(ClassSession).filter(ClassSession.course_id.in_(course_ids)).count() if course_ids else 0
+    # 2. Total classes (sessions) for this teacher's specific class slots
+    total_classes = db.query(ClassSession).filter(
+        ClassSession.course_id.in_(course_ids),
+        (ClassSession.teacher_id == user.id) | (ClassSession.teacher_id.is_(None)),
+    ).count() if course_ids else 0
 
     # 3. Students tracked (unique enrolled students)
     students_tracked = (
@@ -155,7 +158,14 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
     )
 
     # 4. Avg attendance
-    session_ids = [s.id for s in db.scalars(select(ClassSession).where(ClassSession.course_id.in_(course_ids))).all()] if course_ids else []
+    session_ids = [
+        s.id for s in db.scalars(
+            select(ClassSession).where(
+                ClassSession.course_id.in_(course_ids),
+                (ClassSession.teacher_id == user.id) | (ClassSession.teacher_id.is_(None)),
+            )
+        ).all()
+    ] if course_ids else []
     avg_attendance = "0%"
     if session_ids:
         total_attendance_records = db.query(Attendance).filter(Attendance.session_id.in_(session_ids)).count()
@@ -170,7 +180,11 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
 
     upcoming_sessions = db.scalars(
         select(ClassSession)
-        .where(ClassSession.course_id.in_(course_ids), ClassSession.start_at >= datetime.now())
+        .where(
+            ClassSession.course_id.in_(course_ids),
+            ClassSession.start_at >= datetime.now(),
+            (ClassSession.teacher_id == user.id) | (ClassSession.teacher_id.is_(None)),
+        )
         .order_by(ClassSession.start_at)
         .limit(3)
     ).all() if course_ids else []
@@ -209,7 +223,11 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
     # Recent classes
     recent_sessions = db.scalars(
         select(ClassSession)
-        .where(ClassSession.course_id.in_(course_ids), ClassSession.start_at < datetime.now())
+        .where(
+            ClassSession.course_id.in_(course_ids),
+            ClassSession.start_at < datetime.now(),
+            (ClassSession.teacher_id == user.id) | (ClassSession.teacher_id.is_(None)),
+        )
         .order_by(ClassSession.start_at.desc())
         .limit(3)
     ).all()
@@ -351,6 +369,7 @@ def create_teacher_session(body: ClassSessionCreateIn, db: Session = Depends(get
 
     session = ClassSession(
         course_id=body.course_id,
+        teacher_id=user.id,
         start_at=body.start_at,
         end_at=body.end_at,
         room=body.room,
@@ -379,7 +398,14 @@ def list_teacher_sessions(db: Session = Depends(get_db), user: User = Depends(te
         return []
 
     course_ids = [c.id for c in courses]
-    sessions = db.scalars(select(ClassSession).where(ClassSession.course_id.in_(course_ids)).order_by(ClassSession.start_at.desc())).all()
+    sessions = db.scalars(
+        select(ClassSession)
+        .where(
+            ClassSession.course_id.in_(course_ids),
+            (ClassSession.teacher_id == user.id) | (ClassSession.teacher_id.is_(None)),
+        )
+        .order_by(ClassSession.start_at.desc())
+    ).all()
 
     res = []
     course_map = {c.id: c for c in courses}
@@ -437,7 +463,10 @@ def teacher_attendance_history(
     course_ids = [c.id for c in courses]
     course_map = {c.id: c for c in courses}
 
-    query = select(ClassSession).where(ClassSession.course_id.in_(course_ids))
+    query = select(ClassSession).where(
+        ClassSession.course_id.in_(course_ids),
+        (ClassSession.teacher_id == user.id) | (ClassSession.teacher_id.is_(None)),
+    )
     sessions = db.scalars(query.order_by(ClassSession.start_at.desc())).all()
 
     history = []

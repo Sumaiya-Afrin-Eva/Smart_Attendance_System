@@ -31,7 +31,20 @@ class Settings(BaseSettings):
 
     @field_validator("database_url", mode="after")
     @classmethod
-    def resolve_sqlite_path(cls, v: str) -> str:
+    def validate_database_url(cls, v: str) -> str:
+        if v.startswith("postgresql") or v.startswith("mysql"):
+            try:
+                if v.startswith("postgresql"):
+                    import psycopg2  # noqa: F401
+                else:
+                    import pymysql  # noqa: F401
+            except ModuleNotFoundError as exc:
+                raise ValueError(
+                    "DATABASE_URL points to PostgreSQL/MySQL, but the required database driver is not installed. "
+                    "Install psycopg2 or pymysql on both machines and use the same shared DB URL everywhere."
+                ) from exc
+            return v
+
         prefix = "sqlite:///"
         if v.startswith(prefix):
             raw_path = v[len(prefix):]
@@ -41,6 +54,7 @@ class Settings(BaseSettings):
             if not db_path.is_absolute():
                 db_path = BASE_DIR / db_path
             return f"{prefix}{db_path.resolve()}"
+
         return v
 
 

@@ -1,746 +1,485 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Link } from 'react-router-dom'
-import {
-  Camera,
-  CheckCircle2,
-  XCircle,
-  RefreshCw,
-  Zap,
-  ArrowLeft,
-  Clock,
-  User,
-  Users,
-  ShieldCheck,
-  AlertCircle,
-} from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
 
-// Polling intervals & frame sizes:
-// Using 320px width and 280ms polling keeps network payloads small and CPU fast
-// so liveness checks complete in milliseconds without clogging the network.
-const LIVENESS_POLL_INTERVAL_MS = 280
+// How often the liveness check polls (ms)
+const LIVENESS_POLL_MS = 180
+// After a final decision (matched or not), wait this long before resetting to scan again
+const RESET_DELAY_MS = 4000
+// How long to wait before retrying /kiosk/open when no active class found
+const RETRY_OPEN_MS = 30000
 
-const captureFrame = (video, maxWidth = 320) => new Promise((resolve, reject) => {
-  const scale = Math.min(1, maxWidth / video.videoWidth)
-  const canvas = document.createElement('canvas')
-  canvas.width = Math.round(video.videoWidth * scale)
-  canvas.height = Math.round(video.videoHeight * scale)
-  const context = canvas.getContext('2d')
-  if (!context) {
-    reject(new Error('Could not prepare the camera frame.'))
-    return
-  }
-  context.drawImage(video, 0, 0, canvas.width, canvas.height)
-  canvas.toBlob((blob) => {
-    if (blob) resolve(blob)
-    else reject(new Error('Could not capture a camera frame.'))
-  }, 'image/jpeg', 0.70)
-})
+/** Capture a JPEG frame from the live video element. */
+const captureFrame = (video, maxWidth = 320) =>
+  new Promise((resolve, reject) => {
+    const scale = Math.min(1, maxWidth / video.videoWidth)
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(video.videoWidth * scale)
+    canvas.height = Math.round(video.videoHeight * scale)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) { reject(new Error('Canvas context unavailable')); return }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    canvas.toBlob(
+      (blob) => (blob ? resolve(blob) : reject(new Error('Frame capture failed'))),
+      'image/jpeg',
+      0.70,
+    )
+  })
+
+// ─── Voice announcement helper ────────────────────────────────────────────────
+let _speechQueue = []
+let _speaking = false
+
+function speak(text) {
+  if (!('speechSynthesis' in window) || !text) return
+  _speechQueue.push(text)
+  if (!_speaking) _flushSpeech()
+}
+
+function _flushSpeech() {
+  if (!_speechQueue.length) { _speaking = false; return }
+  _speaking = true
+  const utt = new SpeechSynthesisUtterance(_speechQueue.shift())
+  utt.rate = 1
+  utt.pitch = 1
+  utt.volume = 1
+  utt.onend = _flushSpeech
+  window.speechSynthesis.cancel()
+  window.speechSynthesis.speak(utt)
+}
+
+// ─── Kiosk states ─────────────────────────────────────────────────────────────
+// 'opening'   – waiting for /kiosk/open to respond
+// 'no-class'  – no active routine right now, retrying
+// 'liveness'  – camera on, checking liveness
+// 'scanning'  – sending frame for face recognition
+// 'success'   – face matched → show green banner, then reset
+// 'qr'        – face not matched → show QR prompt, wait for QR scan
+// 'qr-scan'   – QR token detected, verifying
+// 'qr-ok'     – QR verified → show success banner, then reset
+// 'qr-fail'   – QR failed
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function FaceLab() {
-  const [cameraActive, setCameraActive] = useState(false)
-  const [scanning, setScanning] = useState(false)
-  const [scanMode, setScanMode] = useState('face')
-  const [qrFallbackToken, setQrFallbackToken] = useState(null)
-  const [result, setResult] = useState(null)
-  const [error, setError] = useState('')
-  const [courseCode, setCourseCode] = useState('')
-  const [opening, setOpening] = useState(false)
+  const [phase, setPhase] = useState('opening')      // kiosk phase
   const [activeClass, setActiveClass] = useState(null)
+  const [liveness, setLiveness] = useState({ human: false, liveness: false, message: '' })
+  const [banner, setBanner] = useState(null)         // { text, ok } for overlay
   const [recentLogs, setRecentLogs] = useState([])
   const [currentTime, setCurrentTime] = useState(new Date())
-  const [liveness, setLiveness] = useState({
-    human: false,
-    liveness: false,
-    message: 'Start the camera to verify a live face.',
-  })
-  const [livenessRetryKey, setLivenessRetryKey] = useState(0)
+  const [cameraReady, setCameraReady] = useState(false)
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
-  const qrScanLockRef = useRef(false)
-  const lastQrTokenRef = useRef(null)
+  const livenessKeyRef = useRef(0)       // bump to restart liveness polling
+  const lastQrRef = useRef(null)
+  const qrLockRef = useRef(false)
+  const autoScanRef = useRef(false)
+  const resetTimerRef = useRef(null)
+  const openRetryRef = useRef(null)
 
-  // Live Digital Clock
+  // ── Digital clock ──────────────────────────────────────────────────────────
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
-    return () => clearInterval(timer)
+    const t = setInterval(() => setCurrentTime(new Date()), 1000)
+    return () => clearInterval(t)
   }, [])
 
-  // Start Camera with reliable element binding
+  // ── Camera start / stop ────────────────────────────────────────────────────
   const startCamera = useCallback(async () => {
-    setError('')
+    if (streamRef.current) return   // already running
     try {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setError('Camera API is not supported in this browser. Please use Chrome, Edge, or Brave on localhost.')
-        return
-      }
-
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
         audio: false,
       })
-
       streamRef.current = stream
-
       if (videoRef.current) {
         videoRef.current.srcObject = stream
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current?.play().catch(console.error)
-        }
+        videoRef.current.onloadedmetadata = () => videoRef.current?.play().catch(() => {})
       }
-      setCameraActive(true)
+      setCameraReady(true)
     } catch (err) {
-      console.error('Camera start error:', err)
-      if (err.name === 'NotAllowedError') {
-        setError('Camera permission was denied. Please click the camera icon in your browser URL bar to allow access.')
-      } else if (err.name === 'NotReadableError') {
-        setError('Camera is currently in use by another application (Zoom, Teams, etc.). Please close it and retry.')
-      } else {
-        setError(`Unable to access camera (${err.name || 'Unknown'}).`)
-      }
-      setCameraActive(false)
+      console.error('Camera error:', err)
+      setCameraReady(false)
     }
   }, [])
 
   const stopCamera = useCallback(() => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop())
-      streamRef.current = null
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null
-    }
-    setCameraActive(false)
-    setLiveness({ human: false, liveness: false, message: 'Camera stopped.' })
+    streamRef.current?.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
+    if (videoRef.current) videoRef.current.srcObject = null
+    setCameraReady(false)
   }, [])
 
+  // Re-bind stream if video element remounts
   useEffect(() => {
-    return () => stopCamera()
-  }, [stopCamera])
+    if (cameraReady && streamRef.current && videoRef.current && videoRef.current.srcObject !== streamRef.current) {
+      videoRef.current.srcObject = streamRef.current
+      videoRef.current.play().catch(() => {})
+    }
+  }, [cameraReady])
 
-  // Ensure stream stays bound whenever video element mounts
-  useEffect(() => {
-    if (cameraActive && streamRef.current && videoRef.current) {
-      if (videoRef.current.srcObject !== streamRef.current) {
-        videoRef.current.srcObject = streamRef.current
-        videoRef.current.play().catch(console.error)
+  // ── Open kiosk session ─────────────────────────────────────────────────────
+  const openKiosk = useCallback(async () => {
+    setPhase('opening')
+    setBanner(null)
+    setLiveness({ human: false, liveness: false, message: '' })
+    clearTimeout(openRetryRef.current)
+    try {
+      const { data } = await api.post('/face/kiosk/open', {})
+      setActiveClass(data)
+      setPhase('liveness')
+      livenessKeyRef.current += 1
+    } catch (err) {
+      const status = err?.response?.status
+      if (status === 404 || status === 409) {
+        setPhase('no-class')
+        openRetryRef.current = setTimeout(openKiosk, RETRY_OPEN_MS)
+      } else {
+        // transient error – retry sooner
+        setPhase('no-class')
+        openRetryRef.current = setTimeout(openKiosk, 8000)
       }
     }
-  }, [cameraActive])
+  }, [])
 
+  // ── Boot: start camera + open kiosk immediately ────────────────────────────
   useEffect(() => {
-    if (!cameraActive || !activeClass || scanMode !== 'face') return undefined
+    void startCamera()
+    void openKiosk()
+    return () => {
+      stopCamera()
+      clearTimeout(resetTimerRef.current)
+      clearTimeout(openRetryRef.current)
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel()
+    }
+  }, [openKiosk, startCamera, stopCamera])
+
+  // ── Reset to liveness after a decision ────────────────────────────────────
+  const scheduleReset = useCallback(() => {
+    clearTimeout(resetTimerRef.current)
+    resetTimerRef.current = setTimeout(() => {
+      setBanner(null)
+      lastQrRef.current = null
+      qrLockRef.current = false
+      autoScanRef.current = false
+      setLiveness({ human: false, liveness: false, message: '' })
+      livenessKeyRef.current += 1
+      // Re-open kiosk session to handle time-slot changes
+      void openKiosk()
+    }, RESET_DELAY_MS)
+  }, [openKiosk])
+
+  // ── Liveness polling ───────────────────────────────────────────────────────
+  useEffect(() => {
+    if (phase !== 'liveness' || !activeClass || !cameraReady) return undefined
+    const key = livenessKeyRef.current
     let cancelled = false
+    let inFlight = false
     let timer
 
-    const checkFrame = async () => {
+    const poll = async () => {
+      if (cancelled || key !== livenessKeyRef.current) return
       const video = videoRef.current
       if (!video || video.readyState < 2 || video.videoWidth === 0) {
-        if (!cancelled) timer = window.setTimeout(checkFrame, 100)
+        timer = setTimeout(poll, 150)
         return
       }
+      if (inFlight) { timer = setTimeout(poll, LIVENESS_POLL_MS); return }
+      inFlight = true
       try {
         const frame = await captureFrame(video, 480)
-        const formData = new FormData()
-        formData.append('session_id', activeClass.session_id)
-        formData.append('image', frame, 'live-frame.jpg')
-        const { data } = await api.post('/face/kiosk/liveness', formData, {
-          timeout: 5000,
-          skipNetworkRetry: true,
-        })
-        if (cancelled) return
+        const fd = new FormData()
+        fd.append('session_id', activeClass.session_id)
+        fd.append('image', frame, 'live.jpg')
+        const { data } = await api.post('/face/kiosk/liveness', fd, { timeout: 5000, skipNetworkRetry: true })
+        if (cancelled || key !== livenessKeyRef.current) return
         setLiveness(data)
-        if (!data.liveness) timer = window.setTimeout(checkFrame, LIVENESS_POLL_INTERVAL_MS)
-      } catch (err) {
-        if (cancelled) return
-        setLiveness({
-          human: false,
-          liveness: false,
-          message: errorMessage(err, 'Live-face verification is unavailable.'),
-        })
-        timer = window.setTimeout(checkFrame, 1000)
+        if (!data?.liveness) {
+          timer = setTimeout(poll, LIVENESS_POLL_MS)
+        }
+        // liveness=true → auto-scan kicks in via the effect below
+      } catch {
+        if (!cancelled) timer = setTimeout(poll, 1000)
+      } finally {
+        inFlight = false
       }
     }
 
-    timer = window.setTimeout(checkFrame, 100)
-    return () => {
-      cancelled = true
-      window.clearTimeout(timer)
-    }
-  }, [cameraActive, activeClass, livenessRetryKey, scanMode])
+    timer = setTimeout(poll, 150)
+    return () => { cancelled = true; clearTimeout(timer) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, activeClass, cameraReady, livenessKeyRef.current])
 
-  const handleOpenKiosk = async (event) => {
-    event.preventDefault()
-    setOpening(true)
-    setError('')
-    setResult(null)
-    setQrFallbackToken(null)
-    setScanMode('face')
-    setLiveness({ human: false, liveness: false, message: 'Start the camera to verify a live face.' })
+  // ── Auto face scan when liveness is confirmed ─────────────────────────────
+  const handleFaceScan = useCallback(async () => {
+    if (!activeClass || !videoRef.current || !cameraReady) return
+    setPhase('scanning')
     try {
-      const { data } = await api.post('/face/kiosk/open', { course_code: courseCode })
-      lastQrTokenRef.current = null
-      setActiveClass(data)
+      const frame = await captureFrame(videoRef.current, 320)
+      const fd = new FormData()
+      fd.append('session_id', activeClass.session_id)
+      fd.append('image', frame, 'kiosk-frame.jpg')
+      fd.append('threshold', 0.55)
+      const { data } = await api.post('/face/kiosk/scan', fd, { timeout: 15000, skipNetworkRetry: true })
+
+      if (data?.matched) {
+        setBanner({ text: 'Face Recognized', ok: true })
+        speak('Face Recognized')
+        if (data.student) {
+          setRecentLogs((prev) => [{
+            name: data.student.name,
+            roll: data.student.roll,
+            alreadyMarked: data.attendance?.already_marked,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+          }, ...prev.slice(0, 4)])
+        }
+        setPhase('success')
+        scheduleReset()
+      } else {
+        setBanner({ text: 'Face Not Recognized. Please show your QR code', ok: false })
+        speak('Face Not Recognized. Please show your QR code')
+        setPhase('qr')
+        autoScanRef.current = false
+      }
     } catch (err) {
-      setError(errorMessage(err, 'Could not open the attendance kiosk for this course.'))
-    } finally {
-      setOpening(false)
+      const payload = err?.response?.data
+      if (payload && payload.matched === false) {
+        setBanner({ text: 'Face Not Recognized. Please show your QR code', ok: false })
+        speak('Face Not Recognized. Please show your QR code')
+        setPhase('qr')
+        autoScanRef.current = false
+        return
+      }
+      // unexpected error – reset
+      setBanner({ text: 'Face Not Recognized. Please show your QR code', ok: false })
+      speak('Face Not Recognized. Please show your QR code')
+      setPhase('qr')
+      autoScanRef.current = false
     }
-  }
+  }, [activeClass, cameraReady, scheduleReset])
 
-  const handleCloseKiosk = () => {
-    stopCamera()
-    setActiveClass(null)
-    setResult(null)
-    setRecentLogs([])
-    setError('')
-    setScanMode('face')
-    setQrFallbackToken(null)
-    qrScanLockRef.current = false
-    setLiveness({ human: false, liveness: false, message: 'Start the camera to verify a live face.' })
-  }
+  useEffect(() => {
+    if (phase !== 'liveness' || !liveness.liveness || autoScanRef.current) return
+    autoScanRef.current = true
+    void handleFaceScan()
+  }, [phase, liveness.liveness, handleFaceScan])
 
+  // ── QR scanning via BarcodeDetector ───────────────────────────────────────
   const handleQrToken = useCallback(async (token) => {
-    if (qrScanLockRef.current || !activeClass || !qrFallbackToken) return
-    qrScanLockRef.current = true
-    setScanning(true)
-    setError('')
-    setResult(null)
-
+    if (qrLockRef.current || !activeClass) return
+    qrLockRef.current = true
+    setPhase('qr-scan')
     try {
       const { data } = await api.post('/face/kiosk/qr-scan', {
         session_id: activeClass.session_id,
         token,
-        fallback_token: qrFallbackToken,
-      }, {
-        timeout: 10000,
-        skipNetworkRetry: true,
-      })
-      setResult(data)
-      const newLog = {
-        name: data.student.name,
-        roll: data.student.roll,
-        alreadyMarked: data.attendance.already_marked,
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      }, { timeout: 10000, skipNetworkRetry: true })
+
+      setBanner({ text: data?.message || 'Attendance Recorded', ok: true })
+      speak('Attendance Recorded')
+      if (data?.student) {
+        setRecentLogs((prev) => [{
+          name: data.student.name,
+          roll: data.student.roll,
+          alreadyMarked: data.attendance?.already_marked,
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        }, ...prev.slice(0, 4)])
       }
-      setRecentLogs((previous) => [newLog, ...previous.slice(0, 4)])
-    } catch (err) {
-      setError(errorMessage(err, 'QR verification failed. Ask the student to refresh their code.'))
-    } finally {
-      setScanning(false)
-      window.setTimeout(() => {
-        qrScanLockRef.current = false
-        lastQrTokenRef.current = null
-      }, 1200)
-      setQrFallbackToken(null)
-      setScanMode('face')
-      setLiveness({ human: false, liveness: false, message: 'Look at the camera, then blink and move your head slightly.' })
-      setLivenessRetryKey((key) => key + 1)
+      setPhase('qr-ok')
+      scheduleReset()
+    } catch {
+      setBanner({ text: 'QR verification failed. Try again.', ok: false })
+      speak('QR verification failed. Please try again.')
+      setPhase('qr-fail')
+      scheduleReset()
     }
-  }, [activeClass, qrFallbackToken])
+  }, [activeClass, scheduleReset])
 
   useEffect(() => {
-    if (!cameraActive || !activeClass || scanMode !== 'qr' || !qrFallbackToken) return undefined
+    if ((phase !== 'qr') || !activeClass || !cameraReady) return undefined
+    if (typeof window?.BarcodeDetector !== 'function') return undefined
+
     let cancelled = false
-
-    let scannerControls
-    const submitToken = (token) => {
-      if (token && token !== lastQrTokenRef.current && !qrScanLockRef.current) {
-        lastQrTokenRef.current = token
-        void handleQrToken(token)
-      }
-    }
-
-    const startZxingScanner = async () => {
-  // Use the native BarcodeDetector API if available. This removes the need for @zxing packages.
-  if (typeof window?.BarcodeDetector !== 'function') {
-    setError('QR scanner unavailable – your browser does not support the native BarcodeDetector API. Please use a recent Chrome/Edge browser.')
-    return
-  }
-  const video = videoRef.current
-  if (!video) return
-  const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
-  let rafId
-  const scanLoop = async () => {
-    if (cancelled) return
-    try {
-      const detections = await detector.detect(video)
-      if (detections.length) {
-        submitToken(detections[0].rawValue)
-      } else {
-        rafId = requestAnimationFrame(scanLoop)
-      }
-    } catch (nativeErr) {
-      console.error('Native QR detector failed:', nativeErr)
-      setError('QR scanner could not start. Please ensure camera permission is granted.')
-    }
-  }
-  rafId = requestAnimationFrame(scanLoop)
-  scannerControls = {
-    stop: () => {
-      cancelAnimationFrame(rafId)
-      detector?.reset?.()
-    },
-  }
-}
-
-
-    startZxingScanner()
-    return () => {
-      cancelled = true
-      scannerControls?.stop()
-      qrScanLockRef.current = false
-    }
-  }, [cameraActive, activeClass, scanMode, qrFallbackToken, handleQrToken])
-
-  // Capture a frame and record attendance for the opened course session.
-  const handleScan = async () => {
-    if (!activeClass || !videoRef.current || !cameraActive) {
-      setError('Please start the camera before scanning.')
-      return
-    }
-    if (!liveness.liveness) {
-      setError('Blink once and slowly move your head in front of the camera before scanning.')
-      return
-    }
-
     const video = videoRef.current
-    if (video.videoWidth === 0 || video.videoHeight === 0) {
-      setError('Camera is still loading video frames. Please wait a moment and try again.')
-      return
-    }
+    if (!video) return undefined
 
-    setScanning(true)
-    setError('')
-    setResult(null)
+    const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
+    let rafId
 
-    try {
-      const formData = new FormData()
-      formData.append('session_id', activeClass.session_id)
-      const frame = await captureFrame(video)
-      formData.append('image', frame, 'kiosk-frame.jpg')
-      formData.append('threshold', 0.55)
-
-      const res = await api.post('/face/kiosk/scan', formData, {
-        timeout: 15000,
-        skipNetworkRetry: true,
-      })
-      setResult(res.data)
-      if (res.data?.matched) {
-        setQrFallbackToken(null)
-      } else if (res.data?.fallback_token) {
-        setQrFallbackToken(res.data.fallback_token)
-        setScanMode('qr')
-        setLiveness({ human: false, liveness: false, message: 'Face not recognized. Scan the student’s QR code to continue.' })
-      }
-
-      if (res.data?.matched && res.data?.student) {
-        const newLog = {
-          name: res.data.student.name,
-          roll: res.data.student.roll,
-          alreadyMarked: res.data.attendance.already_marked,
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    const loop = async () => {
+      if (cancelled) return
+      try {
+        const hits = await detector.detect(video)
+        if (hits.length && hits[0].rawValue && hits[0].rawValue !== lastQrRef.current) {
+          lastQrRef.current = hits[0].rawValue
+          void handleQrToken(hits[0].rawValue)
+        } else {
+          rafId = requestAnimationFrame(loop)
         }
-        setRecentLogs((prev) => [newLog, ...prev.slice(0, 4)])
+      } catch {
+        rafId = requestAnimationFrame(loop)
       }
-    } catch (err) {
-      setError(err.code === 'ECONNABORTED'
-        ? 'Face verification took too long. Keep your face visible and try again.'
-        : errorMessage(err, 'Face identification failed. Please look straight at the camera.'))
-    } finally {
-      setScanning(false)
-      setLiveness({ human: false, liveness: false, message: 'Blink once and slowly move your head to verify a live face.' })
-      setLivenessRetryKey((key) => key + 1)
     }
-  }
+    rafId = requestAnimationFrame(loop)
+    return () => { cancelled = true; cancelAnimationFrame(rafId) }
+  }, [phase, activeClass, cameraReady, handleQrToken])
+
+  // ── Derived display values ─────────────────────────────────────────────────
+  const timeStr = currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  const dateStr = currentTime.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+
+  const isQrPhase = phase === 'qr' || phase === 'qr-scan' || phase === 'qr-ok' || phase === 'qr-fail'
+  const showFrame = cameraReady && (phase === 'liveness' || phase === 'scanning' || isQrPhase || phase === 'success')
+
+  // Liveness hint (shown while waiting for liveness)
+  const livenessHint = (phase === 'liveness' && !liveness.liveness)
+    ? (liveness.message || 'Face detected. Blink once and slowly move your head.')
+    : ''
 
   return (
-    <div className="min-h-screen bg-[#faf9f5] text-stone-900 px-4 py-6 sm:px-8 flex flex-col justify-between max-w-6xl mx-auto space-y-6">
-      {/* ─── Top Bar ─── */}
-      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-stone-200/80 pb-4">
-        <div className="flex items-center gap-3.5">
-          <Link
-            to="/login"
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-600 hover:bg-stone-50 shadow-2xs transition cursor-pointer"
-            title="Return to Portal"
-          >
-            <ArrowLeft size={18} />
-          </Link>
-          <div>
-            <h1 className="font-display text-lg sm:text-xl font-bold text-stone-900 tracking-tight">
-              Classroom Attendance Kiosk Terminal
-            </h1>
-            <p className="text-xs text-stone-500 font-medium">
-              {activeClass
-                ? `${activeClass.course.code} · ${activeClass.course.title}`
-                : 'KUET Department of Computer Science & Engineering'}
-            </p>
+    <div className="fixed inset-0 bg-black overflow-hidden select-none">
+      {/* ── Full-screen camera feed ──────────────────────────────────────── */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className={`absolute inset-0 h-full w-full object-cover -scale-x-100 transition-opacity duration-500 ${cameraReady ? 'opacity-100' : 'opacity-0'}`}
+      />
+
+      {/* Dark vignette overlay */}
+      <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/60 pointer-events-none" />
+
+      {/* ── Top bar: clock + course info ───────────────────────────────── */}
+      <div className="absolute top-0 inset-x-0 flex items-start justify-between px-8 pt-6 pointer-events-none">
+        <div>
+          <div className="text-4xl font-bold text-white tabular-nums drop-shadow">{timeStr}</div>
+          <div className="text-sm text-white/70 mt-1 drop-shadow">{dateStr}</div>
+        </div>
+        {activeClass && (
+          <div className="text-right">
+            <div className="text-lg font-semibold text-white/90 drop-shadow">{activeClass.course?.title || activeClass.course?.code}</div>
+            <div className="text-sm text-white/60">{activeClass.course?.code} · {activeClass.course?.semester}</div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Face scan frame ─────────────────────────────────────────────── */}
+      {showFrame && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className={`relative h-72 w-72 rounded-[2.5rem] transition-all duration-300 ${
+            banner?.ok === true
+              ? 'border-2 border-emerald-400 shadow-[0_0_60px_rgba(52,211,153,0.4)]'
+              : banner?.ok === false
+              ? 'border-2 border-rose-400 shadow-[0_0_60px_rgba(248,113,113,0.3)]'
+              : 'border-2 border-white/30 shadow-[0_0_40px_rgba(255,255,255,0.1)]'
+          }`}>
+            {/* Corner accents */}
+            {[
+              'absolute -left-[3px] -top-[3px] border-l-[4px] border-t-[4px] rounded-tl-[2.5rem]',
+              'absolute -right-[3px] -top-[3px] border-r-[4px] border-t-[4px] rounded-tr-[2.5rem]',
+              'absolute -left-[3px] -bottom-[3px] border-l-[4px] border-b-[4px] rounded-bl-[2.5rem]',
+              'absolute -right-[3px] -bottom-[3px] border-r-[4px] border-b-[4px] rounded-br-[2.5rem]',
+            ].map((cls, i) => (
+              <div key={i} className={`h-8 w-8 ${cls} ${
+                banner?.ok === true ? 'border-emerald-400' : banner?.ok === false ? 'border-rose-400' : 'border-white/70'
+              }`} />
+            ))}
+
+            {/* Scanning pulse */}
+            {phase === 'scanning' && (
+              <div className="absolute inset-0 rounded-[2.5rem] animate-ping border border-white/20" />
+            )}
           </div>
         </div>
+      )}
 
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-stone-700 shadow-2xs">
-            <Clock size={14} className="text-stone-400" />
-            <span className="font-mono">{currentTime.toLocaleTimeString()}</span>
+      {/* ── QR mode: big QR icon prompt ─────────────────────────────────── */}
+      {phase === 'qr' && (
+        <div className="absolute inset-0 flex flex-col items-center justify-end pb-32 pointer-events-none">
+          <div className="flex flex-col items-center gap-3">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-white/80 animate-bounce" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h6v6H3zM3 15h6v6H3zM15 3h6v6h-6zM15 15h2v2h-2zM19 15h2v2h-2zM17 17h2v2h-2zM19 19h2v2h-2zM15 19h2v2h-2z" />
+            </svg>
+            <span className="text-white/70 text-lg font-medium tracking-wide">Show your QR code to the camera</span>
           </div>
-
-          <div className="flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3.5 py-1.5 text-xs font-semibold text-emerald-800 shadow-2xs">
-            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Kiosk Terminal Online</span>
-          </div>
-          {activeClass && (
-            <button
-              type="button"
-              onClick={handleCloseKiosk}
-              className="rounded-xl border border-stone-200 bg-white px-3 py-2 text-xs font-semibold text-stone-700 hover:bg-stone-50"
-            >
-              Change course
-            </button>
-          )}
         </div>
-      </header>
+      )}
 
-      {!activeClass ? (
-        <main className="mx-auto my-auto w-full max-w-xl">
-          <form onSubmit={handleOpenKiosk} className="space-y-5 rounded-3xl border border-stone-200 bg-white p-7 shadow-sm sm:p-9">
-            <div>
-              <h2 className="font-display text-2xl font-bold text-stone-900">Open a class kiosk</h2>
-              <p className="mt-2 text-sm text-stone-600">
-                Enter the course code to create or reopen today&apos;s attendance session.
-              </p>
-            </div>
-            <label className="block">
-              <span className="mb-2 block text-xs font-bold uppercase tracking-wider text-stone-600">Course code</span>
-              <input
-                required
-                maxLength={20}
-                autoFocus
-                value={courseCode}
-                onChange={(event) => setCourseCode(event.target.value)}
-                placeholder="e.g. CSE 3200"
-                className="h-12 w-full rounded-xl border border-stone-300 bg-stone-50 px-4 text-sm font-semibold text-stone-900 outline-none focus:border-emerald-700 focus:ring-2 focus:ring-emerald-700/15"
-              />
-            </label>
-            {error && !activeClass && (
-              <div role="alert" className="flex items-center gap-2.5 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
-                <AlertCircle size={17} className="shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
-            <button
-              type="submit"
-              disabled={opening || !courseCode.trim()}
-              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-800 px-4 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {opening ? <RefreshCw size={18} className="animate-spin" /> : <CheckCircle2 size={18} />}
-              {opening ? 'Preparing recognition…' : 'Open kiosk'}
-            </button>
-          </form>
-        </main>
-      ) : (
-      <>
-      {/* ─── Main Content Grid ─── */}
-      <main className="grid gap-6 lg:grid-cols-12 items-start my-auto">
-        {/* Left: Camera Feed Viewport */}
-        <div className="lg:col-span-7 space-y-4">
-          <div className="relative aspect-4/3 w-full overflow-hidden rounded-3xl border border-stone-200/90 bg-stone-900 shadow-sm flex items-center justify-center">
-            {/* Always rendered video element so ref is never null */}
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className={`h-full w-full object-cover -scale-x-100 ${cameraActive ? 'opacity-100' : 'opacity-0'}`}
-            />
-
-            {!cameraActive && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-8 text-stone-400 space-y-3 bg-stone-900">
-                <Camera size={48} className="mx-auto text-stone-600" />
-                <p className="text-sm font-semibold text-stone-300">Camera is Currently Paused</p>
-                <button
-                  type="button"
-                  onClick={startCamera}
-                  className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl text-xs font-semibold shadow-sm transition cursor-pointer"
-                >
-                  Start Camera
-                </button>
-              </div>
-            )}
-
-            {/* Minimalist Face Target HUD */}
-            {cameraActive && scanMode === 'face' && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <div
-                  className={`relative h-60 w-60 rounded-3xl border-2 transition-all duration-300 ${
-                    scanning
-                      ? 'border-amber-400 shadow-[0_0_25px_rgba(251,191,36,0.35)] animate-pulse'
-                      : result?.matched
-                      ? 'border-emerald-400 shadow-[0_0_25px_rgba(52,211,153,0.35)]'
-                      : 'border-white/40'
-                  }`}
-                >
-                  {/* Clean Corner Brackets */}
-                  <div className="absolute -left-1 -top-1 h-5 w-5 border-l-4 border-t-4 border-emerald-400 rounded-tl" />
-                  <div className="absolute -right-1 -top-1 h-5 w-5 border-r-4 border-t-4 border-emerald-400 rounded-tr" />
-                  <div className="absolute -bottom-1 -left-1 h-5 w-5 border-b-4 border-l-4 border-emerald-400 rounded-bl" />
-                  <div className="absolute -bottom-1 -right-1 h-5 w-5 border-b-4 border-r-4 border-emerald-400 rounded-br" />
-                </div>
-              </div>
-            )}
-            {cameraActive && scanMode === 'qr' && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <div className="flex h-64 w-64 items-center justify-center rounded-3xl border-2 border-emerald-300/80 bg-emerald-950/10 shadow-[0_0_30px_rgba(52,211,153,0.2)]">
-                  <span className="rounded-full bg-stone-950/70 px-4 py-2 text-sm font-semibold text-white">
-                    Point camera at student QR
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {/* Camera Status Overlay */}
-            <div className="absolute top-4 left-4 flex items-center gap-2 rounded-full bg-stone-900/70 backdrop-blur-md px-3 py-1 text-2xs font-semibold text-white">
-              <span className={`h-2 w-2 rounded-full ${cameraActive ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
-              <span>{cameraActive ? (scanMode === 'qr' ? 'QR Scanner Active' : 'Live Camera Feed') : 'Camera Off'}</span>
-            </div>
+      {/* ── Bottom status banner ─────────────────────────────────────────── */}
+      {banner && (
+        <div className="absolute inset-x-0 bottom-0 flex justify-center pb-10 px-6 pointer-events-none">
+          <div className={`min-w-[320px] max-w-[85vw] rounded-2xl px-8 py-5 text-center text-2xl font-bold shadow-2xl backdrop-blur-md border ${
+            banner.ok
+              ? 'bg-emerald-500/25 border-emerald-400/60 text-emerald-100'
+              : 'bg-rose-500/25 border-rose-400/60 text-rose-100'
+          }`}>
+            {banner.text}
           </div>
-
-          <div className="grid grid-cols-2 gap-2 rounded-2xl border border-stone-200 bg-white p-1.5">
-            <button
-              type="button"
-              onClick={() => {
-                setError('')
-                setResult(null)
-                setQrFallbackToken(null)
-                setScanMode('face')
-                setLiveness({ human: false, liveness: false, message: 'Start the camera to verify a live face.' })
-              }}
-              disabled={scanMode === 'qr'}
-              aria-pressed={scanMode === 'face'}
-              className={`rounded-xl px-3 py-2.5 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${scanMode === 'face' ? 'bg-emerald-800 text-white' : 'text-stone-600 hover:bg-stone-50'}`}
-            >
-              Face attendance
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setError('')
-                setResult(null)
-                if (!qrFallbackToken) return
-                setScanMode('qr')
-                setLiveness({ human: false, liveness: false, message: 'Point the kiosk camera at a student QR code.' })
-              }}
-              disabled={!qrFallbackToken || scanMode === 'qr'}
-              aria-pressed={scanMode === 'qr'}
-              className={`rounded-xl px-3 py-2.5 text-sm font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${scanMode === 'qr' ? 'bg-emerald-800 text-white' : 'text-stone-600 hover:bg-stone-50'}`}
-            >
-              {qrFallbackToken ? 'Student QR fallback' : 'QR unlocks after face check'}
-            </button>
-          </div>
-
-          {/* Action Buttons */}
-          {scanMode === 'face' ? <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={handleScan}
-              disabled={!cameraActive || scanning || !liveness.liveness}
-              className="flex-1 flex h-13 items-center justify-center gap-2.5 rounded-2xl bg-emerald-800 font-display text-sm sm:text-base font-bold text-white shadow-sm hover:bg-emerald-700 active:scale-[0.99] disabled:opacity-50 cursor-pointer transition"
-            >
-              {scanning ? (
-                <>
-                  <RefreshCw size={19} className="animate-spin" />
-                  <span>Verifying Face…</span>
-                </>
-              ) : (
-                <>
-                  <Zap size={19} />
-                  <span>{liveness.liveness ? 'Scan Face & Record Attendance' : 'Verify live face to continue'}</span>
-                </>
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={cameraActive ? stopCamera : startCamera}
-              className="flex h-13 items-center justify-center gap-2 rounded-2xl border border-stone-200 bg-white px-5 text-xs sm:text-sm font-semibold text-stone-700 hover:bg-stone-50 active:scale-[0.99] cursor-pointer shadow-2xs"
-            >
-              <Camera size={17} />
-              <span>{cameraActive ? 'Pause' : 'Start'}</span>
-            </button>
-          </div> : (
-            <div role="status" aria-live="polite" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-medium text-emerald-800">
-              {scanning ? 'Checking QR with the attendance server…' : 'QR scanner is ready. A valid student QR will record attendance automatically.'}
-            </div>
-          )}
-
-          {cameraActive && scanMode === 'face' && (
-            <div
-              role="status"
-              aria-live="polite"
-              className={`rounded-xl border p-3 text-xs font-medium ${
-                liveness.liveness
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                  : 'border-amber-200 bg-amber-50 text-amber-900'
-              }`}
-            >
-              {liveness.liveness
-                ? 'Live face verified. Scan now to record attendance.'
-                : liveness.message || (liveness.human ? 'Blink and move your head slightly.' : 'Look at the camera, then blink and move your head slightly.')}
-            </div>
-          )}
-
-          {error && (
-            <div className="flex items-center gap-2.5 rounded-2xl border border-rose-200 bg-rose-50 p-3.5 text-xs sm:text-sm font-medium text-rose-800">
-              <AlertCircle size={17} className="shrink-0 text-rose-600" />
-              <span>{error}</span>
-            </div>
-          )}
         </div>
+      )}
 
-        {/* Right: Verification Status & Recent Log */}
-        <div className="lg:col-span-5 space-y-4">
-          {/* Result Card */}
-          <div className="rounded-3xl border border-stone-200/90 bg-white p-6 shadow-sm min-h-72 flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between pb-3 border-b border-stone-100 mb-4">
-                <h2 className="font-display text-sm font-bold text-stone-900 flex items-center gap-2">
-                  <ShieldCheck size={17} className="text-emerald-700" />
-                  <span>Attendance Verification</span>
-                </h2>
-                {result?.similarity_percent != null && (
-                  <span className="text-2xs font-mono font-semibold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                    Confidence: {result.similarity_percent}%
-                  </span>
-                )}
-              </div>
-
-              {scanning ? (
-                <div role="status" aria-live="polite" className="flex flex-col items-center justify-center py-10 text-center">
-                  <RefreshCw size={28} className="mb-3 animate-spin text-amber-600" />
-                  <p className="text-sm font-semibold text-stone-800">
-                    {scanMode === 'qr' ? 'Verifying student QR…' : 'Verifying face…'}
-                  </p>
-                  <p className="mt-1 max-w-xs text-xs text-stone-500">
-                    Matching the live-verified face against this course roster.
-                  </p>
-                </div>
-              ) : error ? (
-                <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-                  <p className="font-bold">Scan could not be completed</p>
-                  <p className="mt-1 text-xs leading-relaxed">{error}</p>
-                </div>
-              ) : result ? (
-                result.matched && result.student ? (
-                  <div className="space-y-4 animate-in fade-in duration-200">
-                    {/* Success Badge */}
-                    <div className="flex items-center gap-3 p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-2xs">
-                        <CheckCircle2 size={22} />
-                      </div>
-                      <div>
-                        <p className="text-xs font-bold uppercase tracking-wider text-emerald-800">
-                          {result.attendance.already_marked ? 'Already Present' : 'Attendance Recorded'}
-                        </p>
-                        <p className="text-xs text-emerald-700 font-medium">
-                          {result.attendance.already_marked
-                            ? 'Attendance was already recorded for this class.'
-                            : result.method === 'qr' ? 'Student QR verified and attendance saved.' : 'Face verified and attendance saved.'}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Student Info Card */}
-                    <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200/80">
-                      <p className="text-2xs font-bold uppercase tracking-wider text-stone-400 mb-1">
-                        Student Identified
-                      </p>
-                      <h3 className="font-display text-lg font-bold text-stone-900">
-                        {result.student.name}
-                      </h3>
-                      <div className="mt-2.5 grid grid-cols-2 gap-2 text-xs">
-                        <div>
-                          <span className="text-stone-400">Roll Number:</span>
-                          <p className="font-mono font-bold text-stone-800">{result.student.roll}</p>
-                        </div>
-                        <div>
-                          <span className="text-stone-400">Department:</span>
-                          <p className="font-semibold text-stone-800">{result.student.department}</p>
-                        </div>
-                        <div>
-                          <span className="text-stone-400">Semester:</span>
-                          <p className="font-semibold text-stone-800">{result.student.current_semester || '3-2'}</p>
-                        </div>
-                        <div>
-                          <span className="text-stone-400">Section:</span>
-                          <p className="font-semibold text-stone-800">{result.student.section || 'A'}</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 space-y-2">
-                    <div className="flex items-center gap-2.5">
-                      <XCircle size={20} className="text-amber-600" />
-                      <p className="text-xs font-bold">No Match Found</p>
-                    </div>
-                    <p className="text-xs text-amber-800 leading-relaxed">
-                      {qrFallbackToken
-                        ? 'QR fallback is now active. Scan the student’s QR code to continue.'
-                        : 'Face did not match any enrolled student with sufficient confidence (threshold 0.55). Please look directly at the camera and try again.'}
-                    </p>
-                  </div>
-                )
-              ) : (
-                <div className="flex flex-col items-center justify-center py-10 text-center text-stone-400">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-stone-100 text-stone-400 mb-2.5">
-                    <User size={24} />
-                  </div>
-                  <p className="text-sm font-semibold text-stone-700">Ready for Next Student</p>
-                  <p className="text-xs text-stone-400 max-w-xs mt-1">
-                    {scanMode === 'qr' ? 'Point the camera at the student’s current QR code.' : 'Look into the camera and click scan to mark attendance.'}
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div className="pt-3 border-t border-stone-100 flex items-center justify-between text-2xs text-stone-400">
-              <span>Terminal: KUET-CSE-KIOSK-01</span>
-              <span>{scanMode === 'qr' ? 'QR signature · expiry · replay checks active' : 'Threshold: 0.60'}</span>
-            </div>
+      {/* ── Liveness hint (subtle, centre-bottom) ───────────────────────── */}
+      {!banner && livenessHint && (
+        <div className="absolute inset-x-0 bottom-10 flex justify-center px-6 pointer-events-none">
+          <div className="rounded-xl bg-black/40 backdrop-blur-sm border border-white/10 px-6 py-3 text-center text-sm text-white/70 max-w-[80vw]">
+            {livenessHint}
           </div>
-
-          {/* Recent Check-in Feed */}
-          {recentLogs.length > 0 && (
-            <div className="rounded-3xl border border-stone-200/90 bg-white p-5 shadow-sm space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-stone-700 flex items-center gap-1.5">
-                  <Users size={14} className="text-emerald-700" />
-                  <span>Recent Check-ins Today</span>
-                </span>
-                <span className="text-2xs font-mono text-stone-400">{recentLogs.length} verified</span>
-              </div>
-
-              <div className="space-y-2">
-                {recentLogs.map((log, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center justify-between p-2.5 rounded-xl bg-stone-50 border border-stone-100 text-xs"
-                  >
-                    <div>
-                      <p className="font-semibold text-stone-800">{log.name}</p>
-                      <p className="text-2xs text-stone-400 font-mono">Roll: {log.roll}</p>
-                    </div>
-                    <span className="font-mono text-2xs text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-semibold">
-                    {log.alreadyMarked ? 'Already marked' : log.time}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
-      </main>
-      </>
+      )}
+
+      {/* ── No-class waiting state ───────────────────────────────────────── */}
+      {phase === 'no-class' && !cameraReady && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="text-center text-white/50 space-y-3">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mx-auto opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z" />
+            </svg>
+            <p className="text-lg">No class is running right now</p>
+            <p className="text-sm opacity-60">The kiosk will automatically activate when a class begins</p>
+          </div>
+        </div>
+      )}
+
+      {phase === 'no-class' && cameraReady && (
+        <div className="absolute inset-x-0 bottom-10 flex justify-center pointer-events-none">
+          <div className="rounded-xl bg-black/40 backdrop-blur-sm border border-white/10 px-6 py-3 text-center text-sm text-white/50">
+            Waiting for an active class routine…
+          </div>
+        </div>
+      )}
+
+      {/* ── Opening spinner ──────────────────────────────────────────────── */}
+      {phase === 'opening' && (
+        <div className="absolute inset-x-0 bottom-10 flex justify-center pointer-events-none">
+          <div className="flex items-center gap-2 text-white/40 text-sm">
+            <svg className="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+            </svg>
+            Connecting…
+          </div>
+        </div>
+      )}
+
+      {/* ── Recent attendance log (top-right corner, subtle) ────────────── */}
+      {recentLogs.length > 0 && (
+        <div className="absolute top-24 right-6 w-56 space-y-2 pointer-events-none">
+          {recentLogs.map((log, i) => (
+            <div key={i} className={`rounded-xl px-4 py-2.5 text-xs backdrop-blur-md border transition-all ${
+              log.alreadyMarked
+                ? 'bg-amber-500/15 border-amber-400/30 text-amber-100'
+                : 'bg-emerald-500/15 border-emerald-400/30 text-emerald-100'
+            }`}>
+              <div className="font-semibold truncate">{log.name}</div>
+              <div className="flex justify-between text-white/50 mt-0.5">
+                <span>Roll: {log.roll}</span>
+                <span>{log.time}</span>
+              </div>
+              {log.alreadyMarked && <div className="text-amber-300/70 mt-0.5">Already marked</div>}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   )

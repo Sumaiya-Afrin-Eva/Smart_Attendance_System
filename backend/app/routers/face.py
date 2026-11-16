@@ -26,11 +26,13 @@ from starlette.concurrency import run_in_threadpool
 from ..database import get_db
 from ..models import (
     Attendance,
+    ClassRoutine,
     ClassSession,
     ConsumedAttendanceQr,
     ConsumedKioskQrFallback,
     Course,
     CourseRosterAssignment,
+    CourseTeacher,
     Enrollment,
     StudentProfile,
     StudentRoster,
@@ -54,46 +56,46 @@ KIOSK_QR_FALLBACK_VALID_SECONDS = 30
 
 
 def _registered_face_inputs(roster: StudentRoster) -> list[bytes | str]:
-    """Return all registration samples, falling back to the legacy database photo."""
-    paths = json.loads(roster.face_sample_paths or "[]")
+    """Return all registration samples, preferring the shared database photo bytes over stale file-path copies."""
     project_root = Path(__file__).resolve().parents[2].parent
     dept = (roster.department or "").strip()
     inputs: list[bytes | str] = []
 
+    if roster.photo_data:
+        inputs.append(roster.photo_data)
+
+    paths = json.loads(roster.face_sample_paths or "[]")
     for path in paths:
         if not isinstance(path, str):
             continue
         p = Path(path)
-        # 1. Direct path check
         direct = (project_root / p).resolve()
-        if direct.is_file():
+        if direct.is_file() and str(direct) not in inputs:
             inputs.append(str(direct))
             continue
-        # 2. Check in picture/{dept}/{filename}
         if dept:
             dept_file = (project_root / "picture" / dept / p.name).resolve()
-            if dept_file.is_file():
+            if dept_file.is_file() and str(dept_file) not in inputs:
                 inputs.append(str(dept_file))
                 continue
-        # 3. Check directly in picture/{filename}
         pic_file = (project_root / "picture" / p.name).resolve()
-        if pic_file.is_file():
+        if pic_file.is_file() and str(pic_file) not in inputs:
             inputs.append(str(pic_file))
-            continue
 
-    # Also check if roster.photo_path is available on disk
-    if not inputs and roster.photo_path:
+    if roster.photo_path:
         photo_p = Path(roster.photo_path)
         for cand in [
             (project_root / photo_p).resolve(),
             (project_root / "picture" / dept / photo_p.name).resolve() if dept else None,
             (project_root / "picture" / photo_p.name).resolve(),
         ]:
-            if cand and cand.is_file():
+            if cand and cand.is_file() and str(cand) not in inputs:
                 inputs.append(str(cand))
                 break
 
-    return inputs or ([roster.photo_data] if roster.photo_data else [])
+    if not inputs and roster.photo_data:
+        return [roster.photo_data]
+    return inputs
 
 
 def _decode_image_payload(file: UploadFile | None, base64_str: str | None) -> bytes:
@@ -134,7 +136,7 @@ class RecognizePayload(BaseModel):
 
 
 class KioskOpenRequest(BaseModel):
-    course_code: str = Field(min_length=1, max_length=20)
+    course_code: str | None = Field(default=None, max_length=20)
 
 
 class KioskQrScanRequest(BaseModel):
@@ -159,6 +161,172 @@ def _eligible_students(db: Session, course_id: int):
             User.role == "student",
         )
     ).all()
+
+
+def _parse_time_minutes(value: str | None) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    normalized = text.replace(".", ":")
+    for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p"):
+        try:
+            dt = datetime.strptime(normalized, fmt)
+            return dt.hour * 60 + dt.minute
+        except ValueError:
+            pass
+    return None
+
+
+def _is_in_time_window(start_time: str | None, end_time: str | None, current_minutes: int) -> bool:
+    start_minutes = _parse_time_minutes(start_time)
+    end_minutes = _parse_time_minutes(end_time)
+    if start_minutes is None or end_minutes is None:
+        return False
+    if start_minutes <= end_minutes:
+        return start_minutes <= current_minutes <= end_minutes
+    return current_minutes >= start_minutes or current_minutes <= end_minutes
+
+
+def _time_distance_to_window(start_time: str | None, end_time: str | None, current_minutes: int) -> int:
+    start_minutes = _parse_time_minutes(start_time)
+    end_minutes = _parse_time_minutes(end_time)
+    if start_minutes is None or end_minutes is None:
+        return 24 * 60
+    if start_minutes <= end_minutes:
+        return min(abs(start_minutes - current_minutes), abs(end_minutes - current_minutes))
+    if current_minutes >= start_minutes:
+        return current_minutes - start_minutes
+    return end_minutes - current_minutes
+
+
+def _resolve_teacher_for_routine(db: Session, routine: ClassRoutine, course: Course) -> int | None:
+    teacher_name = (routine.teacher_name or "").strip()
+    if teacher_name:
+        from ..routers.routine import _find_teacher_user
+
+        teacher_user = _find_teacher_user(teacher_name, db)
+        if teacher_user:
+            return teacher_user.id
+
+    if course.teacher_id:
+        return course.teacher_id
+
+    candidates = db.scalars(
+        select(User.id)
+        .join(CourseTeacher, CourseTeacher.teacher_id == User.id)
+        .where(
+            CourseTeacher.course_id == course.id,
+            User.role == "teacher",
+            User.is_active.is_(True),
+        )
+        .order_by(User.id)
+    ).all()
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _resolve_active_class_for_student(db: Session, student: User, now: datetime):
+    profile = student.profile if student and student.role == "student" and student.is_active else None
+    if profile is None:
+        return None, None, None
+
+    today = now.strftime("%A")
+    current_minutes = now.hour * 60 + now.minute
+    routines = db.scalars(
+        select(ClassRoutine)
+        .where(
+            ClassRoutine.department == profile.department,
+            ClassRoutine.semester == profile.current_semester,
+            ClassRoutine.day == today,
+        )
+    ).all()
+
+    matches: list[tuple[int, int, int, int, ClassRoutine, Course, int | None]] = []
+    for routine in routines:
+        if not _is_in_time_window(routine.start_time, routine.end_time, current_minutes):
+            continue
+
+        course = db.scalar(
+            select(Course)
+            .where(
+                Course.code == routine.course_code,
+                Course.department == profile.department,
+                Course.semester == profile.current_semester,
+                Course.is_active.is_(True),
+            )
+            .order_by(Course.id)
+        )
+        if course is None:
+            continue
+
+        roster_match = profile.roster_id is not None and db.scalar(
+            select(CourseRosterAssignment.id)
+            .where(
+                CourseRosterAssignment.course_id == course.id,
+                CourseRosterAssignment.roster_id == profile.roster_id,
+            )
+        )
+        enrollment_match = db.scalar(
+            select(Enrollment.id)
+            .where(
+                Enrollment.student_id == student.id,
+                Enrollment.course_id == course.id,
+                Enrollment.semester == course.semester,
+            )
+        )
+        if not roster_match or not enrollment_match:
+            continue
+
+        section_match = 1 if (profile.section or "").upper() == (routine.section or "").upper() else 0
+        session_match = 1 if (profile.session or "").strip() and (routine.session or "").strip() and (profile.session or "").strip() == (routine.session or "").strip() else 0
+        teacher_id = _resolve_teacher_for_routine(db, routine, course)
+        teacher_match = 1 if teacher_id is not None else 0
+        time_score = _time_distance_to_window(routine.start_time, routine.end_time, current_minutes)
+        matches.append((section_match, session_match, teacher_match, time_score, routine, course, teacher_id))
+
+    if not matches:
+        return None, None, None
+
+    _, _, _, _, selected_routine, selected_course, teacher_id = sorted(
+        matches,
+        key=lambda item: (-item[0], -item[1], -item[2], item[3]),
+    )[0]
+    return selected_course, teacher_id, selected_routine
+
+
+def _get_or_create_session_for_routine(db: Session, course: Course, teacher_id: int | None, now: datetime, student_count: int = 1) -> ClassSession:
+    day_start = datetime.combine(now.date(), datetime.min.time())
+    next_day = day_start + timedelta(days=1)
+    existing = db.scalar(
+        select(ClassSession)
+        .where(
+            ClassSession.course_id == course.id,
+            ClassSession.teacher_id == teacher_id,
+            ClassSession.start_at >= day_start,
+            ClassSession.start_at < next_day,
+            ClassSession.status != "cancelled",
+        )
+        .order_by(ClassSession.start_at.desc())
+    )
+    if existing is not None:
+        return existing
+
+    session = ClassSession(
+        course_id=course.id,
+        teacher_id=teacher_id,
+        start_at=now,
+        end_at=now,
+        room=None,
+        students=student_count,
+        status="completed",
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
 
 
 def _qr_error(detail: str = "This attendance QR is invalid or has expired.") -> HTTPException:
@@ -187,43 +355,64 @@ def _create_kiosk_qr_fallback(session_id: int, db: Session) -> str:
 @router.post("/kiosk/qr-scan")
 def scan_kiosk_qr(body: KioskQrScanRequest, db: Session = Depends(get_db)):
     """Verify and consume one student QR token, then record attendance for this class."""
-    if body.fallback_token is None:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Face verification is required before scanning a QR code.",
-        )
+    if body.fallback_token is not None:
+        try:
+            fallback_claims = jwt.decode(
+                body.fallback_token,
+                settings.jwt_secret,
+                algorithms=["HS256"],
+                audience=KIOSK_QR_FALLBACK_AUDIENCE,
+                issuer=ATTENDANCE_QR_ISSUER,
+                options={"require": ["session_id", "jti", "iat", "exp", "scope"]},
+            )
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "This kiosk QR fallback has expired. Please retry face verification.",
+            ) from None
+        except jwt.PyJWTError:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "This kiosk QR fallback is invalid.",
+            ) from None
 
-    try:
-        fallback_claims = jwt.decode(
-            body.fallback_token,
-            settings.jwt_secret,
-            algorithms=["HS256"],
-            audience=KIOSK_QR_FALLBACK_AUDIENCE,
-            issuer=ATTENDANCE_QR_ISSUER,
-            options={"require": ["session_id", "jti", "iat", "exp", "scope"]},
-        )
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Face verification is required before scanning a QR code.",
-        ) from None
-    except jwt.PyJWTError:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Face verification is required before scanning a QR code.",
-        ) from None
+        fallback_jti = fallback_claims.get("jti")
+        if (
+            fallback_claims.get("scope") != "attendance:qr-fallback"
+            or fallback_claims.get("session_id") != body.session_id
+            or not isinstance(fallback_jti, str)
+            or not fallback_jti
+        ):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "This kiosk QR fallback is invalid.",
+            )
 
-    fallback_jti = fallback_claims.get("jti")
-    if (
-        fallback_claims.get("scope") != "attendance:qr-fallback"
-        or fallback_claims.get("session_id") != body.session_id
-        or not isinstance(fallback_jti, str)
-        or not fallback_jti
-    ):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Face verification is required before scanning a QR code.",
+        class_session = db.get(ClassSession, body.session_id)
+        if (
+            class_session is None
+            or class_session.status != "completed"
+            or class_session.start_at.date() != datetime.now().date()
+        ):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Today's kiosk class session was not found. Open the kiosk again.")
+        course = db.get(Course, class_session.course_id)
+        if course is None or not course.is_active:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "The selected course is no longer active.")
+
+        fallback_used = ConsumedKioskQrFallback(
+            jti=fallback_jti,
+            session_id=body.session_id,
+            expires_at=int(fallback_claims["exp"]),
         )
+        db.add(fallback_used)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This QR fallback was already used. Verify the face again to retry.",
+            ) from None
 
     class_session = db.get(ClassSession, body.session_id)
     if (
@@ -235,21 +424,6 @@ def scan_kiosk_qr(body: KioskQrScanRequest, db: Session = Depends(get_db)):
     course = db.get(Course, class_session.course_id)
     if course is None or not course.is_active:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "The selected course is no longer active.")
-
-    fallback_used = ConsumedKioskQrFallback(
-        jti=fallback_jti,
-        session_id=body.session_id,
-        expires_at=int(fallback_claims["exp"]),
-    )
-    db.add(fallback_used)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "This QR fallback was already used. Verify the face again to retry.",
-        ) from None
 
     try:
         claims = jwt.decode(
@@ -303,6 +477,12 @@ def scan_kiosk_qr(body: KioskQrScanRequest, db: Session = Depends(get_db)):
         raise _qr_error()
     if db.scalar(select(ConsumedAttendanceQr.id).where(ConsumedAttendanceQr.jti == jti)):
         raise HTTPException(status.HTTP_409_CONFLICT, "This attendance QR has already been used.")
+
+    # Resolve the exact teacher and session for this student by time + routine
+    resolved_course, resolved_teacher_id, _ = _resolve_active_class_for_student(db, student, datetime.now())
+    if resolved_course is not None and (class_session.course_id != resolved_course.id or class_session.teacher_id != resolved_teacher_id):
+        class_session = _get_or_create_session_for_routine(db, resolved_course, resolved_teacher_id, datetime.now(), student_count=1)
+        course = resolved_course
 
     record = db.scalar(
         select(Attendance).where(
@@ -368,33 +548,111 @@ def scan_kiosk_qr(body: KioskQrScanRequest, db: Session = Depends(get_db)):
 
 @router.post("/kiosk/open")
 def open_kiosk(
-    body: KioskOpenRequest,
-    background_tasks: BackgroundTasks,
+    body: KioskOpenRequest | None = None,
+    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
 ):
-    """Open today's completed attendance session for one active course offering."""
-    code = body.course_code.strip()
-    courses = db.scalars(
-        select(Course).where(
-            func.upper(Course.code) == code.upper(),
-            Course.is_active.is_(True),
-        )
-    ).all()
-    if not courses:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No active course was found for that course code.")
-    if len(courses) > 1:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "That course code has multiple active offerings. Ask the department to make the intended offering unique.",
-        )
+    """Open today's completed attendance session for one active course offering.
 
-    course = courses[0]
-    students = _eligible_students(db, course.id)
-    if not students:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "This course has no registered students with an active course assignment.",
-        )
+    If a course code is not provided, we default to the single active routine slot in the
+    current time window. Once a student is recognized, the scan endpoint resolves the exact
+    course and teacher by student's semester/department/time, which prevents attendance
+    from being pushed to every teacher assigned to the same course.
+    """
+    payload = body or KioskOpenRequest()
+    code = (payload.course_code or "").strip()
+    if code:
+        courses = db.scalars(
+            select(Course).where(
+                func.upper(Course.code) == code.upper(),
+                Course.is_active.is_(True),
+            )
+        ).all()
+        if not courses:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "No active course was found for that course code.")
+        if len(courses) > 1:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "That course code has multiple active offerings. Ask the department to make the intended offering unique.",
+            )
+
+        course = courses[0]
+        students = _eligible_students(db, course.id)
+        if not students:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This course has no registered students with an active course assignment.",
+            )
+        now = datetime.now()
+        current_minutes = now.hour * 60 + now.minute
+        candidate_routines = db.scalars(
+            select(ClassRoutine)
+            .where(
+                ClassRoutine.course_code == course.code,
+                ClassRoutine.day == now.strftime("%A"),
+                ClassRoutine.department == course.department,
+                ClassRoutine.semester == course.semester,
+            )
+        ).all()
+        if candidate_routines:
+            scored = [
+                (_time_distance_to_window(r.start_time, r.end_time, current_minutes), r)
+                for r in candidate_routines
+                if _is_in_time_window(r.start_time, r.end_time, current_minutes)
+            ]
+            if not scored:
+                scored = [
+                    (_time_distance_to_window(r.start_time, r.end_time, current_minutes), r)
+                    for r in candidate_routines
+                ]
+            _, selected_routine = min(scored, key=lambda item: item[0])
+        else:
+            selected_routine = None
+        teacher_id = _resolve_teacher_for_routine(db, selected_routine, course) if selected_routine is not None else course.teacher_id
+    else:
+        now = datetime.now()
+        current_day = now.strftime("%A")
+        current_minutes = now.hour * 60 + now.minute
+        active_routines = db.scalars(
+            select(ClassRoutine).where(ClassRoutine.day == current_day)
+        ).all()
+        active_candidates = []
+        for routine in active_routines:
+            if not _is_in_time_window(routine.start_time, routine.end_time, current_minutes):
+                continue
+            course = db.scalar(
+                select(Course)
+                .where(
+                    Course.code == routine.course_code,
+                    Course.department == routine.department,
+                    Course.semester == routine.semester,
+                    Course.is_active.is_(True),
+                )
+            )
+            if course is None:
+                continue
+            time_score = _time_distance_to_window(routine.start_time, routine.end_time, current_minutes)
+            active_candidates.append((time_score, routine, course))
+
+        if not active_candidates:
+            course = db.scalar(
+                select(Course)
+                .where(Course.is_active.is_(True))
+                .order_by(Course.id.asc())
+            )
+            if course is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "No active course is configured for the kiosk.")
+            selected_routine = None
+        else:
+            _, selected_routine, course = min(active_candidates, key=lambda item: item[0])
+
+        students = _eligible_students(db, course.id)
+        if not students:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "This active routine has no registered students with an active course assignment.",
+            )
+        teacher_id = _resolve_teacher_for_routine(db, selected_routine, course) if selected_routine is not None else course.teacher_id
 
     face_svc = get_face_service()
     background_tasks.add_task(_prepare_kiosk_gallery, face_svc, students)
@@ -406,6 +664,7 @@ def open_kiosk(
         select(ClassSession)
         .where(
             ClassSession.course_id == course.id,
+            ClassSession.teacher_id == teacher_id,
             ClassSession.start_at >= day_start,
             ClassSession.start_at < next_day,
             ClassSession.status != "cancelled",
@@ -415,6 +674,7 @@ def open_kiosk(
     if class_session is None:
         class_session = ClassSession(
             course_id=course.id,
+            teacher_id=teacher_id,
             start_at=now,
             end_at=now,
             room=None,
@@ -434,6 +694,7 @@ def open_kiosk(
         "course": {"id": course.id, "code": course.code, "title": course.title, "semester": course.semester},
         "date": class_session.start_at.date().isoformat(),
         "student_count": len(students),
+        "teacher_id": class_session.teacher_id,
     }
 
 
@@ -490,17 +751,26 @@ async def scan_kiosk(
     face_svc = get_face_service()
     live_embedding = await run_in_threadpool(face_svc.consume_liveness, f"kiosk:{session_id}")
     if live_embedding is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "Live verification is required. Blink and move your head in front of the camera; a still photo is not accepted.",
-        )
+        return {
+            "matched": False,
+            "similarity": None,
+            "similarity_percent": None,
+            "threshold": threshold,
+            "message": "Face Not Recognized. Please show your QR code",
+        }
 
     try:
         query_emb = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
     except RuntimeError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     if query_emb is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "No clear face detected. Look at the camera and try again.")
+        return {
+            "matched": False,
+            "similarity": None,
+            "similarity_percent": None,
+            "threshold": threshold,
+            "message": "Face Not Recognized. Please show your QR code",
+        }
     live_similarity = compute_similarity(query_emb, live_embedding)
     if live_similarity < 0.45:
         return {
@@ -508,8 +778,7 @@ async def scan_kiosk(
             "similarity": round(live_similarity, 4),
             "similarity_percent": round(max(0.0, live_similarity) * 100, 2),
             "threshold": threshold,
-            "fallback_token": _create_kiosk_qr_fallback(session_id, db),
-            "message": "The face changed after live verification. Please verify again using the camera.",
+            "message": "Face Not Recognized. Please show your QR code",
         }
 
     student_scores: list[tuple[float, StudentProfile, User]] = []
@@ -537,9 +806,13 @@ async def scan_kiosk(
             "similarity": round(similarity, 4),
             "similarity_percent": round(max(0.0, similarity) * 100, 2),
             "threshold": threshold,
-            "fallback_token": _create_kiosk_qr_fallback(session_id, db),
-            "message": "Face not verified. No attendance was recorded; please try again.",
+            "message": "Face Not Recognized. Please show your QR code",
         }
+
+    resolved_course, resolved_teacher_id, _ = _resolve_active_class_for_student(db, matched_user, datetime.now())
+    if resolved_course is not None and (class_session.course_id != resolved_course.id or class_session.teacher_id != resolved_teacher_id):
+        class_session = _get_or_create_session_for_routine(db, resolved_course, resolved_teacher_id, datetime.now(), student_count=1)
+        course = resolved_course
 
     record = db.scalar(
         select(Attendance).where(
@@ -591,6 +864,7 @@ async def scan_kiosk(
             "already_marked": already_marked,
         },
         "course": {"code": course.code, "title": course.title},
+        "teacher_id": class_session.teacher_id,
         "message": "Attendance was already marked for this class." if already_marked else "Face verified and attendance recorded.",
     }
 

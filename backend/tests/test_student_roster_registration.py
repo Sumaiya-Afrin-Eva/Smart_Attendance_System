@@ -14,13 +14,16 @@ from app.database import Base, SessionLocal, engine
 from app import main as main_module
 from app.routers import auth as auth_module
 from app.main import app, ensure_seed_settings
+from app.routers import face as face_module
 from app.models import (
     Attendance,
+    ClassRoutine,
     ClassSession,
     ConsumedAttendanceQr,
     ConsumedKioskQrFallback,
     Course,
     CourseRosterAssignment,
+    CourseTeacher,
     DeviceReset,
     Enrollment,
     FaceSample,
@@ -426,7 +429,11 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
         data={"session_id": str(kiosk_session_id)},
         files={"image": ("camera.jpg", b"kiosk-student-one", "image/jpeg")},
     )
-    assert no_liveness.status_code == 409, no_liveness.text
+    assert no_liveness.status_code == 200, no_liveness.text
+    assert no_liveness.json()["matched"] is False
+    assert "Please show your QR code" in no_liveness.json()["message"]
+    with SessionLocal() as db:
+        assert db.query(Attendance).filter_by(session_id=kiosk_session_id).count() == 0
 
     TestFaceService.proof_available = True
     rejected = client.post(
@@ -480,6 +487,244 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
     )
     assert absent_dashboard.status_code == 200, absent_dashboard.text
     assert absent_dashboard.json()["today"][0]["status"] == "absent"
+
+
+def test_kiosk_marks_attendance_to_the_active_routine_teacher_only(monkeypatch):
+    reset_db()
+    client = TestClient(app)
+    official_photo = b"official-student-face"
+    now = datetime.now()
+
+    with SessionLocal() as db:
+        student = db.scalar(select(User).where(User.email == "student1@stud.kuet.ac.bd"))
+        teacher_a = User(email="teacher_a@kuet.ac.bd", name="Dr. Teacher A", role="teacher", password_hash="x")
+        teacher_b = User(email="teacher_b@kuet.ac.bd", name="Dr. Teacher B", role="teacher", password_hash="x")
+        db.add_all([teacher_a, teacher_b])
+        db.flush()
+
+        roster = StudentRoster(
+            full_name="Student One",
+            roll="2107001",
+            email=student.email,
+            department="CSE",
+            session="2021-2022",
+            photo_data=official_photo,
+            photo_mime_type="image/jpeg",
+            is_active=True,
+        )
+        db.add(roster)
+        db.flush()
+        db.add(StudentProfile(
+            user_id=student.id,
+            roster_id=roster.id,
+            roll=roster.roll,
+            full_name=roster.full_name,
+            department=roster.department,
+            series="2021",
+            session=roster.session,
+            section="A",
+            current_semester="3-1",
+        ))
+
+        course = Course(
+            code="CSE 3101",
+            title="Database Systems",
+            department="CSE",
+            semester="3-1",
+            session="2021-2022",
+            course_type="Theory",
+            credit=3.0,
+            section="A",
+            teacher_id=teacher_a.id,
+        )
+        db.add(course)
+        db.flush()
+
+        db.add_all([
+            CourseTeacher(course_id=course.id, teacher_id=teacher_a.id, section="A", role="Instructor"),
+            CourseTeacher(course_id=course.id, teacher_id=teacher_b.id, section="A", role="Instructor"),
+            CourseRosterAssignment(course_id=course.id, roster_id=roster.id),
+            Enrollment(student_id=student.id, course_id=course.id, semester="3-1"),
+            ClassRoutine(
+                department="CSE",
+                semester="3-1",
+                section="A",
+                day=now.strftime("%A"),
+                start_time=(now - timedelta(minutes=15)).strftime("%H:%M"),
+                end_time=(now + timedelta(minutes=15)).strftime("%H:%M"),
+                course_code="CSE 3101",
+                course_title="Database Systems",
+                course_type="Theory",
+                teacher_name="Dr. Teacher A",
+                room="CSE 201",
+                session="2021-2022",
+            ),
+            ClassRoutine(
+                department="CSE",
+                semester="3-1",
+                section="A",
+                day=now.strftime("%A"),
+                start_time=(now + timedelta(minutes=45)).strftime("%H:%M"),
+                end_time=(now + timedelta(minutes=90)).strftime("%H:%M"),
+                course_code="CSE 3101",
+                course_title="Database Systems",
+                course_type="Theory",
+                teacher_name="Dr. Teacher B",
+                room="CSE 202",
+                session="2021-2022",
+            ),
+        ])
+        db.commit()
+
+    class TestFaceService:
+        def warmup(self):
+            pass
+
+        def extract_embedding(self, image):
+            if image == official_photo:
+                return np.array([1.0, 0.0], dtype=np.float32)
+            return np.array([0.7, 0.1], dtype=np.float32)
+
+        def consume_liveness(self, session_key):
+            return np.array([1.0, 0.0], dtype=np.float32)
+
+    monkeypatch.setattr("app.routers.face.get_face_service", TestFaceService)
+
+    opened = client.post("/api/face/kiosk/open", json={"course_code": "CSE 3101"})
+    assert opened.status_code == 200, opened.text
+    session_id = opened.json()["session_id"]
+
+    response = client.post(
+        "/api/face/kiosk/scan",
+        data={"session_id": str(session_id)},
+        files={"image": ("camera.jpg", b"student-camera-frame", "image/jpeg")},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["matched"] is True
+    assert payload["student"]["roll"] == "2107001"
+
+    with SessionLocal() as db:
+        session = db.get(ClassSession, session_id)
+        assert session is not None
+        assert session.teacher_id is not None
+        assert session.teacher_id == db.scalar(select(User.id).where(User.email == "teacher_a@kuet.ac.bd"))
+        attendance = db.scalar(select(Attendance).where(Attendance.session_id == session_id, Attendance.student_id == db.scalar(select(User.id).where(User.email == "student1@stud.kuet.ac.bd"))))
+        assert attendance is not None
+
+    teacher_b_token = create_token(db.scalar(select(User).where(User.email == "teacher_b@kuet.ac.bd")))
+    teacher_b_dashboard = client.get("/api/teacher/history", headers={"Authorization": f"Bearer {teacher_b_token}"})
+    assert teacher_b_dashboard.status_code == 200, teacher_b_dashboard.text
+    assert all(item["courseCode"] != "CSE 3101" for item in teacher_b_dashboard.json())
+
+
+def test_kiosk_opens_when_multiple_active_routines_overlap(monkeypatch):
+    reset_db()
+    client = TestClient(app)
+    fixed_now = datetime(2025, 4, 2, 12, 30, 0)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed_now
+            return fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(face_module, "datetime", FrozenDateTime)
+
+    with SessionLocal() as db:
+        teacher = User(email="teacher_overlap@kuet.ac.bd", name="Overlap Teacher", role="teacher", password_hash="x")
+        student = User(email="student_overlap@stud.kuet.ac.bd", name="Student Overlap", role="student", password_hash="x")
+        db.add_all([teacher, student])
+        db.flush()
+
+        roster = StudentRoster(
+            full_name="Student Overlap",
+            roll="2207001",
+            email=student.email,
+            department="CSE",
+            session="2022-2023",
+            photo_data=b"overlap-face",
+            photo_mime_type="image/jpeg",
+            is_active=True,
+        )
+        db.add(roster)
+        db.flush()
+        db.add(StudentProfile(
+            user_id=student.id,
+            roster_id=roster.id,
+            roll=roster.roll,
+            full_name=roster.full_name,
+            department=roster.department,
+            series="2022",
+            session=roster.session,
+            section="A",
+            current_semester="2-1",
+        ))
+
+        course_a = Course(
+            code="CSE 2101",
+            title="Discrete Math",
+            department="CSE",
+            semester="2-1",
+            session="2025-2026",
+            course_type="Theory",
+            credit=3.0,
+            is_active=True,
+            teacher_id=teacher.id,
+        )
+        course_b = Course(
+            code="CSE 2201",
+            title="Algorithms",
+            department="CSE",
+            semester="2-1",
+            session="2025-2026",
+            course_type="Lab",
+            credit=1.5,
+            is_active=True,
+            teacher_id=teacher.id,
+        )
+        db.add_all([course_a, course_b])
+        db.flush()
+        db.add_all([
+            CourseRosterAssignment(course_id=course_a.id, roster_id=roster.id),
+            CourseRosterAssignment(course_id=course_b.id, roster_id=roster.id),
+            Enrollment(student_id=student.id, course_id=course_a.id, semester="2-1"),
+            Enrollment(student_id=student.id, course_id=course_b.id, semester="2-1"),
+            ClassRoutine(
+                department="CSE",
+                semester="2-1",
+                section="A",
+                day=fixed_now.strftime("%A"),
+                start_time=(fixed_now - timedelta(minutes=15)).strftime("%H:%M"),
+                end_time=(fixed_now + timedelta(minutes=30)).strftime("%H:%M"),
+                course_code=course_a.code,
+                course_title=course_a.title,
+                course_type=course_a.course_type,
+                teacher_name="Overlap Teacher",
+                room="Room 101",
+                session="2025-2026",
+            ),
+            ClassRoutine(
+                department="CSE",
+                semester="2-1",
+                section="A",
+                day=fixed_now.strftime("%A"),
+                start_time=(fixed_now - timedelta(minutes=10)).strftime("%H:%M"),
+                end_time=(fixed_now + timedelta(minutes=45)).strftime("%H:%M"),
+                course_code=course_b.code,
+                course_title=course_b.title,
+                course_type=course_b.course_type,
+                teacher_name="Overlap Teacher",
+                room="Room 102",
+                session="2025-2026",
+            ),
+        ])
+        db.commit()
+
+    response = client.post("/api/face/kiosk/open", json={})
+    assert response.status_code == 200, response.text
+    assert response.json()["session_id"]
 
 
 def test_kiosk_rejects_unknown_course_code():
@@ -770,17 +1015,13 @@ def test_student_qr_marks_assigned_course_and_cannot_be_replayed():
         assert profile.device_bound_at is not None
 
     payload = {"session_id": session_id, "token": issued.json()["token"]}
-    blocked = client.post("/api/face/kiosk/qr-scan", json=payload)
-    assert blocked.status_code == 403
-    assert "Face verification is required" in blocked.json()["detail"]
-    payload["fallback_token"] = kiosk_qr_fallback_token(session_id)
     marked = client.post("/api/face/kiosk/qr-scan", json=payload)
     assert marked.status_code == 200, marked.text
     assert marked.json()["student"]["id"] == student_id
     assert marked.json()["student"]["roll"] == "2107001"
     assert marked.json()["attendance"]["already_marked"] is False
 
-    replay_payload = {**payload, "fallback_token": kiosk_qr_fallback_token(session_id)}
+    replay_payload = {**payload}
     replay = client.post("/api/face/kiosk/qr-scan", json=replay_payload)
     assert replay.status_code == 409, replay.text
     assert "already been used" in replay.json()["detail"]
@@ -790,7 +1031,6 @@ def test_student_qr_marks_assigned_course_and_cannot_be_replayed():
         assert attendance.student_id == student_id
         assert attendance.method == "qr"
         assert db.scalar(select(ConsumedAttendanceQr.id)) is not None
-        assert db.scalar(select(ConsumedKioskQrFallback.id)) is not None
 
 
 def test_student_qr_requires_current_semester_face_enrollment_and_rejects_expired_token():
@@ -867,7 +1107,6 @@ def test_student_qr_requires_current_semester_face_enrollment_and_rejects_expire
         json={
             "session_id": session_id,
             "token": expired_token,
-            "fallback_token": kiosk_qr_fallback_token(session_id),
         },
     )
     assert expired.status_code == 401

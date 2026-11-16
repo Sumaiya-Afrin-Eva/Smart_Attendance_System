@@ -55,7 +55,10 @@ EMBEDDING_DIM = 512
 class FaceService:
     """Service for face detection, 512-d ArcFace embedding extraction, and cosine similarity matching."""
 
-    LIVENESS_READY_SECONDS = 0.5
+    # Keep the kiosk fast for real users without making liveness trivial.
+    # A shorter window is enough to accept natural eye blinks and small head motion,
+    # while still requiring clear evidence before allowing a scan.
+    LIVENESS_READY_SECONDS = 0.20
     LIVENESS_VALID_SECONDS = 8.0
     EMBEDDING_CACHE_SIZE = 2048
 
@@ -308,7 +311,9 @@ class FaceService:
                 self.update_blink_state(state, ear)
 
                 previous = state.get("position", position)
-                movement_detected = abs(position[0] - previous[0]) > 0.008 or abs(position[1] - previous[1]) > 0.008
+                # A small but more forgiving threshold keeps natural head motion from being
+                # rejected just because the subject is moving subtly while blinking.
+                movement_detected = abs(position[0] - previous[0]) > 0.01 or abs(position[1] - previous[1]) > 0.01
                 if movement_detected:
                     state["movement"] = True
                 state["position"] = position
@@ -393,17 +398,19 @@ class FaceService:
         """Detect a close-and-reopen event relative to this face's open-eye ratio."""
         baseline = state.get("open_ear")
         if baseline is None:
-            if ear >= 0.14:
+            if ear >= 0.12:
                 state["open_ear"] = ear
             return
 
-        if ear < baseline * 0.72:
+        # Adaptive threshold: allow natural casual blinks without forcing hard eye squints.
+        # Recognize a normal blink quickly so the kiosk stays responsive in live classroom use.
+        if ear < baseline * 0.82:
             state["closed"] = True
-        elif state.get("closed") and ear > baseline * 0.82:
+        elif state.get("closed") and ear > baseline * 0.85:
             state["blink"] = True
             state["closed"] = False
-        elif not state.get("closed") and ear > baseline * 0.82:
-            state["open_ear"] = baseline * 0.9 + ear * 0.1
+        elif not state.get("closed") and ear > baseline * 0.85:
+            state["open_ear"] = baseline * 0.94 + ear * 0.06
 
     def extract_all_embeddings(self, image: Union[str, Path, bytes, np.ndarray]) -> list[dict]:
         """Extract embeddings and bounding boxes for all faces found in the image."""

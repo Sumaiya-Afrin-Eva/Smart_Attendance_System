@@ -279,6 +279,7 @@ class ClassSession(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True)
+    teacher_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, default=None)
     start_at: Mapped[datetime] = mapped_column(ISODateTime())
     end_at: Mapped[datetime] = mapped_column(ISODateTime())
     room: Mapped[str | None] = mapped_column(String(40))

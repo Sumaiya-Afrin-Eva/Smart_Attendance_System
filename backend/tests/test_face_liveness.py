@@ -21,7 +21,7 @@ def test_should_not_mark_liveness_ready_before_blink_movement_window():
     state = {
         "blink": True,
         "movement": True,
-        "started_at": time.monotonic() - 0.99,
+        "started_at": time.monotonic() - 0.18,
     }
 
     assert service.should_mark_liveness_ready(state, time.monotonic()) is False
@@ -33,6 +33,28 @@ def test_should_mark_liveness_ready_after_shorter_blink_movement_window():
         "blink": True,
         "movement": True,
         "started_at": time.monotonic() - 1.1,
+    }
+
+    assert service.should_mark_liveness_ready(state, time.monotonic()) is True
+
+
+def test_should_mark_liveness_ready_after_fast_but_valid_blink_and_motion():
+    service = FaceService()
+    state = {
+        "blink": True,
+        "movement": True,
+        "started_at": time.monotonic() - 0.35,
+    }
+
+    assert service.should_mark_liveness_ready(state, time.monotonic()) is True
+
+
+def test_should_mark_liveness_ready_after_very_short_real_time_window():
+    service = FaceService()
+    state = {
+        "blink": True,
+        "movement": True,
+        "started_at": time.monotonic() - 0.22,
     }
 
     assert service.should_mark_liveness_ready(state, time.monotonic()) is True
