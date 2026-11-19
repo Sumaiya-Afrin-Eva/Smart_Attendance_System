@@ -15,7 +15,9 @@ import {
   Users,
   ArrowUpRight,
   BadgeCheck,
+  Shield,
 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 const summaryCards = [
   {
@@ -133,14 +135,28 @@ const toneMap = {
   slate: 'bg-stone-100 text-stone-700 ring-stone-200',
 }
 
-export default function AdminDashboard() {
+export default function AdminDashboard({ mode = 'department', department = 'CSE', roleType = 'System Admin' }) {
+  const isSuper = mode === 'super'
+  const title = isSuper ? 'Super Admin Dashboard' : `${department} ${roleType} Dashboard`
+  const subtitle = isSuper
+    ? 'Unified access to both CSE and EEE administrative areas.'
+    : `${department} administrative overview and department controls.`
+
+  const superLinks = [
+    { label: 'CSE System Admin', path: '/admin/cse-system-admin', icon: Shield },
+    { label: 'CSE Student Admin', path: '/admin/cse-student-admin', icon: GraduationCap },
+    { label: 'EEE System Admin', path: '/admin/eee-system-admin', icon: Shield },
+    { label: 'EEE Student Admin', path: '/admin/eee-student-admin', icon: GraduationCap },
+  ]
+
   return (
     <div className="space-y-6">
       <section className="rounded-2xl border border-stone-200 bg-[#f4f3f1] p-5 shadow-2xs">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-stone-500">System overview</p>
-            <h2 className="mt-2 font-display text-3xl font-bold text-stone-900">Admin dashboard</h2>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-stone-500">{isSuper ? 'Unified control' : `${department} overview`}</p>
+            <h2 className="mt-2 font-display text-3xl font-bold text-stone-900">{title}</h2>
+            <p className="mt-2 text-sm text-stone-600">{subtitle}</p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
@@ -155,6 +171,32 @@ export default function AdminDashboard() {
           </div>
         </div>
       </section>
+
+      {isSuper && (
+        <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-400">Direct access</p>
+              <h3 className="mt-2 text-2xl font-bold text-stone-900">Department dashboards</h3>
+            </div>
+          </div>
+          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {superLinks.map(({ label, path, icon: Icon }) => (
+              <Link
+                key={path}
+                to={path}
+                className="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-emerald-200 hover:bg-emerald-50/50"
+              >
+                <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-800">
+                  <Icon size={18} />
+                </div>
+                <p className="text-base font-bold text-stone-900">{label}</p>
+                <p className="mt-1 text-xs text-stone-500">Open dashboard</p>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {summaryCards.map(({ label, value, change, icon: Icon, tone }) => (

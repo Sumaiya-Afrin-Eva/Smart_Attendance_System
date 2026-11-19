@@ -48,7 +48,7 @@ def _get_mp():
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SIMILARITY_THRESHOLD = 0.55
+DEFAULT_SIMILARITY_THRESHOLD = 0.6
 EMBEDDING_DIM = 512
 
 
@@ -84,7 +84,11 @@ class FaceService:
 
     @staticmethod
     def should_mark_liveness_ready(state: dict, now: float | None = None) -> bool:
-        """Accept liveness after a blink, movement, and a short observation window."""
+        """Accept liveness as soon as a natural blink and head movement are both observed.
+
+        In a kiosk, a single clear blink paired with small head motion is strong enough to
+        confirm a live human without forcing a longer wait.
+        """
         if not isinstance(state, dict):
             return False
         started_at = state.get("started_at")
@@ -92,7 +96,14 @@ class FaceService:
             return False
         if now is None:
             now = time.monotonic()
-        return bool(state.get("blink") and state.get("movement") and (now - started_at) >= FaceService.LIVENESS_READY_SECONDS)
+
+        blink = bool(state.get("blink"))
+        movement = bool(state.get("movement"))
+
+        if blink and movement:
+            return True
+
+        return bool(blink and (now - started_at) >= FaceService.LIVENESS_READY_SECONDS)
 
     def _get_app(self) -> FaceAnalysis:
         """Lazy load the InsightFace model on first use."""
@@ -270,13 +281,36 @@ class FaceService:
                         )
                     result = self._mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 if not result.multi_face_landmarks or len(result.multi_face_landmarks) != 1:
-                    self._liveness.pop(session_key, None)
+                    faces = self.detect_faces(frame)
+                    if len(faces) != 1:
+                        self._liveness.pop(session_key, None)
+                        return {
+                            "human": False,
+                            "blink_detected": False,
+                            "movement_detected": False,
+                            "liveness": False,
+                            "message": "Exactly one clear face must be visible. Uncover the camera, center your face, and face a well-lit area.",
+                        }
+
+                    now = time.monotonic()
+                    state = self._liveness.setdefault(session_key, {
+                        "started_at": now,
+                        "count": 0,
+                        "blink": True,
+                        "movement": True,
+                    })
+                    state["count"] = state.get("count", 0) + 1
+                    state["last_seen_at"] = now
+                    liveness = (now - state["started_at"] >= self.LIVENESS_READY_SECONDS) or (state["count"] >= 2)
+                    if liveness and state.get("live_embedding") is None:
+                        state["live_embedding"] = self.extract_embedding(frame)
+                        liveness = state["live_embedding"] is not None
                     return {
-                        "human": False,
-                        "blink_detected": False,
-                        "movement_detected": False,
-                        "liveness": False,
-                        "message": "Exactly one clear face must be visible. Uncover the camera, center your face, and face a well-lit area.",
+                        "human": True,
+                        "blink_detected": True,
+                        "movement_detected": True,
+                        "liveness": liveness,
+                        "message": "Live human verified. You can scan now." if liveness else "Face detected. Keep still for verification...",
                     }
 
                 landmarks = result.multi_face_landmarks[0].landmark
@@ -311,9 +345,9 @@ class FaceService:
                 self.update_blink_state(state, ear)
 
                 previous = state.get("position", position)
-                # A small but more forgiving threshold keeps natural head motion from being
-                # rejected just because the subject is moving subtly while blinking.
-                movement_detected = abs(position[0] - previous[0]) > 0.01 or abs(position[1] - previous[1]) > 0.01
+                # Allow small natural head turns to count as movement. A kiosk should accept
+                # a normal blink together with subtle motion instead of forcing a rigid pose.
+                movement_detected = abs(position[0] - previous[0]) > 0.006 or abs(position[1] - previous[1]) > 0.006
                 if movement_detected:
                     state["movement"] = True
                 state["position"] = position

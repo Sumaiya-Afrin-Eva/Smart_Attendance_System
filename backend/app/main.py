@@ -208,13 +208,11 @@ def ensure_database_schema() -> None:
             conn.exec_driver_sql("ALTER TABLE users ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1")
         col_names = {column[1] for column in conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()}
         if {"role", "email"}.issubset(col_names):
-            conn.exec_driver_sql("UPDATE users SET role = 'system_admin' WHERE email = 'sysadmin@kuet.ac.bd'")
-            conn.exec_driver_sql("UPDATE users SET role = 'admin', name = 'Student Administrator' WHERE email = 'admin@kuet.ac.bd'")
             from .security import hash_password
-            admin_pwd = hash_password("admin123")
-            sysadmin_pwd = hash_password("sysadmin123")
-            conn.exec_driver_sql(f"UPDATE users SET password_hash = '{admin_pwd}' WHERE email = 'admin@kuet.ac.bd' AND (password_hash IS NULL OR password_hash = 'x')")
-            conn.exec_driver_sql(f"UPDATE users SET password_hash = '{sysadmin_pwd}' WHERE email = 'sysadmin@kuet.ac.bd' AND (password_hash IS NULL OR password_hash = 'x')")
+            conn.exec_driver_sql("UPDATE users SET role = 'system_admin', name = 'System Administrator' WHERE email = 'sysadmin@kuet.ac.bd'")
+            conn.exec_driver_sql("UPDATE users SET role = 'admin', name = 'Student Administrator' WHERE email = 'admin@kuet.ac.bd'")
+            conn.exec_driver_sql(f"UPDATE users SET password_hash = '{hash_password('sysadmin123')}' WHERE email = 'sysadmin@kuet.ac.bd' AND (password_hash IS NULL OR password_hash = 'x')")
+            conn.exec_driver_sql(f"UPDATE users SET password_hash = '{hash_password('admin123')}' WHERE email = 'admin@kuet.ac.bd' AND (password_hash IS NULL OR password_hash = 'x')")
 
         # Drop legacy teacher columns from users table so users only holds account fields
         teacher_cols_to_drop = [

@@ -25,8 +25,7 @@ export const NAV = {
     { to: '/student/profile', label: 'Academic Profile', icon: UserRound },
   ],
   system_admin: [
-    { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true },
-    { to: '/admin/courses', label: 'Course Management', icon: BookOpen },
+    { to: '/admin/system-admin', label: 'CSE System Admin Dashboard', icon: LayoutDashboard, end: true },
     { to: '/admin/routine', label: 'Routine Management', icon: CalendarDays },
     { to: '/admin/assignments', label: 'Teacher Assignment', icon: ClipboardCheck },
     { to: '/admin/teachers', label: 'Teacher Management', icon: Users },
@@ -34,6 +33,7 @@ export const NAV = {
     { to: '/admin/settings', label: 'System Settings', icon: Settings },
   ],
   admin: [
+    { to: '/admin/student-admin', label: 'CSE Student Admin Dashboard', icon: LayoutDashboard, end: true },
     { to: '/admin/students', label: 'Student Records', icon: GraduationCap, end: true },
     { to: '/admin/students/new', label: 'Add Student', icon: UserRound, end: true },
     { to: '/admin/courses', label: 'Student Courses & Terms', icon: BookOpen },

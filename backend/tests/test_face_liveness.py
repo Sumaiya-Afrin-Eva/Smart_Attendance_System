@@ -2,7 +2,11 @@ import time
 
 import numpy as np
 
-from app.services.face_service import FaceService
+from app.services.face_service import DEFAULT_SIMILARITY_THRESHOLD, FaceService
+
+
+def test_recognition_threshold_is_fixed_at_point_six():
+    assert DEFAULT_SIMILARITY_THRESHOLD == 0.6
 
 
 def test_should_mark_liveness_ready_after_blink_movement_window():
@@ -16,12 +20,23 @@ def test_should_mark_liveness_ready_after_blink_movement_window():
     assert service.should_mark_liveness_ready(state, time.monotonic()) is True
 
 
-def test_should_not_mark_liveness_ready_before_blink_movement_window():
+def test_should_mark_liveness_ready_immediately_after_single_blink_and_motion():
     service = FaceService()
     state = {
         "blink": True,
         "movement": True,
-        "started_at": time.monotonic() - 0.18,
+        "started_at": time.monotonic() - 0.08,
+    }
+
+    assert service.should_mark_liveness_ready(state, time.monotonic()) is True
+
+
+def test_should_not_mark_liveness_ready_without_blink_or_movement():
+    service = FaceService()
+    state = {
+        "blink": False,
+        "movement": True,
+        "started_at": time.monotonic() - 0.08,
     }
 
     assert service.should_mark_liveness_ready(state, time.monotonic()) is False

@@ -185,7 +185,17 @@ export default function MyAttendance() {
                       </td>
 
                       <td className="whitespace-nowrap px-6 py-4.5">
-                        {r.marked_at ? (
+                        {r.status === 'absent' && r.absence_window ? (
+                          <div className="space-y-0.5">
+                            <span className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-800">
+                              <CalendarX size={13} />
+                              Absent window
+                            </span>
+                            <span className="block font-mono text-xs text-stone-500">
+                              {formatTime(r.absence_window.start_at)} – {formatTime(r.absence_window.end_at)}
+                            </span>
+                          </div>
+                        ) : r.marked_at ? (
                           <div className="space-y-0.5">
                             <div className="flex items-center gap-1.5">
                               <span className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-semibold ${methodCfg.tone}`}>

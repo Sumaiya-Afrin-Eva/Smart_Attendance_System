@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useParams } from 'react-router-dom'
 import ProtectedRoute from './components/ProtectedRoute'
 import DashboardLayout from './layouts/DashboardLayout'
 import Login from './pages/auth/Login'
@@ -36,9 +36,15 @@ import { useAuth } from './context/AuthContext'
 function AdminDashboardRouter() {
   const { user } = useAuth()
   if (user?.role === 'admin') {
-    return <Navigate to="students" replace />
+    return <Navigate to="/admin/student-admin" replace />
   }
-  return <AdminDashboard />
+  return <Navigate to="/admin/system-admin" replace />
+}
+
+function KioskRouter() {
+  const { department = 'cse' } = useParams()
+  const kioskId = department.toUpperCase()
+  return <FaceLab kioskId={kioskId} />
 }
 
 export default function App() {
@@ -114,10 +120,12 @@ export default function App() {
         </Route>
       </Route>
 
-      {/* Admin (System Administrator & Student Administrator) */}
+      {/* Admin dashboards: legacy system admin and student admin */}
       <Route element={<ProtectedRoute role={['admin', 'system_admin']} />}>
         <Route path="/admin" element={<DashboardLayout />}>
           <Route index element={<AdminDashboardRouter />} />
+          <Route path="system-admin" element={<AdminDashboard mode="system" department="CSE" roleType="System Admin" />} />
+          <Route path="student-admin" element={<AdminDashboard mode="student" department="CSE" roleType="Student Admin" />} />
           <Route path="courses" element={<AdminCourses />} />
           <Route path="routine" element={<AdminRoutine />} />
           <Route path="assignments" element={<AdminTeacherAssignment />} />
@@ -130,12 +138,13 @@ export default function App() {
           <Route path="course-assignments" element={<StudentCourseAssignments />} />
           <Route path="alerts" element={<SecurityAlerts />} />
           <Route path="settings" element={<SystemSettings />} />
-          <Route path="*" element={<Navigate to="/admin" replace />} />
+          <Route path="*" element={<Navigate to="/admin/system-admin" replace />} />
         </Route>
       </Route>
 
       {/* Dedicated Standalone Classroom Kiosk Mode */}
-      <Route path="/kiosk" element={<FaceLab />} />
+      <Route path="/kiosk" element={<Navigate to="/kiosk/cse" replace />} />
+      <Route path="/kiosk/:department" element={<KioskRouter />} />
 
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>

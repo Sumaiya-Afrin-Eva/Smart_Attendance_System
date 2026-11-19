@@ -1896,12 +1896,10 @@ async def upload_student_photo(
     photo_path = photo_dir / f"{roster.roll}{suffix}"
     photo_path.write_bytes(content)
     roster.photo_path = f"picture/{dept}/{photo_path.name}"
-    old_paths = json.loads(roster.face_sample_paths or "[]")
-    for relative_path in old_paths:
-        old_file = (settings.picture_dir.parent / relative_path).resolve()
-        if (old_file.parent == settings.picture_dir.resolve() or settings.picture_dir.resolve() in old_file.parents) and old_file.is_file():
-            old_file.unlink(missing_ok=True)
-    roster.face_sample_paths = None
+
+    # Keep the registration samples intact for kiosk recognition. The admin-approved
+    # photo is only the canonical roll.jpg; the pose-based face samples remain in the
+    # department folder and continue to drive live recognition.
     roster.face_enrollment_version = 0
     if roster.profile:
         student_id = roster.profile.user_id

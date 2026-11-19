@@ -41,7 +41,11 @@ export default function Login() {
 
   if (checking) return null
   if (user) {
-    const defaultRoute = user.role === 'system_admin' ? '/admin' : `/${user.role}`
+    const defaultRoute = user.role === 'system_admin'
+      ? '/admin/system-admin'
+      : user.role === 'admin'
+        ? '/admin/student-admin'
+        : `/${user.role}`
     return <Navigate to={defaultRoute} replace />
   }
 
@@ -56,8 +60,10 @@ export default function Login() {
             ? '/student/setup/face'
             : '/student/setup'
           : signedIn.role === 'system_admin'
-            ? '/admin'
-            : `/${signedIn.role}`
+            ? '/admin/system-admin'
+            : signedIn.role === 'admin'
+              ? '/admin/student-admin'
+              : `/${signedIn.role}`
       navigate(destination, { replace: true })
     } catch (err) {
       setError(err.message)
