@@ -13,8 +13,24 @@ from ..models import ClassRoutine, Course, CourseTeacher, TeacherProfile, User
 from ..security import get_current_user, require_role
 
 router = APIRouter(prefix="/api", tags=["routine"])
-admin_or_sysadmin = require_role("admin", "system_admin")
-system_admin_only = require_role("system_admin")
+admin_or_sysadmin = require_role("admin", "system_admin", "eee_system_admin", "eee_admin", "super_admin")
+system_admin_only = require_role("system_admin", "eee_system_admin", "super_admin")
+
+
+def _dept_for_role(user: User) -> str | None:
+    """Return the department an admin is scoped to.
+    super_admin -> None (unrestricted)
+    system_admin / admin  -> CSE
+    eee_system_admin / eee_admin -> EEE
+    teacher -> None
+    """
+    if user.role == "super_admin":
+        return None
+    if user.role in {"eee_system_admin", "eee_admin"}:
+        return "EEE"
+    if user.role in {"system_admin", "admin"}:
+        return "CSE"
+    return None
 
 DAYS_OF_WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 DAY_ORDER = {day: idx for idx, day in enumerate(DAYS_OF_WEEK)}
@@ -76,10 +92,14 @@ def list_admin_routine(
     day: str | None = None,
     session_val: str | None = None,
     db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
+    current_user: User = Depends(system_admin_only),
 ):
     query = select(ClassRoutine)
-    if department and department != "All":
+    # Enforce department scope: each system admin only sees their own dept
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept:
+        query = query.where(ClassRoutine.department == scoped_dept)
+    elif department and department != "All":
         query = query.where(ClassRoutine.department == department)
     if semester and semester != "All":
         query = query.where(ClassRoutine.semester == semester)
@@ -130,7 +150,7 @@ def list_public_routine(
 def create_routine_slot(
     body: RoutineSlotIn,
     db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
+    current_user: User = Depends(system_admin_only),
 ):
     dept = (body.department or "").strip().upper()
     sem = (body.semester or "").strip()
@@ -144,6 +164,14 @@ def create_routine_slot(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "Department, semester, day, start time, end time, and course code are required."
+        )
+
+    # Enforce: each system admin can only create routines for their own dept
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept and dept != scoped_dept:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"You can only manage routines for the {scoped_dept} department."
         )
 
     # Auto-resolve course title if blank
@@ -209,14 +237,22 @@ def update_routine_slot(
     routine_id: int,
     body: dict,
     db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
+    current_user: User = Depends(system_admin_only),
 ):
     slot = db.get(ClassRoutine, routine_id)
     if not slot:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Routine slot not found.")
 
+    # Enforce dept scoping on read
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept and slot.department != scoped_dept:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"You can only manage routines for the {scoped_dept} department.")
+
     if "department" in body:
-        slot.department = (body["department"] or "").strip().upper()
+        new_dept = (body["department"] or "").strip().upper()
+        if scoped_dept and new_dept != scoped_dept:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"You can only manage routines for the {scoped_dept} department.")
+        slot.department = new_dept
     if "semester" in body:
         slot.semester = (body["semester"] or "").strip()
     if "section" in body:
@@ -251,10 +287,14 @@ def clear_routine_slots(
     semester: str | None = None,
     section: str | None = None,
     db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
+    current_user: User = Depends(system_admin_only),
 ):
     stmt = delete(ClassRoutine)
-    if department and department != "All":
+    # Enforce dept scoping: admins can only clear their own dept
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept:
+        stmt = stmt.where(ClassRoutine.department == scoped_dept)
+    elif department and department != "All":
         stmt = stmt.where(ClassRoutine.department == department)
     if semester and semester != "All":
         stmt = stmt.where(ClassRoutine.semester == semester)
@@ -270,11 +310,15 @@ def clear_routine_slots(
 def delete_routine_slot(
     routine_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
+    current_user: User = Depends(system_admin_only),
 ):
     slot = db.get(ClassRoutine, routine_id)
     if not slot:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Routine slot not found.")
+    # Enforce dept scoping
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept and slot.department != scoped_dept:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"You can only manage routines for the {scoped_dept} department.")
     db.delete(slot)
     db.commit()
     return {"detail": "Routine slot deleted successfully."}
@@ -443,8 +487,12 @@ async def bulk_upload_routine(
     default_semester: str | None = None,
     default_section: str | None = "A",
     db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
+    current_user: User = Depends(system_admin_only),
 ):
+    # Enforce dept scoping on bulk upload
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept:
+        default_department = scoped_dept
     content = await file.read()
     filename = (file.filename or "").lower()
 
@@ -539,6 +587,10 @@ async def bulk_upload_routine(
         m_dept = re.match(r"^([A-Za-z]+)", base_code)
         derived_dept = m_dept.group(1).upper() if m_dept else (default_department or "CSE")
         dept = str(row_dict.get("department", "")).strip().upper() or derived_dept or (default_department or "CSE")
+
+        # Enforce dept scoping: skip rows that don't belong to this admin's dept
+        if scoped_dept and dept != scoped_dept:
+            dept = scoped_dept  # override to admin's dept
 
         derived_sem = _derive_semester_from_code(base_code)
         sem = str(row_dict.get("semester", "")).strip() or derived_sem or (default_semester or "1-1")
@@ -660,7 +712,7 @@ async def bulk_upload_routine(
 @router.get("/teacher/routine")
 def get_teacher_routine(
     db: Session = Depends(get_db),
-    user: User = Depends(require_role("teacher", "admin", "system_admin")),
+    user: User = Depends(require_role("teacher", "admin", "system_admin", "eee_system_admin", "eee_admin", "super_admin")),
 ):
     """Retrieve the logged-in teacher's personalized weekly routine schedule."""
     ct_courses = db.scalars(

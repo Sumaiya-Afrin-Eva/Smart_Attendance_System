@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import {
   BookOpen,
   BriefcaseBusiness,
@@ -17,7 +18,9 @@ import {
   BadgeCheck,
   Shield,
 } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
+import { useAuth } from '../../context/AuthContext'
+import api from '../../lib/api'
 
 const summaryCards = [
   {
@@ -124,6 +127,80 @@ const studentRows = [
   },
 ]
 
+const eeeTeacherRows = [
+  {
+    name: 'Dr. Shila Akter',
+    dept: 'EEE',
+    email: 'shila@kuet.ac.bd',
+    courses: 4,
+    students: 182,
+    status: 'Active',
+  },
+  {
+    name: 'Dr. Md. Rafiqul Islam',
+    dept: 'EEE',
+    email: 'rafiqul@kuet.ac.bd',
+    courses: 3,
+    students: 145,
+    status: 'Active',
+  },
+  {
+    name: 'Dr. Bashir Ahmed',
+    dept: 'EEE',
+    email: 'bashir@kuet.ac.bd',
+    courses: 3,
+    students: 130,
+    status: 'Active',
+  },
+  {
+    name: 'Engr. Farhana Yasmin',
+    dept: 'EEE',
+    email: 'farhana.eee@kuet.ac.bd',
+    courses: 2,
+    students: 88,
+    status: 'On leave',
+  },
+]
+
+const eeeStudentRows = [
+  {
+    name: 'Shuvo Kumar',
+    id: '2106107',
+    dept: 'EEE',
+    semester: '4-1',
+    section: 'B',
+    status: 'Present',
+    attendance: '94%',
+  },
+  {
+    name: 'Fahim Shahriar',
+    id: '2206015',
+    dept: 'EEE',
+    semester: '3-2',
+    section: 'A',
+    status: 'Present',
+    attendance: '96%',
+  },
+  {
+    name: 'Anika Tabassum',
+    id: '2206042',
+    dept: 'EEE',
+    semester: '3-2',
+    section: 'A',
+    status: 'Late',
+    attendance: '88%',
+  },
+  {
+    name: 'Tanvir Ahmed',
+    id: '2206088',
+    dept: 'EEE',
+    semester: '3-2',
+    section: 'B',
+    status: 'Absent',
+    attendance: '74%',
+  },
+]
+
 const toneMap = {
   emerald: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   sky: 'bg-sky-50 text-sky-700 ring-sky-200',
@@ -136,18 +213,119 @@ const toneMap = {
 }
 
 export default function AdminDashboard({ mode = 'department', department = 'CSE', roleType = 'System Admin' }) {
+  const { switchDashboard } = useAuth()
+  const navigate = useNavigate()
+  const [switching, setSwitching] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [dbTeachers, setDbTeachers] = useState([])
+  const [dbStudents, setDbStudents] = useState([])
+  const [overviewStats, setOverviewStats] = useState(null)
   const isSuper = mode === 'super'
   const title = isSuper ? 'Super Admin Dashboard' : `${department} ${roleType} Dashboard`
   const subtitle = isSuper
     ? 'Unified access to both CSE and EEE administrative areas.'
     : `${department} administrative overview and department controls.`
 
-  const superLinks = [
-    { label: 'CSE System Admin', path: '/admin/cse-system-admin', icon: Shield },
-    { label: 'CSE Student Admin', path: '/admin/cse-student-admin', icon: GraduationCap },
-    { label: 'EEE System Admin', path: '/admin/eee-system-admin', icon: Shield },
-    { label: 'EEE Student Admin', path: '/admin/eee-student-admin', icon: GraduationCap },
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [statsRes, teachersRes, studentsRes] = await Promise.all([
+          api.get('/admin/overview-stats').catch(() => ({ data: null })),
+          api.get('/admin/teachers').catch(() => ({ data: [] })),
+          api.get('/admin/students').catch(() => ({ data: [] })),
+        ])
+        if (statsRes?.data) setOverviewStats(statsRes.data)
+        if (Array.isArray(teachersRes?.data)) setDbTeachers(teachersRes.data)
+        if (Array.isArray(studentsRes?.data)) setDbStudents(studentsRes.data)
+      } catch {
+        // Fallback to static values if endpoints fail
+      }
+    }
+    loadData()
+  }, [department])
+
+  // Map real teachers from DB
+  const rawTeachers = dbTeachers.map((t) => ({
+    name: t.name,
+    dept: t.department || department,
+    email: t.email,
+    courses: t.courses || 0,
+    students: t.students || 0,
+    status: t.status || 'Active',
+  }))
+
+  const teachersList = rawTeachers.filter((t) =>
+    !searchQuery ||
+    t.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    t.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    t.dept.toLowerCase().includes(searchQuery.toLowerCase())
+  )
+
+  // Map real students from DB
+  const studentsList = dbStudents.map((s) => ({
+    name: s.name || s.full_name,
+    id: s.roll,
+    dept: s.department || department,
+    semester: s.semester || s.current_semester || '1-1',
+    section: s.section || 'A',
+    status: 'Present',
+    attendance: '100%',
+  }))
+
+  const cards = [
+    {
+      label: 'Total teachers',
+      value: overviewStats ? String(overviewStats.total_teachers) : (department === 'EEE' ? '0' : '28'),
+      change: overviewStats?.total_teachers ? `+${overviewStats.total_teachers}` : '0',
+      icon: BriefcaseBusiness,
+      tone: 'emerald',
+    },
+    {
+      label: 'Total students',
+      value: overviewStats ? String(overviewStats.total_students) : (department === 'EEE' ? '0' : '10'),
+      change: overviewStats?.total_students ? `+${overviewStats.total_students}` : '0',
+      icon: GraduationCap,
+      tone: 'sky',
+    },
+    {
+      label: 'Active classes',
+      value: overviewStats ? String(overviewStats.active_classes) : (department === 'EEE' ? '0' : '261'),
+      change: overviewStats?.active_classes ? `${overviewStats.active_classes} classes` : '0 classes',
+      icon: BookOpen,
+      tone: 'amber',
+    },
+    {
+      label: 'Attendance rate',
+      value: overviewStats ? overviewStats.attendance_rate : (department === 'EEE' ? '0.0%' : '94.7%'),
+      change: overviewStats?.total_students ? '+2.3%' : '0%',
+      icon: TrendingUp,
+      tone: 'violet',
+    },
   ]
+
+  const superLinks = [
+    { label: 'CSE System Admin', path: '/admin/system-admin', role: 'system_admin', icon: Shield },
+    { label: 'CSE Student Admin', path: '/admin/student-admin', role: 'admin', icon: GraduationCap },
+    { label: 'EEE System Admin', path: '/admin/eee-system-admin', role: 'eee_system_admin', icon: Shield },
+    { label: 'EEE Student Admin', path: '/admin/eee-student-admin', role: 'eee_admin', icon: GraduationCap },
+  ]
+
+  const handleSuperLinkClick = async (e, link) => {
+    e.preventDefault()
+    if (switching) return
+    setSwitching(true)
+    try {
+      if (switchDashboard && link.role) {
+        await switchDashboard(link.role)
+      }
+      navigate(link.path)
+    } catch (err) {
+      console.error('Failed to switch dashboard:', err)
+      navigate(link.path)
+    } finally {
+      setSwitching(false)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -164,10 +342,6 @@ export default function AdminDashboard({ mode = 'department', department = 'CSE'
               <CalendarRange size={16} />
               This semester
             </button>
-            <button className="inline-flex items-center gap-2 rounded-xl bg-emerald-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 cursor-pointer">
-              <Plus size={16} />
-              Add new user
-            </button>
           </div>
         </div>
       </section>
@@ -181,25 +355,30 @@ export default function AdminDashboard({ mode = 'department', department = 'CSE'
             </div>
           </div>
           <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {superLinks.map(({ label, path, icon: Icon }) => (
-              <Link
-                key={path}
-                to={path}
-                className="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-emerald-200 hover:bg-emerald-50/50"
-              >
-                <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-800">
-                  <Icon size={18} />
-                </div>
-                <p className="text-base font-bold text-stone-900">{label}</p>
-                <p className="mt-1 text-xs text-stone-500">Open dashboard</p>
-              </Link>
-            ))}
+            {superLinks.map((link) => {
+              const { label, path, icon: Icon } = link
+              return (
+                <button
+                  key={path}
+                  type="button"
+                  onClick={(e) => handleSuperLinkClick(e, link)}
+                  disabled={switching}
+                  className="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-left transition hover:border-emerald-200 hover:bg-emerald-50/50 cursor-pointer disabled:opacity-50"
+                >
+                  <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-emerald-800">
+                    <Icon size={18} />
+                  </div>
+                  <p className="text-base font-bold text-stone-900">{label}</p>
+                  <p className="mt-1 text-xs text-stone-500">Open dashboard & switch view</p>
+                </button>
+              )
+            })}
           </div>
         </section>
       )}
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {summaryCards.map(({ label, value, change, icon: Icon, tone }) => (
+        {cards.map(({ label, value, change, icon: Icon, tone }) => (
           <div key={label} className="rounded-2xl border border-stone-200 bg-white p-4 shadow-2xs">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -229,6 +408,8 @@ export default function AdminDashboard({ mode = 'department', department = 'CSE'
               <input
                 type="text"
                 placeholder="Search teacher"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-40 bg-transparent text-sm text-stone-700 outline-none placeholder:text-stone-400"
               />
             </div>
@@ -246,29 +427,37 @@ export default function AdminDashboard({ mode = 'department', department = 'CSE'
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-200 bg-white">
-                {teacherRows.map((teacher) => (
-                  <tr key={teacher.email} className="hover:bg-stone-50/80">
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-sm font-bold text-emerald-800">
-                          {teacher.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}
-                        </div>
-                        <div>
-                          <p className="font-semibold text-stone-900">{teacher.name}</p>
-                          <p className="text-xs text-stone-500">{teacher.email}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-stone-700">{teacher.dept}</td>
-                    <td className="px-4 py-3 text-stone-700">{teacher.courses}</td>
-                    <td className="px-4 py-3 text-stone-700">{teacher.students}</td>
-                    <td className="px-4 py-3">
-                      <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${teacher.status === 'Active' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-amber-50 text-amber-700 ring-amber-200'}`}>
-                        {teacher.status}
-                      </span>
+                {teachersList.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-8 text-center text-sm text-stone-500">
+                      No teachers added yet for {department}.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  teachersList.map((teacher) => (
+                    <tr key={teacher.email} className="hover:bg-stone-50/80">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-100 text-sm font-bold text-emerald-800">
+                            {teacher.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}
+                          </div>
+                          <div>
+                            <p className="font-semibold text-stone-900">{teacher.name}</p>
+                            <p className="text-xs text-stone-500">{teacher.email}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-stone-700">{teacher.dept}</td>
+                      <td className="px-4 py-3 text-stone-700">{teacher.courses}</td>
+                      <td className="px-4 py-3 text-stone-700">{teacher.students}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${teacher.status === 'Active' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-amber-50 text-amber-700 ring-amber-200'}`}>
+                          {teacher.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -364,30 +553,38 @@ export default function AdminDashboard({ mode = 'department', department = 'CSE'
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-200 bg-white">
-              {studentRows.map((student) => (
-                <tr key={student.id} className="hover:bg-stone-50/80">
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-100 text-sm font-bold text-sky-800">
-                        {student.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}
-                      </div>
-                      <div>
-                        <p className="font-semibold text-stone-900">{student.name}</p>
-                        <p className="text-xs text-stone-500">Section {student.section}</p>
-                      </div>
-                    </div>
+              {studentsList.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center text-sm text-stone-500">
+                    No students enrolled yet for {department}.
                   </td>
-                  <td className="px-4 py-3 text-stone-700">{student.id}</td>
-                  <td className="px-4 py-3 text-stone-700">{student.dept}</td>
-                  <td className="px-4 py-3 text-stone-700">{student.semester}</td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${student.status === 'Present' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : student.status === 'Late' ? 'bg-amber-50 text-amber-700 ring-amber-200' : 'bg-rose-50 text-rose-700 ring-rose-200'}`}>
-                      {student.status}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 font-semibold text-stone-800">{student.attendance}</td>
                 </tr>
-              ))}
+              ) : (
+                studentsList.map((student) => (
+                  <tr key={student.id} className="hover:bg-stone-50/80">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-100 text-sm font-bold text-sky-800">
+                          {student.name.split(' ').map((part) => part[0]).slice(0, 2).join('')}
+                        </div>
+                        <div>
+                          <p className="font-semibold text-stone-900">{student.name}</p>
+                          <p className="text-xs text-stone-500">Section {student.section}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-stone-700">{student.id}</td>
+                    <td className="px-4 py-3 text-stone-700">{student.dept}</td>
+                    <td className="px-4 py-3 text-stone-700">{student.semester}</td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${student.status === 'Present' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : student.status === 'Late' ? 'bg-amber-50 text-amber-700 ring-amber-200' : 'bg-rose-50 text-rose-700 ring-rose-200'}`}>
+                        {student.status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 font-semibold text-stone-800">{student.attendance}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

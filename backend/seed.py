@@ -41,6 +41,7 @@ STAFF = [
     ("sysadmin@kuet.ac.bd", "System Administrator", "system_admin", "sysadmin123"),
     ("admin@kuet.ac.bd", "Student Administrator", "admin", "admin123"),
     ("teacher@kuet.ac.bd", "Sk Md Masudul Ahsan", "teacher", "teacher123"),
+    ("eee.system.admin@kuet.ac.bd", "EEE System Administrator", "eee_system_admin", "eeesysadmin123"),
 ]
 
 DEMO_EMAIL = "demo@stud.kuet.ac.bd"

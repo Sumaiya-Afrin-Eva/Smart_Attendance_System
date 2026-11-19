@@ -21,6 +21,7 @@ import {
   RotateCcw,
 } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
+import { useAuth } from '../../context/AuthContext'
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday']
 const DEPARTMENTS = ['CSE', 'EEE', 'ECE', 'ME', 'CE', 'IEM', 'BME', 'MSE', 'URP', 'ARCH', 'BECM', 'LE', 'TE', 'ChE', 'MTE', 'PHY', 'CHEM', 'MATH', 'HUM']
@@ -37,6 +38,8 @@ const TIME_PRESETS = [
 ]
 
 export default function AdminRoutine() {
+  const { user } = useAuth()
+  const scopedDept = user?.role === 'eee_system_admin' ? 'EEE' : user?.role === 'system_admin' ? 'CSE' : null
   const [routine, setRoutine] = useState([])
   const [courses, setCourses] = useState([])
   const [teachers, setTeachers] = useState([])
@@ -45,7 +48,7 @@ export default function AdminRoutine() {
   const [noticeType, setNoticeType] = useState('success') // success | error
 
   // Filters
-  const [selectedDept, setSelectedDept] = useState('All')
+  const [selectedDept, setSelectedDept] = useState(scopedDept || 'All')
   const [selectedDay, setSelectedDay] = useState('All')
   const [selectedTeacher, setSelectedTeacher] = useState('All')
   const [search, setSearch] = useState('')
@@ -212,7 +215,7 @@ export default function AdminRoutine() {
   function openAddModal() {
     setEditingId(null)
     setForm({
-      department: selectedDept !== 'All' ? selectedDept : 'CSE',
+      department: scopedDept || (selectedDept !== 'All' ? selectedDept : 'CSE'),
       semester: '1-1',
       section: 'A',
       day: selectedDay !== 'All' ? selectedDay : 'Sunday',
@@ -232,7 +235,7 @@ export default function AdminRoutine() {
   function openEditModal(slot) {
     setEditingId(slot.id)
     setForm({
-      department: slot.department || 'CSE',
+      department: scopedDept || slot.department || 'CSE',
       semester: slot.semester || '3-1',
       section: slot.section || 'A',
       day: slot.day || 'Sunday',
@@ -501,16 +504,22 @@ export default function AdminRoutine() {
               Filter:
             </div>
 
-            <select
-              value={selectedDept}
-              onChange={(e) => setSelectedDept(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-2xs focus:border-emerald-500 focus:outline-none"
-            >
-              <option value="All">All Depts</option>
-              {DEPARTMENTS.map((d) => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
+            {scopedDept ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-800 shadow-2xs">
+                {scopedDept} Dept
+              </div>
+            ) : (
+              <select
+                value={selectedDept}
+                onChange={(e) => setSelectedDept(e.target.value)}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-2xs focus:border-emerald-500 focus:outline-none"
+              >
+                <option value="All">All Depts</option>
+                {DEPARTMENTS.map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+            )}
 
             <select
               value={selectedDay}
@@ -1016,15 +1025,21 @@ export default function AdminRoutine() {
 
                 <div>
                   <label className="text-[11px] font-bold text-slate-700">Dept</label>
-                  <select
-                    value={form.department}
-                    onChange={(e) => setForm({ ...form, department: e.target.value })}
-                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-none"
-                  >
-                    {DEPARTMENTS.map((d) => (
-                      <option key={d} value={d}>{d}</option>
-                    ))}
-                  </select>
+                  {scopedDept ? (
+                    <div className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-100 px-2 py-2 text-xs font-bold text-slate-800">
+                      {scopedDept}
+                    </div>
+                  ) : (
+                    <select
+                      value={form.department}
+                      onChange={(e) => setForm({ ...form, department: e.target.value })}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-none"
+                    >
+                      {DEPARTMENTS.map((d) => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
 
                 <div>

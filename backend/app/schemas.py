@@ -23,6 +23,10 @@ class PasswordLoginIn(BaseModel):
     access_code: str | None = None
 
 
+class SwitchDashboardIn(BaseModel):
+    target_role: str
+
+
 class PasswordResetRequestIn(BaseModel):
     email: EmailStr
 

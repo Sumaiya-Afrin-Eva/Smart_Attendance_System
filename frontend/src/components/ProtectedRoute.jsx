@@ -8,9 +8,17 @@ export default function ProtectedRoute({ role, setupStep }) {
   if (loading) return <FullPageSpinner />
   if (!user) return <Navigate to="/login" replace />
 
-  const allowed = Array.isArray(role) ? role.includes(user.role) : user.role === role
+  const allowed = Array.isArray(role) ? (role.includes(user.role) || user.role === 'super_admin') : (user.role === role || user.role === 'super_admin')
   if (!allowed) {
-    const defaultRoute = user.role === 'system_admin' ? '/admin/system-admin' : '/admin/student-admin'
+    const defaultRoute = user.role === 'super_admin'
+      ? '/admin/super-admin'
+      : user.role === 'system_admin'
+        ? '/admin/system-admin'
+        : user.role === 'eee_system_admin'
+          ? '/admin/eee-system-admin'
+          : user.role === 'eee_admin'
+            ? '/admin/eee-student-admin'
+            : '/admin/student-admin'
     return <Navigate to={defaultRoute} replace />
   }
 

@@ -41,11 +41,17 @@ export default function Login() {
 
   if (checking) return null
   if (user) {
-    const defaultRoute = user.role === 'system_admin'
-      ? '/admin/system-admin'
-      : user.role === 'admin'
-        ? '/admin/student-admin'
-        : `/${user.role}`
+    const defaultRoute = user.role === 'super_admin'
+      ? '/admin/super-admin'
+      : user.role === 'system_admin'
+        ? '/admin/system-admin'
+        : user.role === 'eee_system_admin'
+          ? '/admin/eee-system-admin'
+          : user.role === 'eee_admin'
+            ? '/admin/eee-student-admin'
+            : user.role === 'admin'
+              ? '/admin/student-admin'
+              : `/${user.role}`
     return <Navigate to={defaultRoute} replace />
   }
 
@@ -59,11 +65,17 @@ export default function Login() {
           ? signedIn.onboarding?.profile && !signedIn.onboarding?.face
             ? '/student/setup/face'
             : '/student/setup'
-          : signedIn.role === 'system_admin'
-            ? '/admin/system-admin'
-            : signedIn.role === 'admin'
-              ? '/admin/student-admin'
-              : `/${signedIn.role}`
+          : signedIn.role === 'super_admin'
+            ? '/admin/super-admin'
+            : signedIn.role === 'system_admin'
+              ? '/admin/system-admin'
+              : signedIn.role === 'eee_system_admin'
+                ? '/admin/eee-system-admin'
+                : signedIn.role === 'eee_admin'
+                  ? '/admin/eee-student-admin'
+                  : signedIn.role === 'admin'
+                    ? '/admin/student-admin'
+                    : `/${signedIn.role}`
       navigate(destination, { replace: true })
     } catch (err) {
       setError(err.message)

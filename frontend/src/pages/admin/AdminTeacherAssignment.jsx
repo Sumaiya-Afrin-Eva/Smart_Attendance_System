@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Check, Plus, Search, ChevronDown, X } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
+import { useAuth } from '../../context/AuthContext'
 
 function fuzzyMatch(str, pattern) {
   const s = str.toLowerCase()
@@ -101,12 +102,14 @@ export default function AdminTeacherAssignment() {
   const [savedAssignment, setSavedAssignment] = useState(false)
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(true)
+  const { user } = useAuth()
+  const scopedDept = user?.role === 'eee_system_admin' ? 'EEE' : user?.role === 'system_admin' ? 'CSE' : null
   const [year, setYear] = useState(searchParams.get('year') || '1')
   const [term, setTerm] = useState(searchParams.get('term') || '1')
-  const [department, setDepartment] = useState(searchParams.get('dept') || 'CSE')
+  const [department, setDepartment] = useState(scopedDept || searchParams.get('dept') || 'CSE')
   const [session, setSession] = useState(searchParams.get('session') || '2025-2026')
   const sessionOptions = ['2020-2021', '2021-2022', '2022-2023', '2023-2024', '2024-2025', '2025-2026']
-  const [teacherDepartment, setTeacherDepartment] = useState('CSE')
+  const [teacherDepartment, setTeacherDepartment] = useState(scopedDept || 'CSE')
 
   const departments = ['CSE', 'EEE', 'ECE', 'ME', 'CE', 'IEM', 'BME', 'MSE', 'URP', 'ARCH', 'BECM', 'LE', 'TE', 'ChE', 'MTE', 'PHY', 'CHEM', 'MATH', 'HUM']
   if (!departments.includes(department)) setDepartment(departments[0])
@@ -252,9 +255,15 @@ export default function AdminTeacherAssignment() {
 
             <label className="space-y-1.5 block">
               <span className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Department</span>
-              <select value={department} onChange={(e) => setDepartment(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
-                {departments.map((dept) => <option key={dept} value={dept}>{dept}</option>)}
-              </select>
+              {scopedDept ? (
+                <div className="w-full rounded-xl border border-stone-200 bg-stone-100 px-3 py-2.5 text-stone-700 font-semibold cursor-not-allowed">
+                  {scopedDept}
+                </div>
+              ) : (
+                <select value={department} onChange={(e) => setDepartment(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
+                  {departments.map((dept) => <option key={dept} value={dept}>{dept}</option>)}
+                </select>
+              )}
             </label>
 
             <label className="space-y-1.5 block">
@@ -288,12 +297,18 @@ export default function AdminTeacherAssignment() {
               <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs space-y-6">
                 <label className="space-y-1.5 block max-w-[200px]">
                   <span className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Teacher Department</span>
-                  <select value={teacherDepartment} onChange={(e) => {
-                    setTeacherDepartment(e.target.value)
-                    setAssignments(assignments.map(a => ({...a, teacherId: ''})))
-                  }} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
-                    {departments.map((dept) => <option key={dept} value={dept}>{dept}</option>)}
-                  </select>
+                  {scopedDept ? (
+                    <div className="w-full rounded-xl border border-stone-200 bg-stone-100 px-3 py-2.5 text-stone-700 font-semibold cursor-not-allowed">
+                      {scopedDept}
+                    </div>
+                  ) : (
+                    <select value={teacherDepartment} onChange={(e) => {
+                      setTeacherDepartment(e.target.value)
+                      setAssignments(assignments.map(a => ({...a, teacherId: ''})))
+                    }} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
+                      {departments.map((dept) => <option key={dept} value={dept}>{dept}</option>)}
+                    </select>
+                  )}
                 </label>
 
                 <div className="space-y-4">

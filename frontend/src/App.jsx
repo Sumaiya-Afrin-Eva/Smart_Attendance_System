@@ -35,8 +35,17 @@ import { useAuth } from './context/AuthContext'
 
 function AdminDashboardRouter() {
   const { user } = useAuth()
+  if (user?.role === 'super_admin') {
+    return <Navigate to="/admin/super-admin" replace />
+  }
   if (user?.role === 'admin') {
     return <Navigate to="/admin/student-admin" replace />
+  }
+  if (user?.role === 'eee_admin') {
+    return <Navigate to="/admin/eee-student-admin" replace />
+  }
+  if (user?.role === 'eee_system_admin') {
+    return <Navigate to="/admin/eee-system-admin" replace />
   }
   return <Navigate to="/admin/system-admin" replace />
 }
@@ -120,12 +129,15 @@ export default function App() {
         </Route>
       </Route>
 
-      {/* Admin dashboards: legacy system admin and student admin */}
-      <Route element={<ProtectedRoute role={['admin', 'system_admin']} />}>
+      {/* Admin dashboards: legacy system admin, eee system admin and student admin */}
+      <Route element={<ProtectedRoute role={['admin', 'system_admin', 'eee_system_admin', 'eee_admin', 'super_admin']} />}>
         <Route path="/admin" element={<DashboardLayout />}>
           <Route index element={<AdminDashboardRouter />} />
+          <Route path="super-admin" element={<AdminDashboard mode="super" department="All" roleType="Super Admin" />} />
           <Route path="system-admin" element={<AdminDashboard mode="system" department="CSE" roleType="System Admin" />} />
+          <Route path="eee-system-admin" element={<AdminDashboard mode="system" department="EEE" roleType="System Admin" />} />
           <Route path="student-admin" element={<AdminDashboard mode="student" department="CSE" roleType="Student Admin" />} />
+          <Route path="eee-student-admin" element={<AdminDashboard mode="student" department="EEE" roleType="Student Admin" />} />
           <Route path="courses" element={<AdminCourses />} />
           <Route path="routine" element={<AdminRoutine />} />
           <Route path="assignments" element={<AdminTeacherAssignment />} />
@@ -138,7 +150,7 @@ export default function App() {
           <Route path="course-assignments" element={<StudentCourseAssignments />} />
           <Route path="alerts" element={<SecurityAlerts />} />
           <Route path="settings" element={<SystemSettings />} />
-          <Route path="*" element={<Navigate to="/admin/system-admin" replace />} />
+          <Route path="*" element={<AdminDashboardRouter />} />
         </Route>
       </Route>
 
