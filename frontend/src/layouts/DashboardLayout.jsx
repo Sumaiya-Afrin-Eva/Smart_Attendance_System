@@ -330,13 +330,16 @@ export default function DashboardLayout() {
                 <p className="text-sm font-semibold text-stone-900">{user?.name}</p>
                 <p className="text-xs text-stone-500 capitalize">{ROLE_LABEL[user?.role] || user?.role}</p>
               </div>
-              <button
-                onClick={handleLogout}
-                title="Sign Out"
-                className="flex h-9 w-9 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-500 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 shadow-2xs cursor-pointer ml-1"
-              >
-                <LogOut size={15} />
-              </button>
+              {/* Only show header Sign Out button for non-student and non-admin roles (e.g. teacher) */}
+              {!['student', 'admin', 'system_admin', 'eee_system_admin', 'eee_admin', 'super_admin'].includes(user?.role) && (
+                <button
+                  onClick={handleLogout}
+                  title="Sign Out"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-500 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 shadow-2xs cursor-pointer ml-1"
+                >
+                  <LogOut size={15} />
+                </button>
+              )}
             </div>
           </div>
         </header>

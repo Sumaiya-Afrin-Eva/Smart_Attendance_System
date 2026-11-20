@@ -384,8 +384,10 @@ export default function AdminDashboard({ mode = 'department', department = 'CSE'
       <section className="rounded-2xl border border-stone-200 bg-[#f4f3f1] p-5 shadow-2xs">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-stone-500">{isSuper ? 'Unified control' : `${department} overview`}</p>
-            <h2 className="mt-2 font-display text-3xl font-bold text-stone-900">{title}</h2>
+            {isSuper && (
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-stone-500">Unified control</p>
+            )}
+            <h2 className={`font-display text-3xl font-bold text-stone-900 ${isSuper ? 'mt-2' : ''}`}>{title}</h2>
             <p className="mt-2 text-sm text-stone-600">{subtitle}</p>
           </div>
 

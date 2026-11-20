@@ -938,4 +938,114 @@ def download_student_routine_pdf(
     )
 
 
+@router.get("/admin/routine/download-pdf")
+def download_master_routine_pdf(
+    department: str | None = None,
+    day: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_or_sysadmin),
+):
+    """Directly download the complete department master routine as a formatted PDF."""
+    import os
+    os.environ.setdefault("MPLCONFIGDIR", "/tmp")
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    scoped = _dept_for_role(user)
+    dept_target = scoped if scoped else (department if (department and department != "All") else None)
+
+    query = select(ClassRoutine)
+    if dept_target:
+        query = query.where(func.upper(ClassRoutine.department) == dept_target.upper())
+    if day and day != "All":
+        query = query.where(ClassRoutine.day == day)
+
+    slots = db.scalars(query).all()
+
+    sorted_slots = sorted(
+        slots,
+        key=lambda r: (DAY_ORDER.get(r.day, 99), r.semester or "", r.section or "", r.start_time or "")
+    )
+
+    days_to_render = [day] if (day and day != "All") else DAYS_OF_WEEK[:5]
+    by_day = {d: [] for d in days_to_render}
+    for s in sorted_slots:
+        if s.day in by_day:
+            by_day[s.day].append(s)
+
+    buf = io.BytesIO()
+    dept_label = dept_target if dept_target else "Central All Departments"
+
+    with PdfPages(buf) as pdf:
+        for d in days_to_render:
+            day_slots = by_day.get(d, [])
+
+            # Split slots into pages of at most 18 rows per page for clarity
+            chunk_size = 18
+            chunks = [day_slots[i:i + chunk_size] for i in range(0, len(day_slots), chunk_size)] if day_slots else [[]]
+
+            for page_idx, chunk in enumerate(chunks):
+                fig, ax = plt.subplots(figsize=(11.69, 8.27))  # A4 Landscape
+                ax.axis("off")
+
+                # Header Banner
+                fig.text(0.08, 0.93, f"Master Class Routine — {d}", fontsize=17, weight="bold", color="#0f3422")
+                sub_meta = f"Department: {dept_label}   |   Total Slots: {len(day_slots)}   |   Page {page_idx + 1} of {len(chunks)}   |   Generated: {datetime.now().strftime('%d %b %Y')}"
+                fig.text(0.08, 0.89, sub_meta, fontsize=9.5, color="#555555")
+
+                if not chunk:
+                    fig.text(0.5, 0.5, f"No routine slots scheduled on {d}", ha="center", fontsize=13, style="italic", color="#888888")
+                else:
+                    table_data = []
+                    for s in chunk:
+                        c_type = s.course_type or "Theory"
+                        room_val = s.room if (s.room and s.room != "TBA") else "TBA"
+                        sem_sec = f"{s.semester or ''} (Sec {s.section or 'A'})"
+                        table_data.append([
+                            f"{s.start_time} – {s.end_time}",
+                            sem_sec,
+                            s.course_code,
+                            s.course_title or "Class Session",
+                            c_type,
+                            room_val,
+                            s.teacher_name or "—",
+                        ])
+
+                    col_labels = ["Time Slot", "Term & Sec", "Course Code", "Course Title", "Type", "Room", "Faculty"]
+                    table = ax.table(
+                        cellText=table_data,
+                        colLabels=col_labels,
+                        loc="center",
+                        cellLoc="left",
+                        colWidths=[0.16, 0.12, 0.12, 0.28, 0.10, 0.07, 0.15],
+                    )
+                    table.auto_set_font_size(False)
+                    table.set_fontsize(8.5)
+                    table.scale(1, 1.6)
+
+                    for (r, c), cell in table.get_celld().items():
+                        if r == 0:
+                            cell.set_facecolor("#0f3422")
+                            cell.set_text_props(color="white", weight="bold")
+                        else:
+                            cell.set_facecolor("#f9fbf9" if r % 2 == 0 else "#ffffff")
+
+                pdf.savefig(fig, bbox_inches="tight")
+                plt.close()
+
+    buf.seek(0)
+    dept_slug = (dept_target or "central").lower()
+    filename = f"master_routine_{dept_slug}.pdf"
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
+
+
+
 
