@@ -8,6 +8,7 @@ import Placeholder from './pages/Placeholder'
 import Onboarding from './pages/student/Onboarding'
 import FaceEnrollment from './pages/student/FaceEnrollment'
 import StudentDashboard from './pages/student/StudentDashboard'
+import StudentRoutine from './pages/student/StudentRoutine'
 import MyAttendance from './pages/student/MyAttendance'
 import MyCourses from './pages/student/MyCourses'
 import MyProfile from './pages/student/MyProfile'
@@ -123,6 +124,7 @@ export default function App() {
       <Route element={<ProtectedRoute role="student" />}>
         <Route path="/student" element={<DashboardLayout />}>
           <Route index element={<StudentDashboard />} />
+          <Route path="routine" element={<StudentRoutine />} />
           <Route path="attendance" element={<MyAttendance />} />
           <Route path="courses" element={<MyCourses />} />
           <Route path="profile" element={<MyProfile />} />

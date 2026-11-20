@@ -20,6 +20,7 @@ export const NAV = {
   ],
   student: [
     { to: '/student', label: 'Dashboard', icon: LayoutDashboard, end: true },
+    { to: '/student/routine', label: 'My Routine', icon: CalendarDays },
     { to: '/student/attendance', label: 'My Attendance', icon: ClipboardCheck },
     { to: '/student/courses', label: 'My Courses', icon: BookOpen },
     { to: '/student/profile', label: 'Academic Profile', icon: UserRound },
@@ -30,8 +31,6 @@ export const NAV = {
     { to: '/admin/routine', label: 'Routine Management', icon: CalendarDays },
     { to: '/admin/assignments', label: 'Teacher Assignment', icon: ClipboardCheck },
     { to: '/admin/teachers', label: 'Teacher Management', icon: Users },
-    { to: '/admin/alerts', label: 'Security Alerts', icon: ShieldAlert },
-    { to: '/admin/settings', label: 'System Settings', icon: Settings },
   ],
   eee_system_admin: [
     { to: '/admin/eee-system-admin', label: 'EEE System Admin Dashboard', icon: LayoutDashboard, end: true },
@@ -39,8 +38,6 @@ export const NAV = {
     { to: '/admin/routine', label: 'Routine Management', icon: CalendarDays },
     { to: '/admin/assignments', label: 'Teacher Assignment', icon: ClipboardCheck },
     { to: '/admin/teachers', label: 'Teacher Management', icon: Users },
-    { to: '/admin/alerts', label: 'Security Alerts', icon: ShieldAlert },
-    { to: '/admin/settings', label: 'System Settings', icon: Settings },
   ],
   admin: [
     { to: '/admin/student-admin', label: 'CSE Student Admin Dashboard', icon: LayoutDashboard, end: true },
@@ -182,9 +179,6 @@ export default function DashboardLayout() {
             {!collapsed && (
               <div className="min-w-0 leading-tight">
                 <p className="font-display truncate text-base font-bold tracking-tight text-stone-900">Smart Attendance</p>
-                <p className="truncate text-xs font-medium text-stone-500">
-                  {user?.role === 'super_admin' ? 'KUET Central Portal' : user?.role === 'eee_system_admin' || user?.role === 'eee_admin' ? 'KUET EEE Portal' : 'KUET CSE Portal'}
-                </p>
               </div>
             )}
           </div>
@@ -252,32 +246,15 @@ export default function DashboardLayout() {
         </nav>
 
         {/* Telemetry Card */}
-        {!collapsed && (
+        {!collapsed && (user?.role === 'admin' || user?.role === 'eee_admin') && (
           <div className="mx-3.5 mb-2.5 shrink-0 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 shadow-2xs">
-            {user?.role === 'admin' || user?.role === 'eee_admin' ? (
-              <>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="flex items-center gap-1.5 text-stone-700 font-medium">
-                    <GraduationCap size={13} className="text-emerald-700" /> Student database
-                  </span>
-                  <span className="font-bold text-emerald-800">Active</span>
-                </div>
-                <p className="mt-1 text-xs text-stone-500">Admin-approved student roster</p>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="flex items-center gap-1.5 text-stone-700 font-medium">
-                    <Wifi size={13} className="text-emerald-700" /> Face Biometrics Node
-                  </span>
-                  <span className="font-bold text-emerald-800">Online</span>
-                </div>
-                <div className="mt-1 flex items-center justify-between text-xs text-stone-500">
-                  <span>Edge Sync Protocol</span>
-                  <span className="font-mono text-emerald-800 font-semibold">Active</span>
-                </div>
-              </>
-            )}
+            <div className="flex items-center justify-between text-xs">
+              <span className="flex items-center gap-1.5 text-stone-700 font-medium">
+                <GraduationCap size={13} className="text-emerald-700" /> Student database
+              </span>
+              <span className="font-bold text-emerald-800">Active</span>
+            </div>
+            <p className="mt-1 text-xs text-stone-500">Admin-approved student roster</p>
           </div>
         )}
 

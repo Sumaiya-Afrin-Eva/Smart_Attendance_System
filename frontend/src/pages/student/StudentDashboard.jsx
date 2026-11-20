@@ -1,26 +1,48 @@
 import { useState } from 'react'
 import {
-  BookOpen, CalendarCheck, CheckCircle2, ChevronRight, Sparkles,
+  BookOpen, CalendarCheck, ChevronRight, Sparkles,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
-import { useDashboard } from '../../lib/queries'
+import { useDashboard, useProfile } from '../../lib/queries'
 import { errorMessage } from '../../lib/api'
 import { formatPercent } from '../../lib/format'
 import { Badge, Card, EmptyState, ErrorBox, Spinner } from '../../components/ui'
 import SemesterSelect from '../../components/student/SemesterSelect'
+
+const DEPT_NAMES = {
+  CSE: 'Computer Science & Engineering',
+  EEE: 'Electrical & Electronic Engineering',
+  ECE: 'Electronics & Communication Engineering',
+  ME: 'Mechanical Engineering',
+  CE: 'Civil Engineering',
+  BME: 'Biomedical Engineering',
+  IEM: 'Industrial Engineering & Management',
+  MSE: 'Materials Science & Engineering',
+  URP: 'Urban & Regional Planning',
+  ARCH: 'Architecture',
+  BECM: 'Building Engineering & Construction Management',
+  LE: 'Leather Engineering',
+  TE: 'Textile Engineering',
+  CHE: 'Chemical Engineering',
+  MTE: 'Mechatronics Engineering',
+}
 
 export default function StudentDashboard() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [semester, setSemester] = useState()
   const { data, isLoading, error } = useDashboard(semester)
+  const { data: profile } = useProfile()
 
   if (isLoading) return <Spinner label="Loading attendance dashboard…" />
   if (error) return <ErrorBox>{errorMessage(error)}</ErrorBox>
 
   const { courses } = data
   const firstName = user.name.split(' ')[0]
+
+  const deptCode = (profile?.department || data?.department || 'CSE').toUpperCase()
+  const deptDisplayName = DEPT_NAMES[deptCode] || deptCode
 
   // Time-of-day greeting
   const hour = new Date().getHours()
@@ -38,7 +60,7 @@ export default function StudentDashboard() {
           <div className="max-w-xl">
             <div className="mb-3.5 inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-950/60 px-4 py-1.5 text-xs sm:text-sm font-semibold text-emerald-200 shadow-2xs">
               <Sparkles size={14} className="text-emerald-300" />
-              <span>KUET Computer Science &amp; Engineering</span>
+              <span>{deptDisplayName}</span>
             </div>
             <h2 className="font-display text-2xl sm:text-3xl font-bold tracking-tight text-white lg:text-4xl">
               {greeting}, {firstName} 👋
@@ -47,10 +69,6 @@ export default function StudentDashboard() {
 
           <div className="flex flex-col items-end gap-3.5">
             <SemesterSelect value={semester} onChange={setSemester} />
-            <div className="flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-950/40 px-3.5 py-1 text-xs sm:text-sm text-emerald-200 font-medium shadow-2xs">
-              <CheckCircle2 size={15} className="text-emerald-300" />
-              <span>Face Recognition Active</span>
-            </div>
           </div>
         </div>
       </div>

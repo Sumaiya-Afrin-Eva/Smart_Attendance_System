@@ -114,9 +114,6 @@ export default function Login() {
             <h1 className="font-display text-base sm:text-lg font-bold tracking-tight text-stone-900 leading-tight">
               {metaInfo.instName}
             </h1>
-            <p className="text-xs sm:text-sm font-medium text-stone-500">
-              {metaInfo.deptName}
-            </p>
           </div>
         </div>
 
@@ -293,22 +290,6 @@ export default function Login() {
                   </div>
                 )}
               </div>
-
-              {/* Student Features Checklist */}
-              <div className="space-y-1.5 pt-0.5 text-xs text-stone-500">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
-                  <span>Automated biometric facial attendance tracking</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
-                  <span>Real-time course percentage &amp; class logs</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
-                  <span>Instant warning alerts for low attendance</span>
-                </div>
-              </div>
             </div>
           )}
 
@@ -459,7 +440,7 @@ export default function Login() {
 
       {/* ─── Clean Institutional Footer ─── */}
       <footer className="mx-auto w-full max-w-5xl border-t border-stone-200/80 pt-4 text-center text-xs sm:text-sm text-stone-400">
-        &copy; {new Date().getFullYear()} {metaInfo.instName} · {metaInfo.deptName} · All rights reserved.
+        &copy; {new Date().getFullYear()} {metaInfo.instName} · All rights reserved.
       </footer>
     </div>
   )

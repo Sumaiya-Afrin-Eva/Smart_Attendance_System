@@ -576,6 +576,7 @@ def dashboard(semester: str | None = None, user: User = Depends(student_only), d
 
     return {
         "semester": semester,
+        "department": profile.department or "CSE",
         "marking_rule": RULE,
         "summary": {
             "courses": len(course_rows),

@@ -9,7 +9,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import ClassRoutine, Course, CourseTeacher, TeacherProfile, User
+from ..models import ClassRoutine, Course, CourseTeacher, Enrollment, TeacherProfile, User
 from ..security import get_current_user, require_role
 
 router = APIRouter(prefix="/api", tags=["routine"])
@@ -752,4 +752,190 @@ def get_teacher_routine(
         key=lambda r: (DAY_ORDER.get(r.day, 99), r.start_time or "")
     )
     return [_routine_out(r) for r in sorted_slots]
+
+
+@router.get("/student/routine")
+def get_student_routine(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role("student")),
+):
+    """Retrieve the logged-in student's weekly routine schedule for assigned/enrolled courses."""
+    profile = user.profile
+    if not profile:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Student profile not found")
+
+    student_dept = (profile.department or "").strip().upper()
+    student_section = (profile.section or "A").strip().upper()
+    current_semester = (profile.current_semester or "").strip()
+
+    # Get student enrolled courses
+    enrolled_courses = db.scalars(
+        select(Course).join(Enrollment, Enrollment.course_id == Course.id).where(
+            Enrollment.student_id == user.id
+        )
+    ).all()
+    enrolled_codes = {c.code.strip() for c in enrolled_courses if c.code}
+
+    # Query master routine slots
+    # Matches:
+    # 1. Course code is in enrolled_codes
+    # 2. Or department + semester match
+    query = select(ClassRoutine)
+    if student_dept:
+        query = query.where(func.upper(ClassRoutine.department) == student_dept)
+    if current_semester:
+        query = query.where(ClassRoutine.semester == current_semester)
+
+    all_dept_sem_slots = db.scalars(query).all()
+
+    student_slots = []
+    seen = set()
+
+    for s in all_dept_sem_slots:
+        # Check course code match if student has enrolled courses
+        if enrolled_codes and s.course_code and s.course_code.strip() not in enrolled_codes:
+            continue
+
+        # Check section match: slot section matches student's section or is universal/both
+        slot_sec = (s.section or "A").strip().upper()
+        if student_section and slot_sec not in {"BOTH", "ALL", "", student_section}:
+            continue
+
+        # Deduplicate identical day+time+course+teacher
+        key = (s.day, s.start_time, s.end_time, s.course_code, s.teacher_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        student_slots.append(s)
+
+    sorted_slots = sorted(
+        student_slots,
+        key=lambda r: (DAY_ORDER.get(r.day, 99), r.start_time or "")
+    )
+    return [_routine_out(r) for r in sorted_slots]
+
+
+@router.get("/student/routine/download")
+def download_student_routine_pdf(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role("student")),
+):
+    """Directly download the student's complete weekly routine as a PDF file."""
+    import os
+    os.environ.setdefault("MPLCONFIGDIR", "/tmp")
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    profile = user.profile
+    if not profile:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Student profile not found")
+
+    student_dept = (profile.department or "").strip().upper()
+    student_section = (profile.section or "A").strip().upper()
+    current_semester = (profile.current_semester or "").strip()
+
+    # Enrolled courses
+    enrolled_courses = db.scalars(
+        select(Course).join(Enrollment, Enrollment.course_id == Course.id).where(
+            Enrollment.student_id == user.id
+        )
+    ).all()
+    enrolled_codes = {c.code.strip() for c in enrolled_courses if c.code}
+
+    query = select(ClassRoutine)
+    if student_dept:
+        query = query.where(func.upper(ClassRoutine.department) == student_dept)
+    if current_semester:
+        query = query.where(ClassRoutine.semester == current_semester)
+
+    all_dept_sem_slots = db.scalars(query).all()
+
+    student_slots = []
+    seen = set()
+
+    for s in all_dept_sem_slots:
+        if enrolled_codes and s.course_code and s.course_code.strip() not in enrolled_codes:
+            continue
+        slot_sec = (s.section or "A").strip().upper()
+        if student_section and slot_sec not in {"BOTH", "ALL", "", student_section}:
+            continue
+        key = (s.day, s.start_time, s.end_time, s.course_code, s.teacher_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        student_slots.append(s)
+
+    sorted_slots = sorted(
+        student_slots,
+        key=lambda r: (DAY_ORDER.get(r.day, 99), r.start_time or "")
+    )
+
+    by_day = {d: [] for d in DAYS_OF_WEEK[:5]}  # Sunday - Thursday
+    for s in sorted_slots:
+        if s.day in by_day:
+            by_day[s.day].append(s)
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        for day in DAYS_OF_WEEK[:5]:
+            slots = by_day[day]
+            fig, ax = plt.subplots(figsize=(11.69, 8.27))  # A4 landscape
+            ax.axis("off")
+
+            # Page header
+            fig.text(0.08, 0.93, f"Class Routine — {day}", fontsize=17, weight="bold", color="#0f3422")
+            sub_meta = f"Student: {profile.full_name}   |   Roll: {profile.roll}   |   Dept: {student_dept}   |   Semester: {current_semester}   |   Section: {student_section}"
+            fig.text(0.08, 0.89, sub_meta, fontsize=9.5, color="#555555")
+
+            if not slots:
+                fig.text(0.5, 0.5, f"No classes scheduled on {day}", ha="center", fontsize=13, style="italic", color="#888888")
+            else:
+                table_data = []
+                for s in slots:
+                    c_type = s.course_type or "Theory"
+                    room_val = s.room if (s.room and s.room != "TBA") else "TBA"
+                    table_data.append([
+                        f"{s.start_time} – {s.end_time}",
+                        s.course_code,
+                        s.course_title or "Class Session",
+                        c_type,
+                        room_val,
+                        s.teacher_name or "—",
+                    ])
+
+                col_labels = ["Time Slot", "Course Code", "Course Title", "Type", "Room", "Faculty"]
+                table = ax.table(
+                    cellText=table_data,
+                    colLabels=col_labels,
+                    loc="center",
+                    cellLoc="left",
+                    colWidths=[0.18, 0.14, 0.32, 0.10, 0.08, 0.18],
+                )
+                table.auto_set_font_size(False)
+                table.set_fontsize(9)
+                table.scale(1, 1.8)
+
+                for (r, c), cell in table.get_celld().items():
+                    if r == 0:
+                        cell.set_facecolor("#0f3422")
+                        cell.set_text_props(color="white", weight="bold")
+                    else:
+                        cell.set_facecolor("#f9fbf9" if r % 2 == 0 else "#ffffff")
+
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close()
+
+    buf.seek(0)
+    filename = f"class_routine_{profile.roll}_{current_semester.replace('-', '_')}.pdf"
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
+
+
 

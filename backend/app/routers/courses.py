@@ -1387,6 +1387,8 @@ def list_teachers(db: Session = Depends(get_db), current_user: User = Depends(ad
         department_values = sorted({course.department for course in courses if course.department})
         department_name = prof.department or (department_values[0] if department_values else "CSE")
         display_status = prof.status or ("Active" if user.is_active else "Disabled")
+        semesters = sorted({course.semester for course in courses if course.semester})
+        sessions = sorted({course.session for course in courses if course.session})
         payload.append({
             "id": user.id,
             "teacher_id": prof.id,
@@ -1403,6 +1405,8 @@ def list_teachers(db: Session = Depends(get_db), current_user: User = Depends(ad
             "website": prof.website,
             "picture": user.picture,
             "courses": len(courses),
+            "semesters": semesters,
+            "sessions": sessions,
             "students": len(set(student_ids)),
             "status": display_status,
             "lastLogin": "Recently",
