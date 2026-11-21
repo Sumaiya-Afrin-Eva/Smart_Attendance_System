@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Bell, BookOpen, CalendarDays, ChevronLeft, ChevronRight, ClipboardCheck, FileText,
@@ -122,6 +122,14 @@ export default function DashboardLayout() {
   const { pathname } = useLocation()
   const [open, setOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
+  const mainRef = useRef(null)
+
+  useEffect(() => {
+    if (mainRef.current) {
+      mainRef.current.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+    }
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+  }, [pathname])
   const hasSuperBackup = typeof window !== 'undefined' && Boolean(localStorage.getItem('super_admin_backup_token'))
   const isImpersonated = user?.role !== 'super_admin' && hasSuperBackup
 
@@ -216,7 +224,13 @@ export default function DashboardLayout() {
               key={to}
               to={to}
               end={end}
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                setOpen(false)
+                if (mainRef.current) {
+                  mainRef.current.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+                }
+                window.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+              }}
               title={collapsed ? label : undefined}
               className={({ isActive }) =>
                 `group relative flex items-center gap-3.5 rounded-xl px-3.5 py-3 text-sm font-semibold transition-all duration-150 ${isActive
@@ -244,19 +258,6 @@ export default function DashboardLayout() {
             </NavLink>
           ))}
         </nav>
-
-        {/* Telemetry Card */}
-        {!collapsed && (user?.role === 'admin' || user?.role === 'eee_admin') && (
-          <div className="mx-3.5 mb-2.5 shrink-0 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 shadow-2xs">
-            <div className="flex items-center justify-between text-xs">
-              <span className="flex items-center gap-1.5 text-stone-700 font-medium">
-                <GraduationCap size={13} className="text-emerald-700" /> Student database
-              </span>
-              <span className="font-bold text-emerald-800">Active</span>
-            </div>
-            <p className="mt-1 text-xs text-stone-500">Admin-approved student roster</p>
-          </div>
-        )}
 
         {/* Logout Button (Replaced User Info) */}
         <div className="border-t border-[#f0eee6] p-3.5 mt-auto shrink-0">
@@ -345,7 +346,7 @@ export default function DashboardLayout() {
         </header>
 
         {/* Page Main Content */}
-        <main className="flex-1 overflow-y-auto p-5 sm:p-7 lg:p-9">
+        <main ref={mainRef} className="flex-1 overflow-y-auto p-5 sm:p-7 lg:p-9">
           <div className="mx-auto max-w-6xl animate-fade-in">
             <Outlet />
           </div>
