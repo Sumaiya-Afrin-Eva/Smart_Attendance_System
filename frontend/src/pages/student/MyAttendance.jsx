@@ -6,8 +6,8 @@ import {
 } from 'lucide-react'
 import { useAttendanceHistory, useDashboard } from '../../lib/queries'
 import { errorMessage } from '../../lib/api'
-import { formatDate, formatMarks, formatPercent, formatTime } from '../../lib/format'
-import { Badge, Card, EmptyState, ErrorBox, GRADE_TONE, STATUS_LABEL, STATUS_TONE, Spinner } from '../../components/ui'
+import { formatDate, formatPercent, formatTime } from '../../lib/format'
+import { Badge, Card, EmptyState, ErrorBox, STATUS_LABEL, STATUS_TONE, Spinner } from '../../components/ui'
 import SemesterSelect from '../../components/student/SemesterSelect'
 
 const FILTERS = ['all', 'present', 'late', 'absent']
@@ -99,13 +99,6 @@ export default function MyAttendance() {
               <span className="text-stone-500">Attendance: </span>
               <strong className="font-bold text-stone-900 font-mono">{formatPercent(selectedCourse.percent)}</strong>
             </div>
-            <div className="rounded-xl bg-white px-3.5 py-1.5 border border-stone-200 shadow-2xs">
-              <span className="text-stone-500">Marks: </span>
-              <strong className="font-bold text-stone-900 font-mono">{formatMarks(selectedCourse)}</strong>
-            </div>
-            <Badge tone={GRADE_TONE[selectedCourse.grade]} withDot>
-              {selectedCourse.label}
-            </Badge>
           </div>
         </div>
       )}

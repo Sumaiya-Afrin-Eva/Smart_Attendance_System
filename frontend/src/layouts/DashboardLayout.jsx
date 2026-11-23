@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
-  Bell, BookOpen, CalendarDays, ChevronLeft, ChevronRight, ClipboardCheck, FileText,
+  BookOpen, CalendarDays, ChevronLeft, ChevronRight, ClipboardCheck, FileText,
   GraduationCap, LayoutDashboard, LogOut, Menu, Radio, Settings,
-  ShieldAlert, UserRound, Users, X, Clock, Wifi, Scan,
+  ShieldAlert, UserRound, Users, X, Clock,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
@@ -14,7 +14,6 @@ export const NAV = {
     { to: '/teacher/my-courses', label: 'Your courses', icon: BookOpen },
     { to: '/teacher/courses', label: 'Manage Classes', icon: FileText },
     { to: '/teacher/history', label: 'Class History', icon: FileText },
-    { to: '/teacher/biometrics', label: 'Classroom Kiosk', icon: Scan },
     { to: '/teacher/analytics', label: 'Analytics', icon: Radio },
     { to: '/teacher/settings', label: 'Settings', icon: Settings },
   ],
@@ -53,6 +52,10 @@ const ROLE_BADGE = {
   admin: 'bg-blue-50 text-blue-800 border-blue-200/80',
   system_admin: 'bg-purple-50 text-purple-800 border-purple-200/80',
 }
+
+const SIDEBAR_MIN_WIDTH = 220
+const SIDEBAR_MAX_WIDTH = 420
+const SIDEBAR_DEFAULT_WIDTH = 288
 
 function getInitials(name = '') {
   return name
@@ -99,6 +102,8 @@ export default function DashboardLayout() {
   const { pathname } = useLocation()
   const [open, setOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
+  const [resizingSidebar, setResizingSidebar] = useState(false)
 
   const navItems = NAV[user?.role] || []
   const activeItem = navItems.find((item) => item.to === pathname)
@@ -118,6 +123,19 @@ export default function DashboardLayout() {
     month: 'short',
   })
 
+  const resizeSidebar = (event) => {
+    if (resizingSidebar) {
+      setSidebarWidth(Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, event.clientX)))
+    }
+  }
+
+  const resizeSidebarWithKeyboard = (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const change = event.key === 'ArrowLeft' ? -16 : 16
+    setSidebarWidth((width) => Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width + change)))
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-[#faf9f5] bg-warm-mesh text-stone-900">
       {/* Mobile backdrop */}
@@ -131,8 +149,9 @@ export default function DashboardLayout() {
 
       {/* Modern Light Sidebar */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r border-[#e7e5e0] bg-white transition-all duration-300 lg:static lg:translate-x-0 ${open ? 'translate-x-0' : '-translate-x-full'
-          } ${collapsed ? 'w-20' : 'w-72'}`}
+        className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r border-[#e7e5e0] bg-white ${resizingSidebar ? 'transition-none' : 'transition-all duration-300'} lg:relative lg:translate-x-0 ${open ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        style={{ width: `${collapsed ? 80 : sidebarWidth}px`, flex: '0 0 auto' }}
       >
         {/* Header Branding */}
         <div className={`flex h-18 items-center border-b border-[#f0eee6] px-5 ${collapsed ? 'justify-center' : 'justify-between'}`}>
@@ -214,34 +233,27 @@ export default function DashboardLayout() {
           ))}
         </nav>
 
-        {/* Telemetry Card */}
         {!collapsed && (
-          <div className="mx-3.5 mb-2.5 shrink-0 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 shadow-2xs">
-            {user?.role === 'admin' ? (
-              <>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="flex items-center gap-1.5 text-stone-700 font-medium">
-                    <GraduationCap size={13} className="text-emerald-700" /> Student database
-                  </span>
-                  <span className="font-bold text-emerald-800">Active</span>
-                </div>
-                <p className="mt-1 text-xs text-stone-500">Admin-approved student roster</p>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="flex items-center gap-1.5 text-stone-700 font-medium">
-                    <Wifi size={13} className="text-emerald-700" /> Face Biometrics Node
-                  </span>
-                  <span className="font-bold text-emerald-800">Online</span>
-                </div>
-                <div className="mt-1 flex items-center justify-between text-xs text-stone-500">
-                  <span>Edge Sync Protocol</span>
-                  <span className="font-mono text-emerald-800 font-semibold">Active</span>
-                </div>
-              </>
-            )}
-          </div>
+          <div
+            role="separator"
+            aria-label="Resize sidebar"
+            aria-orientation="vertical"
+            aria-valuemin={SIDEBAR_MIN_WIDTH}
+            aria-valuemax={SIDEBAR_MAX_WIDTH}
+            aria-valuenow={sidebarWidth}
+            tabIndex={0}
+            onPointerDown={(event) => {
+              event.preventDefault()
+              event.currentTarget.setPointerCapture(event.pointerId)
+              setResizingSidebar(true)
+            }}
+            onPointerMove={resizeSidebar}
+            onPointerUp={() => setResizingSidebar(false)}
+            onPointerCancel={() => setResizingSidebar(false)}
+            onLostPointerCapture={() => setResizingSidebar(false)}
+            onKeyDown={resizeSidebarWithKeyboard}
+            className="absolute right-0 top-0 z-10 hidden h-full w-1.5 touch-none cursor-col-resize select-none transition-colors hover:bg-emerald-500/25 focus-visible:bg-emerald-500/25 lg:block"
+          />
         )}
 
         {/* Logout Button (Replaced User Info) */}
@@ -285,15 +297,6 @@ export default function DashboardLayout() {
               <Clock size={14} className="text-emerald-700" />
               <span className="font-semibold">{currentDateStr}</span>
             </div>
-
-            {/* Notification Bell */}
-            {user?.role !== 'admin' && <button
-              aria-label="System notifications"
-              className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-700 shadow-2xs transition hover:border-stone-300 hover:bg-stone-50 hover:text-stone-900 cursor-pointer"
-            >
-              <Bell size={18} />
-              <span className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-emerald-600 ring-2 ring-white" />
-            </button>}
 
             <div className="hidden sm:block h-7 w-px bg-stone-200" aria-hidden="true" />
 

@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import {
-  Plus,
-  Search,
-} from 'lucide-react'
+import { Search } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
 
 const semesters = ['1-1', '1-2', '2-1', '2-2', '3-1', '3-2', '4-1', '4-2']
@@ -76,15 +73,6 @@ export default function StudentManagement() {
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-stone-500">Student records</p>
             <h2 className="mt-2 font-display text-3xl font-bold text-stone-900">Student management</h2>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => navigate('/admin/students/new')}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
-            >
-              <Plus size={16} /> Add student
-            </button>
           </div>
         </div>
       </section>

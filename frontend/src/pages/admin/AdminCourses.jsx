@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import {
   BookOpen,
   CalendarRange,
-  Check,
   Filter,
   GraduationCap,
   MapPin,
@@ -33,12 +32,8 @@ export default function AdminCourses() {
   const [meta, setMeta] = useState({ departments: [], semesters: [] })
   const [courses, setCourses] = useState([])
   const [teachers, setTeachers] = useState([])
-  const [students, setStudents] = useState([])
   const [search, setSearch] = useState('')
   const [form, setForm] = useState(emptyCourseForm)
-  const [studentFilter, setStudentFilter] = useState({ department: 'CSE', semester: '3-2', section: '', q: '' })
-  const [selectedCourseId, setSelectedCourseId] = useState('')
-  const [selectedStudentIds, setSelectedStudentIds] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
@@ -65,8 +60,6 @@ export default function AdminCourses() {
     })
   }, [courses, search])
 
-  const selectedCourse = courses.find((course) => String(course.id) === String(selectedCourseId)) || null
-
   useEffect(() => {
     async function loadMetaAndCourses() {
       try {
@@ -78,9 +71,6 @@ export default function AdminCourses() {
         setMeta(metaData)
         setCourses(courseData)
         setTeachers(teacherData || [])
-        if (courseData.length) {
-          setSelectedCourseId(String(courseData[0].id))
-        }
       } catch (error) {
         setNotice(errorMessage(error, 'Failed to load course data.'))
       } finally {
@@ -89,28 +79,6 @@ export default function AdminCourses() {
     }
     loadMetaAndCourses()
   }, [])
-
-  useEffect(() => {
-    async function loadStudents() {
-      try {
-        const { data } = await api.get('/admin/students', {
-          params: {
-            department: studentFilter.department || undefined,
-            semester: studentFilter.semester || undefined,
-            session: selectedCourse?.session || undefined,
-            section: studentFilter.section || undefined,
-            q: studentFilter.q || undefined,
-          },
-        })
-        const registered = data.filter((student) => student.user_id)
-        setStudents(registered)
-        setSelectedStudentIds((current) => current.filter((id) => registered.some((student) => String(student.user_id) === String(id))))
-      } catch (error) {
-        setNotice(errorMessage(error, 'Failed to load student list.'))
-      }
-    }
-    loadStudents()
-  }, [studentFilter, selectedCourseId, selectedCourse?.session])
 
   useEffect(() => {
     if (notice) {
@@ -135,7 +103,6 @@ export default function AdminCourses() {
       setCourses((current) => [data, ...current])
       setRecentlyAddedCourses((prev) => [data, ...prev])
       setForm(emptyCourseForm)
-      setSelectedCourseId(String(data.id))
       setNotice(`Course ${data.code} saved to the database.`)
     } catch (error) {
       setNotice(errorMessage(error, 'Course could not be saved.'))
@@ -171,23 +138,6 @@ export default function AdminCourses() {
     }
   }
 
-  const handleEnrollStudents = async () => {
-    if (!selectedCourseId || selectedStudentIds.length === 0) return
-    setNotice('')
-    try {
-      const course = courses.find((item) => String(item.id) === String(selectedCourseId))
-      const { data } = await api.post('/admin/student-enrollments', {
-        course_id: Number(selectedCourseId),
-        semester: course?.semester || studentFilter.semester,
-        student_ids: selectedStudentIds.map((id) => Number(id)),
-      })
-      setNotice(`${data.saved} students enrolled in ${course?.code ?? 'this course'}.`)
-      setSelectedStudentIds([])
-    } catch (error) {
-      setNotice(errorMessage(error, 'Student enrollment failed.'))
-    }
-  }
-
   const handleToggleCourseStatus = async (courseId, currentStatus) => {
     setNotice('')
     try {
@@ -206,9 +156,6 @@ export default function AdminCourses() {
     try {
       await api.delete(`/admin/courses/${id}`)
       setCourses((current) => current.filter((course) => String(course.id) !== String(id)))
-      if (String(selectedCourseId) === String(id)) {
-        setSelectedCourseId('')
-      }
       setNotice(`Course ${code} permanently deleted.`)
     } catch (error) {
       setNotice(errorMessage(error, 'Course deletion failed.'))
@@ -221,19 +168,10 @@ export default function AdminCourses() {
     try {
       await api.delete(`/admin/courses/all`)
       setCourses([])
-      setSelectedCourseId('')
       setNotice(`All courses permanently deleted.`)
     } catch (error) {
       setNotice(errorMessage(error, 'Course deletion failed.'))
     }
-  }
-
-  const toggleStudent = (studentId) => {
-    setSelectedStudentIds((current) =>
-      current.includes(studentId)
-        ? current.filter((id) => id !== studentId)
-        : [...current, studentId],
-    )
   }
 
   const toneClass = {
@@ -389,64 +327,6 @@ export default function AdminCourses() {
       {notice && (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 shadow-sm">{notice}</div>
       )}
-
-      <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h3 className="font-display text-2xl font-bold text-stone-900">Student enrollment</h3>
-            <p className="mt-1 text-sm text-stone-500">Assign eligible students to a course by department, semester and term.</p>
-          </div>
-          <div className="flex items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-stone-600">
-            <Search size={16} />
-            <input value={studentFilter.q} onChange={(event) => setStudentFilter((current) => ({ ...current, q: event.target.value }))} type="text" placeholder="Search roll / student" className="w-52 bg-transparent text-sm text-stone-700 outline-none placeholder:text-stone-400" />
-          </div>
-        </div>
-
-        <div className="mt-5 grid gap-3 md:grid-cols-4">
-          <select value={studentFilter.department} onChange={(event) => setStudentFilter((current) => ({ ...current, department: event.target.value }))} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
-            {meta.departments.map((department) => <option key={department} value={department}>{department}</option>)}
-          </select>
-          <select value={studentFilter.semester} onChange={(event) => setStudentFilter((current) => ({ ...current, semester: event.target.value }))} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
-            {(meta.semesters.length ? meta.semesters : semesterOptions).map((semester) => (
-              <option key={semester} value={semester}>{semester}</option>
-            ))}
-          </select>
-          <select value={studentFilter.section} onChange={(event) => setStudentFilter((current) => ({ ...current, section: event.target.value }))} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
-            <option value="">All sections</option>
-            {['A', 'B', 'C', 'D'].map((section) => <option key={section} value={section}>{section}</option>)}
-          </select>
-          <button onClick={handleEnrollStudents} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60" disabled={selectedStudentIds.length === 0 || !selectedCourseId}>
-            <Check size={16} /> Enroll selected
-          </button>
-        </div>
-
-        <div className="mt-6 overflow-hidden rounded-2xl border border-stone-200">
-          <div className="grid gap-px bg-stone-200 md:grid-cols-6">
-            <div className="bg-stone-50 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500">Select</div>
-            <div className="bg-stone-50 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500">Roll</div>
-            <div className="bg-stone-50 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500">Name</div>
-            <div className="bg-stone-50 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500">Department</div>
-            <div className="bg-stone-50 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500">Semester</div>
-            <div className="bg-stone-50 px-4 py-3 text-[11px] font-bold uppercase tracking-[0.2em] text-stone-500">Section</div>
-          </div>
-          {students.length === 0 ? (
-            <div className="bg-white p-6 text-sm text-stone-500">No students matched these filters.</div>
-          ) : (
-            students.map((student) => (
-              <div key={student.user_id} className="grid gap-px bg-stone-200 md:grid-cols-6">
-                <div className="bg-white px-4 py-3">
-                  <input type="checkbox" checked={selectedStudentIds.includes(student.user_id)} onChange={() => toggleStudent(student.user_id)} className="h-4 w-4 rounded border-stone-300 text-emerald-700 focus:ring-emerald-500" />
-                </div>
-                <div className="bg-white px-4 py-3 text-sm font-semibold text-stone-900">{student.roll}</div>
-                <div className="bg-white px-4 py-3 text-sm text-stone-900">{student.full_name}</div>
-                <div className="bg-white px-4 py-3 text-sm text-stone-700">{student.department}</div>
-                <div className="bg-white px-4 py-3 text-sm text-stone-700">{student.current_semester}</div>
-                <div className="bg-white px-4 py-3 text-sm text-stone-700">{student.section ?? '—'}</div>
-              </div>
-            ))
-          )}
-        </div>
-      </section>
 
       <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

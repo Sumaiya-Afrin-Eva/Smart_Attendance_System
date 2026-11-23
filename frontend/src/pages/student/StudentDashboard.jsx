@@ -57,31 +57,32 @@ export default function StudentDashboard() {
 
       <Card
         title="Today's class attendance"
-        subtitle="Attendance recorded by the classroom kiosk"
+        subtitle="Today's classes from your routine"
         icon={CalendarCheck}
       >
         {data.today?.length ? (
           <ul className="divide-y divide-[#f0eee6]">
             {data.today.map((item) => (
-              <li key={item.session_id} className="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
+              <li key={item.routine_id} className="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
                 <div>
                   <p className="font-semibold text-stone-900">{item.course_title}</p>
-                  <p className="mt-1 text-xs font-medium text-stone-500">{item.course_code}</p>
+                  <p className="mt-1 text-xs font-medium text-stone-500">
+                    {item.course_code}
+                    {item.start_time && item.end_time ? ` · ${item.start_time} - ${item.end_time}` : ''}
+                  </p>
                 </div>
                 <span className={`rounded-full px-3 py-1 text-xs font-bold ${
                   item.status === 'present'
                     ? 'bg-emerald-100 text-emerald-800'
-                    : item.status === 'late'
-                    ? 'bg-amber-100 text-amber-800'
                     : 'bg-rose-100 text-rose-800'
                 }`}>
-                  {item.status === 'present' ? 'Present' : item.status === 'late' ? 'Late' : 'Absent'}
+                  {item.status === 'present' ? 'Present' : 'Absent'}
                 </span>
               </li>
             ))}
           </ul>
         ) : (
-          <div className="px-6 py-5 text-sm text-stone-500">No class attendance has been recorded today.</div>
+          <div className="px-6 py-5 text-sm text-stone-500">No classes are scheduled for you today.</div>
         )}
       </Card>
 
