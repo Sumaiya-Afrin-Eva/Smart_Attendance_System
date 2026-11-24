@@ -181,7 +181,7 @@ export default function DashboardLayout() {
     }
     window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
   }, [pathname])
-  const hasSuperBackup = typeof window !== 'undefined' && Boolean(localStorage.getItem('super_admin_backup_token'))
+  const hasSuperBackup = typeof window !== 'undefined' && Boolean(sessionStorage.getItem('super_admin_backup_token'))
   const isImpersonated = user?.role !== 'super_admin' && hasSuperBackup
 
   const handleReturnToSuper = async () => {

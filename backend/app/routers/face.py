@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from ..database import get_db
+from ..schedule_utils import approved_schedule_changes, effective_routine_times
 from ..models import (
     Attendance,
     ClassRoutine,
@@ -164,6 +165,7 @@ class RecognizePayload(BaseModel):
 class KioskOpenRequest(BaseModel):
     course_code: str | None = Field(default=None, max_length=20)
     kiosk_id: str | None = Field(default=None, max_length=50)
+    refresh_only: bool = False
 
 
 class KioskQrScanRequest(BaseModel):
@@ -329,10 +331,13 @@ def _resolve_active_class_for_student(db: Session, student: User, now: datetime)
             func.lower(func.trim(ClassRoutine.day)) == today,
         )
     ).all()
+    schedule_changes = approved_schedule_changes(db, now.date())
 
     matches: list[tuple[int, int, int, int, ClassRoutine, Course, int | None]] = []
     for routine in routines:
-        if not _is_in_time_window(routine.start_time, routine.end_time, current_minutes, grace=KIOSK_TIME_GRACE_MINUTES):
+        start_time, end_time = effective_routine_times(routine, schedule_changes)
+        grace = 0 if routine.id in schedule_changes else KIOSK_TIME_GRACE_MINUTES
+        if not _is_in_time_window(start_time, end_time, current_minutes, grace=grace):
             continue
 
         course = db.scalar(
@@ -370,7 +375,7 @@ def _resolve_active_class_for_student(db: Session, student: User, now: datetime)
         session_match = 1 if (profile.session or "").strip() and (routine.session or "").strip() and (profile.session or "").strip() == (routine.session or "").strip() else 0
         teacher_id = _resolve_teacher_for_routine(db, routine, course)
         teacher_match = 1 if teacher_id is not None else 0
-        time_score = _time_distance_to_window(routine.start_time, routine.end_time, current_minutes)
+        time_score = _time_distance_to_window(start_time, end_time, current_minutes)
         matches.append((section_match, session_match, teacher_match, time_score, routine, course, teacher_id))
 
     if not matches:
@@ -681,8 +686,11 @@ def open_kiosk(
             )
 
         course = courses[0]
-        students = _eligible_students(db, course.id)
-        students = _eligible_students(db, course.id, department=kiosk_department)
+        students = (
+            _eligible_students(db, department=kiosk_department)
+            if kiosk_department
+            else _eligible_students(db, course.id)
+        )
         if not students:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -690,6 +698,7 @@ def open_kiosk(
             )
         now = datetime.now()
         current_minutes = now.hour * 60 + now.minute
+        schedule_changes = approved_schedule_changes(db, now.date())
         candidate_routines = db.scalars(
             select(ClassRoutine)
             .where(
@@ -700,16 +709,16 @@ def open_kiosk(
             )
         ).all()
         if candidate_routines:
-            scored = [
-                (_time_distance_to_window(r.start_time, r.end_time, current_minutes), r)
-                for r in candidate_routines
-                if _is_in_time_window(r.start_time, r.end_time, current_minutes)
-            ]
+            scored = []
+            for routine in candidate_routines:
+                start_time, end_time = effective_routine_times(routine, schedule_changes)
+                if _is_in_time_window(start_time, end_time, current_minutes):
+                    scored.append((_time_distance_to_window(start_time, end_time, current_minutes), routine))
             if not scored:
-                scored = [
-                    (_time_distance_to_window(r.start_time, r.end_time, current_minutes), r)
-                    for r in candidate_routines
-                ]
+                scored = []
+                for routine in candidate_routines:
+                    start_time, end_time = effective_routine_times(routine, schedule_changes)
+                    scored.append((_time_distance_to_window(start_time, end_time, current_minutes), routine))
             _, selected_routine = min(scored, key=lambda item: item[0])
         else:
             selected_routine = None
@@ -718,6 +727,7 @@ def open_kiosk(
         now = datetime.now()
         current_day = now.strftime("%A").strip().lower()
         current_minutes = now.hour * 60 + now.minute
+        schedule_changes = approved_schedule_changes(db, now.date())
         active_routines = db.scalars(
             select(ClassRoutine).where(func.lower(func.trim(ClassRoutine.day)) == current_day)
         ).all()
@@ -731,7 +741,10 @@ def open_kiosk(
         active_candidates = []
         for grace in (0, KIOSK_TIME_GRACE_MINUTES):
             for routine in active_routines:
-                if not _is_in_time_window(routine.start_time, routine.end_time, current_minutes, grace=grace):
+                if routine.id in schedule_changes and grace:
+                    continue
+                start_time, end_time = effective_routine_times(routine, schedule_changes)
+                if not _is_in_time_window(start_time, end_time, current_minutes, grace=grace):
                     continue
                 course = db.scalar(
                     select(Course)
@@ -744,7 +757,7 @@ def open_kiosk(
                 )
                 if course is None:
                     continue
-                time_score = _time_distance_to_window(routine.start_time, routine.end_time, current_minutes)
+                time_score = _time_distance_to_window(start_time, end_time, current_minutes)
                 entry = (time_score, routine, course)
                 if entry not in active_candidates:
                     active_candidates.append(entry)
@@ -766,8 +779,9 @@ def open_kiosk(
                 )
                 if course is None:
                     continue
+                start_time, end_time = effective_routine_times(routine, schedule_changes)
                 nearest_candidates.append(
-                    (_time_distance_to_window(routine.start_time, routine.end_time, current_minutes), routine, course)
+                    (_time_distance_to_window(start_time, end_time, current_minutes), routine, course)
                 )
 
             if nearest_candidates:
@@ -796,11 +810,15 @@ def open_kiosk(
         else:
             _, selected_routine, course = min(active_candidates, key=lambda item: item[0])
 
-        students = _eligible_students(db, course.id, department=kiosk_department)
+        students = (
+            _eligible_students(db, department=kiosk_department)
+            if kiosk_department
+            else _eligible_students(db, course.id)
+        )
         teacher_id = _resolve_teacher_for_routine(db, selected_routine, course) if selected_routine is not None else course.teacher_id
 
     face_svc = get_face_service()
-    if background_tasks and students:
+    if background_tasks and students and not payload.refresh_only:
         background_tasks.add_task(_prepare_kiosk_gallery, face_svc, students)
 
     now = datetime.now()
@@ -817,7 +835,7 @@ def open_kiosk(
         )
         .order_by(ClassSession.start_at)
     )
-    if class_session is None:
+    if class_session is None and not payload.refresh_only:
         session_start_at = now
         if selected_routine and selected_routine.start_time:
             for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p"):
@@ -838,19 +856,20 @@ def open_kiosk(
             status="completed",
         )
         db.add(class_session)
-    else:
+    elif class_session is not None and not payload.refresh_only:
         class_session.status = "completed"
         class_session.end_at = max(class_session.start_at, now)
         class_session.students = len(students)
 
-    db.commit()
-    db.refresh(class_session)
+    if not payload.refresh_only:
+        db.commit()
+        db.refresh(class_session)
     return {
-        "session_id": class_session.id,
+        "session_id": class_session.id if class_session is not None else None,
         "course": {"id": course.id, "code": course.code, "title": course.title, "semester": course.semester},
-        "date": class_session.start_at.date().isoformat(),
+        "date": class_session.start_at.date().isoformat() if class_session is not None else now.date().isoformat(),
         "student_count": len(students),
-        "teacher_id": class_session.teacher_id,
+        "teacher_id": class_session.teacher_id if class_session is not None else teacher_id,
     }
 
 
@@ -941,7 +960,11 @@ async def scan_kiosk(
     if course is None:
         course = db.scalar(select(Course).where(Course.is_active.is_(True)).order_by(Course.id))
 
-    candidates = _eligible_students(db, course.id, department=kiosk_department) if course is not None else _eligible_students(db, department=kiosk_department)
+    candidates = (
+        _eligible_students(db, department=kiosk_department)
+        if kiosk_department
+        else (_eligible_students(db, course.id) if course is not None else _eligible_students(db))
+    )
     student_scores: list[tuple[float, StudentProfile, User]] = []
     for roster, profile, matched_user in candidates:
         try:

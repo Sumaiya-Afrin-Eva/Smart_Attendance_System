@@ -1,17 +1,33 @@
 import io
 import re
-from datetime import datetime
+from datetime import date, datetime
 import openpyxl
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..config import settings, BASE_DIR
 from ..database import get_db
-from ..models import AdminSetting, ClassRoutine, Course, CourseTeacher, Enrollment, TeacherProfile, User
+from ..models import (
+    AdminSetting,
+    ClassRoutine,
+    ClassScheduleChangeRequest,
+    Course,
+    CourseTeacher,
+    Enrollment,
+    TeacherProfile,
+    User,
+)
+from ..schedule_utils import (
+    approved_schedule_changes,
+    effective_routine_times,
+    normalize_schedule_time,
+    teacher_routine_slots,
+    time_to_minutes,
+)
 from ..security import get_current_user, require_role
 
 router = APIRouter(prefix="/api", tags=["routine"])
@@ -57,6 +73,32 @@ class RoutineSlotIn(BaseModel):
     teacher_name: str | None = None
     room: str | None = None
     session: str | None = "2025-2026"
+
+
+class ScheduleChangeRequestIn(BaseModel):
+    routine_id: int
+    target_date: date
+    requested_start_time: str
+    requested_end_time: str
+
+    @field_validator("requested_start_time", "requested_end_time")
+    @classmethod
+    def normalize_time(cls, value: str) -> str:
+        try:
+            return normalize_schedule_time(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+class ScheduleChangeDecisionIn(BaseModel):
+    status: str
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str) -> str:
+        if value not in {"approved", "rejected"}:
+            raise ValueError("Status must be approved or rejected.")
+        return value
 
 
 def _routine_out(r: ClassRoutine) -> dict:
@@ -1179,6 +1221,219 @@ def get_teacher_routine(
         key=lambda r: (DAY_ORDER.get(r.day, 99), r.start_time or "")
     )
     return [_routine_out(r) for r in sorted_slots]
+
+
+def _teacher_routine_slots(db: Session, user: User) -> list[ClassRoutine]:
+    return teacher_routine_slots(db, user)
+
+
+def _schedule_change_out(
+    request: ClassScheduleChangeRequest,
+    routine: ClassRoutine,
+    teacher: User,
+) -> dict:
+    return {
+        "id": request.id,
+        "routineId": routine.id,
+        "targetDate": request.target_date.isoformat(),
+        "day": routine.day,
+        "courseCode": routine.course_code,
+        "courseTitle": routine.course_title,
+        "department": routine.department,
+        "semester": routine.semester,
+        "section": routine.section,
+        "room": routine.room,
+        "teacherName": teacher.name,
+        "originalStartTime": routine.start_time,
+        "originalEndTime": routine.end_time,
+        "requestedStartTime": request.requested_start_time,
+        "requestedEndTime": request.requested_end_time,
+        "status": request.status,
+        "createdAt": request.created_at.isoformat() if request.created_at else None,
+        "reviewedAt": request.reviewed_at.isoformat() if request.reviewed_at else None,
+    }
+
+
+@router.post("/teacher/schedule-change-requests")
+def create_schedule_change_request(
+    body: ScheduleChangeRequestIn,
+    db: Session = Depends(get_db),
+    teacher: User = Depends(require_role("teacher")),
+):
+    routine = db.get(ClassRoutine, body.routine_id)
+    if routine is None or routine not in _teacher_routine_slots(db, teacher):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Your routine slot was not found.")
+
+    if body.target_date < date.today():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Choose today or a future class date.")
+    if _normalize_day(body.target_date.strftime("%A")) != _normalize_day(routine.day):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The selected date must match this class's routine day.")
+
+    start_minutes = time_to_minutes(body.requested_start_time)
+    end_minutes = time_to_minutes(body.requested_end_time)
+    if start_minutes is None or end_minutes is None or start_minutes >= end_minutes:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The new end time must be after the new start time.")
+    now = datetime.now()
+    if body.target_date == now.date() and end_minutes <= now.hour * 60 + now.minute:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The requested class time has already passed.")
+
+    existing = db.scalar(
+        select(ClassScheduleChangeRequest).where(
+            ClassScheduleChangeRequest.routine_id == routine.id,
+            ClassScheduleChangeRequest.target_date == body.target_date,
+            ClassScheduleChangeRequest.status.in_(("pending", "approved")),
+        )
+    )
+    if existing is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A pending or approved schedule change already exists for this class date.",
+        )
+
+    request = ClassScheduleChangeRequest(
+        routine_id=routine.id,
+        teacher_id=teacher.id,
+        target_date=body.target_date,
+        requested_start_time=body.requested_start_time,
+        requested_end_time=body.requested_end_time,
+    )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+    return _schedule_change_out(request, routine, teacher)
+
+
+@router.get("/teacher/schedule-change-requests")
+def list_teacher_schedule_change_requests(
+    db: Session = Depends(get_db),
+    teacher: User = Depends(require_role("teacher")),
+):
+    rows = db.execute(
+        select(ClassScheduleChangeRequest, ClassRoutine, User)
+        .join(ClassRoutine, ClassRoutine.id == ClassScheduleChangeRequest.routine_id)
+        .join(User, User.id == ClassScheduleChangeRequest.teacher_id)
+        .where(ClassScheduleChangeRequest.teacher_id == teacher.id)
+        .order_by(ClassScheduleChangeRequest.target_date.desc(), ClassScheduleChangeRequest.id.desc())
+    ).all()
+    return [_schedule_change_out(request, routine, row_teacher) for request, routine, row_teacher in rows]
+
+
+@router.get("/admin/schedule-change-requests")
+def list_admin_schedule_change_requests(
+    request_status: str | None = None,
+    db: Session = Depends(get_db),
+    admin: User = Depends(admin_or_sysadmin),
+):
+    query = (
+        select(ClassScheduleChangeRequest, ClassRoutine, User)
+        .join(ClassRoutine, ClassRoutine.id == ClassScheduleChangeRequest.routine_id)
+        .join(User, User.id == ClassScheduleChangeRequest.teacher_id)
+    )
+    scoped_dept = _dept_for_role(admin)
+    if scoped_dept:
+        query = query.where(ClassRoutine.department == scoped_dept)
+    if request_status:
+        if request_status not in {"pending", "approved", "rejected"}:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown schedule change status.")
+        query = query.where(ClassScheduleChangeRequest.status == request_status)
+
+    rows = db.execute(
+        query.order_by(ClassScheduleChangeRequest.target_date.asc(), ClassScheduleChangeRequest.id.asc())
+    ).all()
+    return [_schedule_change_out(request, routine, teacher) for request, routine, teacher in rows]
+
+
+def _has_schedule_conflict(
+    db: Session,
+    request: ClassScheduleChangeRequest,
+    routine: ClassRoutine,
+) -> bool:
+    proposed_start = time_to_minutes(request.requested_start_time)
+    proposed_end = time_to_minutes(request.requested_end_time)
+    if proposed_start is None or proposed_end is None:
+        return True
+
+    routines = db.scalars(
+        select(ClassRoutine).where(
+            ClassRoutine.department == routine.department,
+            func.lower(func.trim(ClassRoutine.day)) == request.target_date.strftime("%A").lower(),
+            ClassRoutine.id != routine.id,
+        )
+    ).all()
+    changes = approved_schedule_changes(db, request.target_date)
+    teacher_name = (routine.teacher_name or "").strip().casefold()
+    room = (routine.room or "").strip().casefold()
+    section = (routine.section or "").strip().casefold()
+
+    for other in routines:
+        other_section = (other.section or "").strip().casefold()
+        same_section = other.semester == routine.semester and (
+            section == "both" or other_section == "both" or section == other_section
+        )
+        same_teacher = bool(teacher_name and teacher_name == (other.teacher_name or "").strip().casefold())
+        same_room = bool(room and room == (other.room or "").strip().casefold())
+        if not (same_section or same_teacher or same_room):
+            continue
+
+        other_start, other_end = effective_routine_times(other, changes)
+        other_start_minutes = time_to_minutes(other_start)
+        other_end_minutes = time_to_minutes(other_end)
+        if (
+            other_start_minutes is not None
+            and other_end_minutes is not None
+            and proposed_start < other_end_minutes
+            and other_start_minutes < proposed_end
+        ):
+            return True
+    return False
+
+
+@router.patch("/admin/schedule-change-requests/{request_id}")
+def decide_schedule_change_request(
+    request_id: int,
+    body: ScheduleChangeDecisionIn,
+    db: Session = Depends(get_db),
+    admin: User = Depends(admin_or_sysadmin),
+):
+    request = db.get(ClassScheduleChangeRequest, request_id)
+    if request is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Schedule change request not found.")
+    routine = db.get(ClassRoutine, request.routine_id)
+    if routine is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "The requested routine slot no longer exists.")
+
+    scoped_dept = _dept_for_role(admin)
+    if scoped_dept and routine.department != scoped_dept:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"You can only review {scoped_dept} schedule requests.")
+    if request.status != "pending":
+        raise HTTPException(status.HTTP_409_CONFLICT, "This schedule change request has already been reviewed.")
+
+    if body.status == "approved":
+        if request.target_date < date.today():
+            raise HTTPException(status.HTTP_409_CONFLICT, "Past schedule changes cannot be approved.")
+        existing = db.scalar(
+            select(ClassScheduleChangeRequest).where(
+                ClassScheduleChangeRequest.routine_id == routine.id,
+                ClassScheduleChangeRequest.target_date == request.target_date,
+                ClassScheduleChangeRequest.status == "approved",
+                ClassScheduleChangeRequest.id != request.id,
+            )
+        )
+        if existing is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "Another schedule change is already approved for this class date.")
+        if _has_schedule_conflict(db, request, routine):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "The requested time conflicts with another class, teacher, or room schedule.",
+            )
+
+    request.status = body.status
+    request.reviewed_by = admin.id
+    request.reviewed_at = datetime.now()
+    db.commit()
+    db.refresh(request)
+    teacher = db.get(User, request.teacher_id)
+    return _schedule_change_out(request, routine, teacher)
 
 
 @router.get("/student/routine")

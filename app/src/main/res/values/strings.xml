@@ -12,6 +12,8 @@
     <string name="google_sign_in_failed">Google sign-in failed (code %1$d).</string>
     <string name="reconnecting_account">Reconnecting your Google account…</string>
     <string name="google_token_missing">Google did not provide an ID token. Check the OAuth client configuration.</string>
+    <string name="local_network_permission_required">Allow local network access to connect to the attendance server.</string>
+    <string name="local_network_permission_denied">Local network access is required. Enable it in this app’s permissions in Android Settings.</string>
     <string name="signing_in">Verifying your KUET account…</string>
     <string name="student_account_only">Only student accounts can use this attendance app.</string>
     <string name="registration_required">Complete student profile and face enrollment in the web portal before using QR attendance.</string>

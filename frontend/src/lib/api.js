@@ -9,9 +9,9 @@ const api = axios.create({
   timeout: 180000,
 })
 
-// Attach the login token to every request
+// Attach the tab-scoped login token to every request
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem(TOKEN_KEY)
+  const token = sessionStorage.getItem(TOKEN_KEY)
   if (token) config.headers.Authorization = `Bearer ${token}`
   config._retryCount = config._retryCount ?? 0
   return config

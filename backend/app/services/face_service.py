@@ -283,7 +283,10 @@ class FaceService:
                 if not result.multi_face_landmarks or len(result.multi_face_landmarks) != 1:
                     faces = self.detect_faces(frame)
                     if len(faces) != 1:
-                        self._liveness.pop(session_key, None)
+                        now = time.monotonic()
+                        existing = self._liveness.get(session_key)
+                        if existing and now - existing.get("last_seen_at", 0) > 2.0:
+                            self._liveness.pop(session_key, None)
                         return {
                             "human": False,
                             "blink_detected": False,
@@ -379,7 +382,10 @@ class FaceService:
 
         faces = self.detect_faces(frame)
         if len(faces) != 1:
-            self._liveness.pop(session_key, None)
+            now = time.monotonic()
+            existing = self._liveness.get(session_key)
+            if existing and now - existing.get("last_seen_at", 0) > 2.0:
+                self._liveness.pop(session_key, None)
             return {
                 "human": False,
                 "blink_detected": False,
