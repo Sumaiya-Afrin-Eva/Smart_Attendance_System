@@ -987,6 +987,7 @@ async def scan_kiosk(
         }
 
     similarity, profile, matched_user = max(student_scores, key=lambda item: item[0])
+    logger.info("Kiosk scan best match: roll=%s similarity=%.4f threshold=%.4f", profile.roll, similarity, threshold)
     if similarity < threshold:
         return {
             "matched": False,
