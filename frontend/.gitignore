@@ -24,3 +24,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.gradle/
+attendance.db-shm
+attendance.db-wal

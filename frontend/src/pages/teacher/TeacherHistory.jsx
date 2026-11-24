@@ -1,88 +1,219 @@
-import { useMemo, useState, useEffect } from 'react'
-import { Clock3, BookOpen, Users, ArrowRight, CheckCircle2, ShieldCheck } from 'lucide-react'
-import api from '../../lib/api'
+import { useEffect, useMemo, useState } from 'react'
+import { ArrowLeft, ArrowRight, BookOpen } from 'lucide-react'
+import { useNavigate, useParams } from 'react-router-dom'
+import api, { errorMessage } from '../../lib/api'
+
+const CLASS_SLOT_COUNT = 15
+
+function sortStudentsByRoll(students) {
+  return [...students].sort((a, b) =>
+    String(a.roll).localeCompare(String(b.roll), undefined, { numeric: true, sensitivity: 'base' })
+  )
+}
 
 export default function TeacherHistory() {
-  const [sessions, setSessions] = useState([])
+  const { courseId } = useParams()
+  const navigate = useNavigate()
+  const [sheets, setSheets] = useState([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [selectedSession, setSelectedSession] = useState('All Sessions')
-  const [academicSessions, setAcademicSessions] = useState(['All Sessions'])
-  const [expandedLedgerId, setExpandedLedgerId] = useState(null)
-  const [ledgerState, setLedgerState] = useState({})
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
-    async function loadHistory() {
+    let cancelled = false
+
+    async function loadSheets() {
+      setLoading(true)
+      setError('')
       try {
-        const { data } = await api.get('/teacher/history')
-        setSessions(data)
-        if (data.length > 0) {
-          setExpandedLedgerId(data[0].id)
-          const foundSessions = ['All Sessions', ...new Set(data.map((d) => d.session).filter(Boolean))]
-          setAcademicSessions(foundSessions)
-        }
-      } catch (err) {
-        console.error('Failed to load teacher history', err)
+        const { data } = await api.get('/teacher/attendance-sheets')
+        if (!cancelled) setSheets(data)
+      } catch (requestError) {
+        if (!cancelled) setError(errorMessage(requestError, 'Could not load course attendance sheets.'))
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
-    loadHistory()
-  }, [])
 
-  const filteredSessions = useMemo(() => {
-    if (selectedSession === 'All Sessions') return sessions
-    return sessions.filter((entry) => entry.session === selectedSession)
-  }, [sessions, selectedSession])
+    loadSheets()
+    return () => { cancelled = true }
+  }, [reloadKey])
 
-  const toggleLedger = (id) => {
-    setExpandedLedgerId((current) => (current === id ? null : id))
-  }
+  const academicSessions = useMemo(
+    () => ['All Sessions', ...new Set(sheets.map((sheet) => sheet.session).filter(Boolean))],
+    [sheets]
+  )
+  const filteredSheets = useMemo(
+    () => selectedSession === 'All Sessions'
+      ? sheets
+      : sheets.filter((sheet) => sheet.session === selectedSession),
+    [sheets, selectedSession]
+  )
+  const selectedCourse = useMemo(
+    () => sheets.find((sheet) => String(sheet.courseId) === courseId),
+    [sheets, courseId]
+  )
+  const sortedStudents = useMemo(
+    () => selectedCourse ? sortStudentsByRoll(selectedCourse.students) : [],
+    [selectedCourse]
+  )
 
-  const getLedgerState = (sessionId) => ({
-    searchTerm: '',
-    sortOrder: 'asc',
-    ...ledgerState[sessionId],
-  })
+  const retryLoad = () => setReloadKey((key) => key + 1)
 
-  const updateLedgerState = (sessionId, patch) => {
-    setLedgerState((current) => ({
-      ...current,
-      [sessionId]: {
-        ...getLedgerState(sessionId),
-        ...patch,
-      },
-    }))
-  }
+  if (courseId) {
+    return (
+      <div className="space-y-5">
+        <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs sm:p-6">
+          <button
+            type="button"
+            onClick={() => navigate('/teacher/history')}
+            className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-emerald-800 hover:text-emerald-700"
+          >
+            <ArrowLeft size={16} />
+            All courses
+          </button>
 
-  const getSortedAttendees = (attendees, sortOrder) => {
-    const normalized = [...attendees]
-    normalized.sort((a, b) => {
-      const rollA = Number(a.roll)
-      const rollB = Number(b.roll)
-      return sortOrder === 'asc' ? rollA - rollB : rollB - rollA
-    })
-    return normalized
+          {loading ? (
+            <p className="py-8 text-center text-sm text-stone-500">Loading attendance sheet...</p>
+          ) : error ? (
+            <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-800">
+              <span>{error}</span>
+              <button type="button" onClick={retryLoad} className="font-semibold underline">Try again</button>
+            </div>
+          ) : selectedCourse ? (
+            <>
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                    {selectedCourse.session} · {selectedCourse.semester}, Section {selectedCourse.section}
+                  </p>
+                  <h2 className="mt-2 font-display text-2xl font-bold text-stone-900">
+                    {selectedCourse.courseCode}: {selectedCourse.courseTitle}
+                  </h2>
+                </div>
+                <div className="flex gap-5 text-sm">
+                  <div>
+                    <p className="text-xs text-stone-500">Classes held</p>
+                    <p className="mt-1 font-semibold text-stone-900">{selectedCourse.classesHeld}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-stone-500">Course attendance</p>
+                    <p className="mt-1 font-semibold text-emerald-800">{selectedCourse.percent}%</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-stone-100 pt-4 text-xs text-stone-500">
+                <p>P = Present <span className="mx-1">·</span> A = Absent <span className="mx-1">·</span> blank = class not held</p>
+                {selectedCourse.classesHeld > CLASS_SLOT_COUNT && (
+                  <p>Showing the latest {CLASS_SLOT_COUNT} class dates</p>
+                )}
+              </div>
+            </>
+          ) : (
+            <div className="py-8 text-center">
+              <p className="text-sm text-stone-600">This course attendance sheet is not available.</p>
+              <button
+                type="button"
+                onClick={() => navigate('/teacher/history')}
+                className="mt-3 text-sm font-semibold text-emerald-800 underline"
+              >
+                Back to courses
+              </button>
+            </div>
+          )}
+        </section>
+
+        {!loading && !error && selectedCourse && (
+          <section aria-label="Course attendance table" className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-2xs">
+            <div className="overflow-x-auto">
+              <table className="min-w-[1760px] border-collapse text-sm">
+                <thead className="bg-stone-50 text-xs font-semibold uppercase tracking-wide text-stone-600">
+                  <tr>
+                    <th scope="col" className="sticky left-0 z-30 w-24 border-b border-r border-stone-200 bg-stone-50 px-3 py-3 text-left">
+                      Roll
+                    </th>
+                    <th scope="col" className="sticky left-24 z-30 w-56 border-b border-r border-stone-200 bg-stone-50 px-3 py-3 text-left">
+                      Student
+                    </th>
+                    {selectedCourse.classes.map((classSlot, index) => (
+                      <th key={index} scope="col" className="w-24 border-b border-r border-stone-200 px-2 py-3 text-center">
+                        <span className="block">Class {index + 1}</span>
+                        <span className="mt-1 block whitespace-nowrap text-[10px] font-medium normal-case text-stone-500">
+                          {classSlot?.date || '\u00a0'}
+                        </span>
+                      </th>
+                    ))}
+                    <th scope="col" className="w-28 border-b border-stone-200 px-3 py-3 text-right">
+                      Attendance %
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-stone-100">
+                  {sortedStudents.length === 0 ? (
+                    <tr>
+                      <td colSpan={CLASS_SLOT_COUNT + 3} className="px-4 py-10 text-center text-sm text-stone-500">
+                        No students are enrolled in this course.
+                      </td>
+                    </tr>
+                  ) : (
+                    sortedStudents.map((student) => (
+                      <tr key={`${student.studentId || student.roll}`} className="bg-white hover:bg-stone-50/70">
+                        <td className="sticky left-0 z-10 w-24 border-r border-stone-100 bg-white px-3 py-3 font-semibold text-stone-700">
+                          {student.roll}
+                        </td>
+                        <td className="sticky left-24 z-10 w-56 border-r border-stone-100 bg-white px-3 py-3 font-medium text-stone-900">
+                          {student.name}
+                        </td>
+                        {student.attendance.map((status, index) => (
+                          <td
+                            key={index}
+                            title={status || 'Class not held'}
+                            className="w-24 border-r border-stone-100 px-2 py-3 text-center font-bold"
+                          >
+                            {status === 'Present' ? (
+                              <span className="text-emerald-700">P</span>
+                            ) : status === 'Absent' ? (
+                              <span className="text-rose-700">A</span>
+                            ) : null}
+                          </td>
+                        ))}
+                        <td className="w-28 px-3 py-3 text-right font-semibold text-stone-800">
+                          {student.attendancePercent}%
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+      </div>
+    )
   }
 
   return (
-    <div className="space-y-6">
-      <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
-        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+    <div className="space-y-5">
+      <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs sm:p-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-400">Record archive</p>
-            <h2 className="mt-2 font-display text-2xl font-bold text-stone-900">Class history and attendance logs</h2>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-400">Attendance</p>
+            <h2 className="mt-2 font-display text-2xl font-bold text-stone-900">Course attendance sheets</h2>
+            <p className="mt-1 text-sm text-stone-500">One roll-wise sheet for each assigned course.</p>
           </div>
-          <div className="w-full max-w-md">
-            <label className="sr-only" htmlFor="session-filter">Select academic session</label>
+          <div className="w-full sm:max-w-xs">
+            <label className="sr-only" htmlFor="session-filter">Filter by academic session</label>
             <select
               id="session-filter"
               value={selectedSession}
               onChange={(event) => setSelectedSession(event.target.value)}
-              className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm font-medium text-stone-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/15"
+              className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-sm font-medium text-stone-700 outline-none focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/15"
             >
               {academicSessions.map((session) => (
                 <option key={session} value={session}>
-                  {session === 'All Sessions' ? 'Filter by Session' : session}
+                  {session === 'All Sessions' ? 'All academic sessions' : session}
                 </option>
               ))}
             </select>
@@ -90,141 +221,51 @@ export default function TeacherHistory() {
         </div>
       </section>
 
-      <section className="space-y-4">
+      {error && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+          <span>{error}</span>
+          <button type="button" onClick={retryLoad} className="font-semibold underline">Try again</button>
+        </div>
+      )}
+
+      <section aria-label="Assigned course attendance sheets" className="space-y-3">
         {loading ? (
-          <div className="rounded-2xl border border-stone-200 bg-white p-12 text-center text-sm font-medium text-stone-500 shadow-2xs">
-            Loading attendance history and class logs...
+          <div className="rounded-2xl border border-stone-200 bg-white p-10 text-center text-sm text-stone-500">
+            Loading course sheets...
           </div>
-        ) : filteredSessions.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-stone-200 bg-white p-8 text-center text-sm text-stone-500">
-            No class records found for this academic session.
+        ) : filteredSheets.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-stone-300 bg-white p-10 text-center text-sm text-stone-500">
+            No assigned courses found for this academic session.
           </div>
         ) : (
-          filteredSessions.map((session) => (
-            <article key={session.id} className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-700">
-                    {session.session}{session.semester ? ` (${session.semester})` : ''}
-                  </p>
-                  <h3 className="mt-2 font-display text-xl font-bold text-stone-900">{session.title}</h3>
-                </div>
-                <div className="flex items-center gap-2 rounded-full bg-emerald-100 px-3 py-1.5 text-sm font-semibold text-emerald-800">
-                  {session.percent}% attendance
-                </div>
+          filteredSheets.map((sheet) => (
+            <article key={sheet.courseId} className="flex flex-col gap-4 rounded-2xl border border-stone-200 bg-white p-4 shadow-2xs sm:flex-row sm:items-center sm:justify-between sm:p-5">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">
+                  {sheet.session} · {sheet.semester}, Section {sheet.section}
+                </p>
+                <h3 className="mt-1 truncate font-display text-lg font-bold text-stone-900">
+                  {sheet.courseCode}: {sheet.courseTitle}
+                </h3>
+                <p className="mt-1 text-sm text-stone-500">
+                  {sheet.classesHeld} classes held · {sheet.studentCount} students
+                </p>
               </div>
-
-              <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
-                  <div className="flex items-center gap-2 text-stone-500"><Clock3 size={15} /> <span className="text-xs font-semibold uppercase tracking-wider">Date</span></div>
-                  <p className="mt-2 text-sm font-semibold text-stone-900">{session.date}</p>
-                </div>
-                <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
-                  <div className="flex items-center gap-2 text-stone-500"><BookOpen size={15} /> <span className="text-xs font-semibold uppercase tracking-wider">Time</span></div>
-                  <p className="mt-2 text-sm font-semibold text-stone-900">{session.time}</p>
-                </div>
-                <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
-                  <div className="flex items-center gap-2 text-stone-500"><Users size={15} /> <span className="text-xs font-semibold uppercase tracking-wider">Present</span></div>
-                  <p className="mt-2 text-sm font-semibold text-stone-900">{session.present} / {session.total}</p>
-                </div>
-                <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
-                  <div className="flex items-center gap-2 text-stone-500"><ArrowRight size={15} /> <span className="text-xs font-semibold uppercase tracking-wider">Room / Terminal</span></div>
-                  <p className="mt-2 text-sm font-semibold text-stone-900">{session.room}</p>
-                </div>
-              </div>
-
-              <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-stone-200 bg-stone-50/80 p-3">
-                <div>
-                  <p className="text-sm font-semibold text-stone-800">Student attendance sheet</p>
-                  <p className="text-xs text-stone-500">Live face verified check-in records for this class.</p>
+              <div className="flex shrink-0 items-center justify-between gap-4 sm:justify-end">
+                <div className="text-right">
+                  <p className="text-xs text-stone-500">Attendance</p>
+                  <p className="font-semibold text-emerald-800">{sheet.percent}%</p>
                 </div>
                 <button
-                  onClick={() => toggleLedger(session.id)}
-                  className="rounded-xl bg-emerald-800 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 cursor-pointer"
+                  type="button"
+                  onClick={() => navigate(`/teacher/history/${sheet.courseId}`)}
+                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-800 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
                 >
-                  {expandedLedgerId === session.id ? 'Close ledger' : 'Open ledger'}
+                  <BookOpen size={16} />
+                  Open sheet
+                  <ArrowRight size={15} />
                 </button>
               </div>
-
-              {expandedLedgerId === session.id && (() => {
-                const ledger = getLedgerState(session.id)
-                const visibleStudents = getSortedAttendees(
-                  session.attendees.filter((student) =>
-                    student.roll.toLowerCase().includes(ledger.searchTerm.toLowerCase()) ||
-                    student.name.toLowerCase().includes(ledger.searchTerm.toLowerCase())
-                  ),
-                  ledger.sortOrder
-                )
-
-                return (
-                  <div className="mt-4 overflow-hidden rounded-xl border border-stone-200 bg-stone-50/80">
-                    <div className="flex flex-col gap-3 border-b border-stone-200 bg-white px-4 py-3 md:flex-row md:items-center md:justify-between">
-                      <p className="text-sm font-semibold text-stone-900">Present students ({session.present})</p>
-
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                        <input
-                          type="text"
-                          value={ledger.searchTerm}
-                          onChange={(event) => updateLedgerState(session.id, { searchTerm: event.target.value })}
-                          placeholder="Search by roll or name"
-                          className="h-10 w-full rounded-lg border border-stone-200 bg-stone-50 px-3 text-sm text-stone-700 outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/15 sm:w-56"
-                        />
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            updateLedgerState(session.id, {
-                              sortOrder: ledger.sortOrder === 'asc' ? 'desc' : 'asc',
-                            })
-                          }
-                          className="rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-stone-700 hover:bg-stone-100 cursor-pointer"
-                        >
-                          Sort: {ledger.sortOrder === 'asc' ? 'Low → High' : 'High → Low'}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between border-b border-stone-200 bg-stone-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-stone-500">
-                      <span>{visibleStudents.length} matched</span>
-                      <span>{session.present} verified</span>
-                    </div>
-
-                    <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
-                      {visibleStudents.length === 0 ? (
-                        <div className="col-span-full rounded-xl border border-dashed border-stone-200 bg-white px-3 py-6 text-center text-sm text-stone-500">
-                          No student matches this roll or name.
-                        </div>
-                      ) : (
-                        visibleStudents.map((student) => (
-                          <div key={`${session.id}-${student.roll}`} className="flex flex-col justify-between rounded-xl border border-stone-200 bg-white p-3.5 shadow-2xs">
-                            <div className="flex items-start justify-between gap-2">
-                              <div>
-                                <p className="text-base font-bold text-stone-900">{student.name}</p>
-                                <p className="text-xs font-medium text-stone-500">Roll: {student.roll} {student.department ? `· ${student.department}` : ''}</p>
-                              </div>
-                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800 ring-1 ring-emerald-600/20">
-                                <CheckCircle2 size={12} /> {student.status}
-                              </span>
-                            </div>
-                            
-                            <div className="mt-3 flex items-center justify-between border-t border-stone-100 pt-2 text-[11px] text-stone-500">
-                              <span className="inline-flex items-center gap-1">
-                                <Clock3 size={12} className="text-stone-400" />
-                                {student.time || 'Checked in'}
-                              </span>
-                              {student.confidence && (
-                                <span className="font-semibold text-emerald-700">
-                                  {student.confidence} match
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                )
-              })()}
             </article>
           ))
         )}

@@ -24,21 +24,21 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   // For students: which registration steps are done { profile, face, courses, complete }
   const [onboarding, setOnboarding] = useState(null)
-  const [loading, setLoading] = useState(() => Boolean(localStorage.getItem(TOKEN_KEY)))
+  const [loading, setLoading] = useState(() => Boolean(sessionStorage.getItem(TOKEN_KEY)))
 
   const SUPER_ADMIN_BACKUP_KEY = 'super_admin_backup_token'
 
   const logout = useCallback(() => {
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem(SUPER_ADMIN_BACKUP_KEY)
+    sessionStorage.removeItem(TOKEN_KEY)
+    sessionStorage.removeItem(SUPER_ADMIN_BACKUP_KEY)
     setUser(null)
     setOnboarding(null)
     queryClient.clear()
   }, [queryClient])
 
-  // On page load: if a token is saved, ask the backend who we are
+  // On page load: if a token is saved in this tab, ask the backend who we are
   useEffect(() => {
-    if (!localStorage.getItem(TOKEN_KEY)) return
+    if (!sessionStorage.getItem(TOKEN_KEY)) return
     api
       .get('/auth/me')
       .then(({ data }) => {
@@ -56,9 +56,9 @@ export function AuthProvider({ children }) {
   }, [logout])
 
   const startSession = (data) => {
-    localStorage.setItem(TOKEN_KEY, data.access_token)
+    sessionStorage.setItem(TOKEN_KEY, data.access_token)
     if (data.user?.role === 'super_admin') {
-      localStorage.setItem(SUPER_ADMIN_BACKUP_KEY, data.access_token)
+      sessionStorage.setItem(SUPER_ADMIN_BACKUP_KEY, data.access_token)
     }
     setUser(data.user)
     setOnboarding(data.onboarding)
@@ -88,7 +88,7 @@ export function AuthProvider({ children }) {
   // Switch between admin dashboards (for super_admin direct access)
   const switchDashboard = async (targetRole) => {
     try {
-      const backupToken = localStorage.getItem(SUPER_ADMIN_BACKUP_KEY)
+      const backupToken = sessionStorage.getItem(SUPER_ADMIN_BACKUP_KEY)
       const headers = backupToken ? { Authorization: `Bearer ${backupToken}` } : {}
       const { data } = await api.post('/auth/switch-dashboard', { target_role: targetRole }, { headers })
       return startSession(data)
@@ -99,9 +99,9 @@ export function AuthProvider({ children }) {
 
   // Return back to super admin from any switched dashboard
   const returnToSuperAdmin = async () => {
-    const backupToken = localStorage.getItem(SUPER_ADMIN_BACKUP_KEY)
+    const backupToken = sessionStorage.getItem(SUPER_ADMIN_BACKUP_KEY)
     if (backupToken) {
-      localStorage.setItem(TOKEN_KEY, backupToken)
+      sessionStorage.setItem(TOKEN_KEY, backupToken)
       await refresh()
       return true
     }

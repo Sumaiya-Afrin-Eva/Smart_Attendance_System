@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
+import { BrowserQRCodeReader } from '@zxing/browser'
 import api from '../../lib/api'
 
 // How often the liveness check polls (ms)
 const LIVENESS_POLL_MS = 180
 // After a final decision (matched or not), wait this long before resetting to scan again
 const RESET_DELAY_MS = 3000
+const SUCCESS_RESET_DELAY_MS = 5000
 
 /** Capture a JPEG frame from the live video element. */
 const captureFrame = (video, maxWidth = 320) =>
@@ -126,10 +128,35 @@ export default function FaceLab({ kioskId = 'CSE' }) {
   // Optional background fetch of routine info for the header (never blocks scanning)
   useEffect(() => {
     let unmounted = false
-    api.post('/face/kiosk/open', { kiosk_id: normalizedKioskId })
-      .then((res) => { if (!unmounted) setActiveClass(res.data) })
-      .catch(() => {})
-    return () => { unmounted = true }
+    let loading = false
+    const refreshClass = async (refreshOnly = true) => {
+      if (loading) return
+      loading = true
+      try {
+        const { data } = await api.post('/face/kiosk/open', {
+          kiosk_id: normalizedKioskId,
+          refresh_only: refreshOnly,
+        })
+        if (!unmounted) {
+          setActiveClass((current) => (
+            current?.session_id === data?.session_id && current?.course?.id === data?.course?.id
+              ? current
+              : data
+          ))
+        }
+      } catch (error) {
+        console.warn('Could not refresh kiosk class schedule', error)
+      } finally {
+        loading = false
+      }
+    }
+
+    void refreshClass(false)
+    const timer = window.setInterval(refreshClass, 30000)
+    return () => {
+      unmounted = true
+      window.clearInterval(timer)
+    }
   }, [normalizedKioskId])
 
   // ── Boot: start camera immediately ─────────────────────────────────────────
@@ -143,7 +170,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
   }, [startCamera, stopCamera])
 
   // ── Reset to liveness after a decision ────────────────────────────────────
-  const scheduleReset = useCallback(() => {
+  const scheduleReset = useCallback((delay = RESET_DELAY_MS) => {
     clearTimeout(resetTimerRef.current)
     resetTimerRef.current = setTimeout(() => {
       setBanner(null)
@@ -153,7 +180,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
       setPhase('liveness')
       setLiveness({ human: false, liveness: false, message: '' })
       livenessKeyRef.current += 1
-    }, RESET_DELAY_MS)
+    }, delay)
   }, [])
 
   // ── Liveness polling: checks if a human is in front of camera ──────────────
@@ -196,24 +223,28 @@ export default function FaceLab({ kioskId = 'CSE' }) {
     timer = setTimeout(poll, 150)
     return () => { cancelled = true; clearTimeout(timer) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, cameraReady, livenessKeyRef.current])
+  }, [phase, cameraReady, activeClass?.session_id, livenessKeyRef.current])
 
   // ── Auto face scan when human presence/liveness is verified ────────────────
   const handleFaceScan = useCallback(async () => {
     if (!videoRef.current || !cameraReady) return
     setPhase('scanning')
     try {
-      const frame = await captureFrame(videoRef.current, 320)
+      const frame = await captureFrame(videoRef.current, 640)
       const fd = new FormData()
       fd.append('kiosk_id', normalizedKioskId)
       if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
       fd.append('image', frame, 'kiosk-frame.jpg')
-      fd.append('threshold', 0.55)
+      fd.append('threshold', 0.48)
       const { data } = await api.post('/face/kiosk/scan', fd, { timeout: 15000, skipNetworkRetry: true })
 
       if (data?.matched) {
-        setBanner({ text: 'Face Recognized', ok: true })
-        speak('Face Recognized')
+        const studentName = data.student?.name ? ` — ${data.student.name}` : ''
+        const bannerText = data.attendance?.already_marked
+          ? `Already Marked${studentName}`
+          : `Face Recognized${studentName}`
+        setBanner({ text: bannerText, ok: true })
+        speak(data.attendance?.already_marked ? 'Attendance already marked' : 'Face Recognized')
         if (data.student) {
           setRecentLogs((prev) => [{
             name: data.student.name,
@@ -223,18 +254,20 @@ export default function FaceLab({ kioskId = 'CSE' }) {
           }, ...prev.slice(0, 4)])
         }
         setPhase('success')
-        scheduleReset()
+        scheduleReset(SUCCESS_RESET_DELAY_MS)
       } else {
         setBanner({ text: 'Face Not Recognized. Please show your QR code', ok: false })
         speak('Face Not Recognized. Please show your QR code')
         setPhase('qr')
         autoScanRef.current = false
+        scheduleReset(RESET_DELAY_MS)
       }
     } catch {
       setBanner({ text: 'Face Not Recognized. Please show your QR code', ok: false })
       speak('Face Not Recognized. Please show your QR code')
       setPhase('qr')
       autoScanRef.current = false
+      scheduleReset(RESET_DELAY_MS)
     }
   }, [activeClass, cameraReady, scheduleReset])
 
@@ -248,6 +281,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
   const handleQrToken = useCallback(async (token) => {
     if (qrLockRef.current) return
     qrLockRef.current = true
+    clearTimeout(resetTimerRef.current)
     setPhase('qr-scan')
     try {
       const payload = { token, kiosk_id: normalizedKioskId }
@@ -276,11 +310,34 @@ export default function FaceLab({ kioskId = 'CSE' }) {
 
   useEffect(() => {
     if (phase !== 'qr' || !cameraReady) return undefined
-    if (typeof window?.BarcodeDetector !== 'function') return undefined
 
     let cancelled = false
     const video = videoRef.current
     if (!video) return undefined
+
+    if (typeof window?.BarcodeDetector !== 'function') {
+      let controls
+      const reader = new BrowserQRCodeReader()
+      void reader.decodeFromVideoElement(video, (result, _error, scannerControls) => {
+        controls = scannerControls
+        if (cancelled || !result) return
+        const rawValue = result.getText()
+        if (!rawValue || rawValue === lastQrRef.current) return
+        lastQrRef.current = rawValue
+        scannerControls.stop()
+        void handleQrToken(rawValue)
+      }).then((scannerControls) => {
+        if (cancelled) scannerControls.stop()
+        else controls = scannerControls
+      }).catch((error) => {
+        if (!cancelled) console.error('QR scanner could not start:', error)
+      })
+
+      return () => {
+        cancelled = true
+        controls?.stop()
+      }
+    }
 
     const detector = new window.BarcodeDetector({ formats: ['qr_code'] })
     let rafId
