@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   BookOpen,
   BriefcaseBusiness,
@@ -230,29 +230,35 @@ export default function AdminDashboard({ mode = 'department', department = 'CSE'
   const [dbTeachers, setDbTeachers] = useState([])
   const [dbStudents, setDbStudents] = useState([])
   const [overviewStats, setOverviewStats] = useState(null)
+  const [kiosksList, setKiosksList] = useState([])
   const isSuper = mode === 'super'
   const title = isSuper ? 'Super Admin Dashboard' : `${department} ${roleType} Dashboard`
   const subtitle = isSuper
-    ? 'Unified access to both CSE and EEE administrative areas.'
+    ? 'Unified access across all configured department administrative areas.'
     : `${department} administrative overview and department controls.`
 
   useEffect(() => {
     async function loadData() {
       try {
-        const [statsRes, teachersRes, studentsRes] = await Promise.all([
+        const promises = [
           api.get('/admin/overview-stats').catch(() => ({ data: null })),
           api.get('/admin/teachers').catch(() => ({ data: [] })),
           api.get('/admin/students').catch(() => ({ data: [] })),
-        ])
+        ]
+        if (isSuper) {
+          promises.push(api.get('/admin/kiosks').catch(() => ({ data: [] })))
+        }
+        const [statsRes, teachersRes, studentsRes, kiosksRes] = await Promise.all(promises)
         if (statsRes?.data) setOverviewStats(statsRes.data)
         if (Array.isArray(teachersRes?.data)) setDbTeachers(teachersRes.data)
         if (Array.isArray(studentsRes?.data)) setDbStudents(studentsRes.data)
+        if (Array.isArray(kiosksRes?.data)) setKiosksList(kiosksRes.data)
       } catch {
         // Fallback to static values if endpoints fail
       }
     }
     loadData()
-  }, [department])
+  }, [department, isSuper])
 
   // Map real teachers from DB
   const rawTeachers = dbTeachers.map((t) => ({
@@ -355,12 +361,39 @@ export default function AdminDashboard({ mode = 'department', department = 'CSE'
     },
   ]
 
-  const superLinks = [
-    { label: 'CSE System Admin', path: '/admin/system-admin', role: 'system_admin', icon: Shield },
-    { label: 'CSE Student Admin', path: '/admin/student-admin', role: 'admin', icon: GraduationCap },
-    { label: 'EEE System Admin', path: '/admin/eee-system-admin', role: 'eee_system_admin', icon: Shield },
-    { label: 'EEE Student Admin', path: '/admin/eee-student-admin', role: 'eee_admin', icon: GraduationCap },
-  ]
+  const superLinks = useMemo(() => {
+    if (kiosksList && kiosksList.length > 0) {
+      const links = []
+      kiosksList.forEach((k) => {
+        const code = k.dept_code
+        const isCSE = code === 'CSE'
+        const sysRole = isCSE ? 'system_admin' : `${code.toLowerCase()}_system_admin`
+        const sysPath = k.system_admin_dashboard || (isCSE ? '/admin/system-admin' : `/admin/${code.toLowerCase()}-system-admin`)
+        const stuRole = isCSE ? 'admin' : `${code.toLowerCase()}_admin`
+        const stuPath = k.student_admin_dashboard || (isCSE ? '/admin/student-admin' : `/admin/${code.toLowerCase()}-student-admin`)
+
+        links.push({
+          label: `${code} System Admin`,
+          path: sysPath,
+          role: sysRole,
+          icon: Shield,
+        })
+        links.push({
+          label: `${code} Student Admin`,
+          path: stuPath,
+          role: stuRole,
+          icon: GraduationCap,
+        })
+      })
+      return links
+    }
+    return [
+      { label: 'CSE System Admin', path: '/admin/system-admin', role: 'system_admin', icon: Shield },
+      { label: 'CSE Student Admin', path: '/admin/student-admin', role: 'admin', icon: GraduationCap },
+      { label: 'EEE System Admin', path: '/admin/eee-system-admin', role: 'eee_system_admin', icon: Shield },
+      { label: 'EEE Student Admin', path: '/admin/eee-student-admin', role: 'eee_admin', icon: GraduationCap },
+    ]
+  }, [kiosksList])
 
   const handleSuperLinkClick = async (e, link) => {
     e.preventDefault()

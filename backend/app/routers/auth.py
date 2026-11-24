@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
-from ..models import PasswordResetToken, StudentRoster, User
+from ..models import DepartmentKiosk, PasswordResetToken, StudentRoster, User
 from ..schemas import (
     AdminBootstrapIn,
     DevLoginIn,
@@ -131,9 +131,14 @@ def _login_or_register_staff(db: Session, email: str, name: str, picture: str | 
         )
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This account has been disabled. Contact the admin.")
-    if user.role not in {"teacher", "admin", "system_admin", "eee_system_admin", "eee_admin", "super_admin"}:
+    is_admin = (
+        user.role in {"admin", "system_admin", "eee_system_admin", "eee_admin", "super_admin"}
+        or user.role.endswith("_admin")
+        or user.role.endswith("_system_admin")
+    )
+    if not is_admin and user.role != "teacher":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "This login method is for faculty and staff only.")
-    if user.role in {"admin", "system_admin", "eee_system_admin", "eee_admin", "super_admin"}:
+    if is_admin:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "Admin accounts must sign in with their password and admin access code.",
@@ -267,8 +272,16 @@ def password_login(body: PasswordLoginIn, db: Session = Depends(get_db)):
     if not user and email_clean in {"superadmin@kuet.ac.bd", "super.admin@kuet.ac.bd"}:
         user = db.scalar(select(User).where(User.email.in_({"superadmin@kuet.ac.bd", "super.admin@kuet.ac.bd"})))
 
-    # Reject if account doesn't exist or wrong role
-    if not user or user.role not in {"student", "teacher", "admin", "system_admin", "eee_system_admin", "eee_admin", "super_admin"}:
+    if not user:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password.")
+
+    # Check if account is admin role
+    is_admin = (
+        user.role in {"admin", "system_admin", "eee_system_admin", "eee_admin", "super_admin"}
+        or user.role.endswith("_admin")
+        or user.role.endswith("_system_admin")
+    )
+    if user.role not in {"student", "teacher"} and not is_admin:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password.")
 
     is_valid_pw = verify_password(body.password, user.password_hash) if user.password_hash else False
@@ -281,16 +294,24 @@ def password_login(body: PasswordLoginIn, db: Session = Depends(get_db)):
     if not is_valid_pw:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Incorrect email or password.")
 
-    if user.role in {"admin", "system_admin", "eee_system_admin", "eee_admin", "super_admin"}:
+    if is_admin:
         configured_code = settings.admin_access_code
         if not configured_code:
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "Admin access is not configured. Set ADMIN_ACCESS_CODE in the backend .env file.",
             )
+        dept_kiosk_code = None
+        if user.role.endswith("_admin") or user.role.endswith("_system_admin"):
+            raw_dept = user.role.replace("_system_admin", "").replace("_admin", "").upper()
+            kiosk_record = db.scalar(select(DepartmentKiosk).where(DepartmentKiosk.dept_code == raw_dept))
+            if kiosk_record and kiosk_record.access_code:
+                dept_kiosk_code = kiosk_record.access_code
+
         is_valid_code = bool(
             body.access_code and (
                 secrets.compare_digest(body.access_code, configured_code)
+                or (dept_kiosk_code and secrets.compare_digest(body.access_code, dept_kiosk_code))
                 or secrets.compare_digest(body.access_code, "admin123")
                 or secrets.compare_digest(body.access_code, "sysadmin123")
                 or secrets.compare_digest(body.access_code, "eeesysadmin123")
@@ -432,26 +453,32 @@ def me(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
 
 @router.post("/switch-dashboard")
 def switch_dashboard(body: SwitchDashboardIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Allow super_admin (or an impersonated admin session originally started by super_admin) to switch into any of the 4 sub-dashboards with full role access."""
-    # Check if user is super_admin or has super_admin email or is switching
+    """Allow super_admin (or an impersonated admin session originally started by super_admin) to switch into any department admin dashboard with full role access."""
     if user.role != "super_admin" and user.email not in {"super.admin@kuet.ac.bd", "superadmin@kuet.ac.bd"}:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only super administrators can switch dashboards.")
     
-    valid_roles = {
+    target_role = body.target_role.strip().lower()
+    legacy_mappings = {
         "system_admin": ("sysadmin@kuet.ac.bd", "/admin/system-admin"),
         "admin": ("admin@kuet.ac.bd", "/admin/student-admin"),
         "eee_system_admin": ("eee.system.admin@kuet.ac.bd", "/admin/eee-system-admin"),
         "eee_admin": ("eee.student.admin@kuet.ac.bd", "/admin/eee-student-admin"),
         "super_admin": ("super.admin@kuet.ac.bd", "/admin/super-admin"),
     }
-    target_role = body.target_role.strip().lower()
-    if target_role not in valid_roles:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Invalid target dashboard role: {target_role}")
-    
-    target_email, default_route = valid_roles[target_role]
+
     target_user = db.scalar(select(User).where(User.role == target_role))
-    if not target_user:
-        target_user = db.scalar(select(User).where(User.email == target_email))
+    default_route = "/admin"
+    if target_role in legacy_mappings:
+        target_email, default_route = legacy_mappings[target_role]
+        if not target_user:
+            target_user = db.scalar(select(User).where(User.email == target_email))
+    elif target_role.endswith("_system_admin"):
+        dept_slug = target_role.replace("_system_admin", "").lower()
+        default_route = f"/admin/{dept_slug}-system-admin"
+    elif target_role.endswith("_admin"):
+        dept_slug = target_role.replace("_admin", "").lower()
+        default_route = f"/admin/{dept_slug}-student-admin"
+    
     if not target_user:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"Account for {target_role} not found.")
 

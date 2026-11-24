@@ -321,3 +321,22 @@ class ClassRoutine(Base):
     room: Mapped[str | None] = mapped_column(String(50), default=None)
     session: Mapped[str | None] = mapped_column(String(20), default="2025-2026")
     created_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
+
+
+class DepartmentKiosk(Base):
+    __tablename__ = "department_kiosks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dept_code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    dept_name: Mapped[str] = mapped_column(String(120))
+    kiosk_id: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    location: Mapped[str | None] = mapped_column(String(200), default=None)
+    system_admin_email: Mapped[str | None] = mapped_column(String(255), default=None)
+    student_admin_email: Mapped[str | None] = mapped_column(String(255), default=None)
+    status: Mapped[str] = mapped_column(String(30), default="Configured")
+    ip_address: Mapped[str | None] = mapped_column(String(50), default=None)
+    access_code: Mapped[str | None] = mapped_column(String(100), default=None)
+    notes: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now, onupdate=datetime.now)
+

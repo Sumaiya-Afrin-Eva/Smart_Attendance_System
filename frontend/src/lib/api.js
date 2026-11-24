@@ -50,10 +50,31 @@ api.interceptors.response.use(
 export function errorMessage(error, fallback = 'Something went wrong. Please try again.') {
   if (!error.response) return 'Cannot reach the server. Is the backend running?'
   const detail = error.response.data?.detail
-  return typeof detail === 'string' ? detail : fallback
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0]
+    return first?.msg ? `${first.loc?.slice(-1)[0] || 'Field'}: ${first.msg}` : fallback
+  }
+  return fallback
 }
 
 // Field-level errors from the backend, e.g. { roll: 'Roll must be 7 digits' }
 export const fieldErrors = (error) => error.response?.data?.errors ?? {}
+
+// Helper to get scoped department from user role
+export function getScopedDept(user) {
+  if (!user?.role) return null
+  const role = user.role
+  if (role === 'super_admin') return null
+  if (role === 'system_admin' || role === 'admin' || role === 'cse_system_admin' || role === 'cse_admin') return 'CSE'
+  if (role === 'eee_system_admin' || role === 'eee_admin') return 'EEE'
+  if (role.endsWith('_system_admin')) {
+    return role.replace('_system_admin', '').toUpperCase()
+  }
+  if (role.endsWith('_admin')) {
+    return role.replace('_admin', '').toUpperCase()
+  }
+  return null
+}
 
 export default api

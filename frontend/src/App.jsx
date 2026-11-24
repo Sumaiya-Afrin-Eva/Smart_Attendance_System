@@ -30,6 +30,7 @@ import StudentTermManagement from './pages/admin/StudentTermManagement'
 import StudentCourseAssignments from './pages/admin/StudentCourseAssignments'
 import SecurityAlerts from './pages/admin/SecurityAlerts'
 import SystemSettings from './pages/admin/SystemSettings'
+import KioskManagement from './pages/admin/KioskManagement'
 
 import FaceLab from './pages/biometrics/FaceLab'
 import { useAuth } from './context/AuthContext'
@@ -39,8 +40,11 @@ function AdminDashboardRouter() {
   if (user?.role === 'super_admin') {
     return <Navigate to="/admin/super-admin" replace />
   }
-  if (user?.role === 'admin') {
+  if (user?.role === 'admin' || user?.role === 'cse_admin') {
     return <Navigate to="/admin/student-admin" replace />
+  }
+  if (user?.role === 'system_admin' || user?.role === 'cse_system_admin') {
+    return <Navigate to="/admin/system-admin" replace />
   }
   if (user?.role === 'eee_admin') {
     return <Navigate to="/admin/eee-student-admin" replace />
@@ -48,7 +52,28 @@ function AdminDashboardRouter() {
   if (user?.role === 'eee_system_admin') {
     return <Navigate to="/admin/eee-system-admin" replace />
   }
+  if (user?.role?.endsWith('_admin')) {
+    const dept = user.role.replace('_admin', '').toLowerCase()
+    return <Navigate to={`/admin/${dept}-student-admin`} replace />
+  }
+  if (user?.role?.endsWith('_system_admin')) {
+    const dept = user.role.replace('_system_admin', '').toLowerCase()
+    return <Navigate to={`/admin/${dept}-system-admin`} replace />
+  }
   return <Navigate to="/admin/system-admin" replace />
+}
+
+function DynamicAdminPageRouter() {
+  const { deptAdminView } = useParams()
+  if (deptAdminView?.endsWith('-system-admin')) {
+    const dept = deptAdminView.replace('-system-admin', '').toUpperCase()
+    return <AdminDashboard mode="system" department={dept} roleType="System Admin" />
+  }
+  if (deptAdminView?.endsWith('-student-admin')) {
+    const dept = deptAdminView.replace('-student-admin', '').toUpperCase()
+    return <AdminDashboard mode="student" department={dept} roleType="Student Admin" />
+  }
+  return <AdminDashboardRouter />
 }
 
 function KioskRouter() {
@@ -136,6 +161,7 @@ export default function App() {
         <Route path="/admin" element={<DashboardLayout />}>
           <Route index element={<AdminDashboardRouter />} />
           <Route path="super-admin" element={<AdminDashboard mode="super" department="All" roleType="Super Admin" />} />
+          <Route path="kiosks" element={<KioskManagement />} />
           <Route path="system-admin" element={<AdminDashboard mode="system" department="CSE" roleType="System Admin" />} />
           <Route path="eee-system-admin" element={<AdminDashboard mode="system" department="EEE" roleType="System Admin" />} />
           <Route path="student-admin" element={<AdminDashboard mode="student" department="CSE" roleType="Student Admin" />} />
@@ -152,6 +178,7 @@ export default function App() {
           <Route path="course-assignments" element={<StudentCourseAssignments />} />
           <Route path="alerts" element={<SecurityAlerts />} />
           <Route path="settings" element={<SystemSettings />} />
+          <Route path=":deptAdminView" element={<DynamicAdminPageRouter />} />
           <Route path="*" element={<AdminDashboardRouter />} />
         </Route>
       </Route>

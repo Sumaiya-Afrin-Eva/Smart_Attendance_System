@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Check, Plus, Search, ChevronDown, X } from 'lucide-react'
-import api, { errorMessage } from '../../lib/api'
+import api, { errorMessage, getScopedDept } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 
 function fuzzyMatch(str, pattern) {
@@ -103,7 +103,7 @@ export default function AdminTeacherAssignment() {
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(true)
   const { user } = useAuth()
-  const scopedDept = user?.role === 'eee_system_admin' ? 'EEE' : user?.role === 'system_admin' ? 'CSE' : null
+  const scopedDept = getScopedDept(user)
   const [year, setYear] = useState(searchParams.get('year') || '1')
   const [term, setTerm] = useState(searchParams.get('term') || '1')
   const [department, setDepartment] = useState(scopedDept || searchParams.get('dept') || 'CSE')

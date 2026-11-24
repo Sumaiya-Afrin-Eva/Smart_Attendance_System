@@ -174,17 +174,17 @@ class KioskQrScanRequest(BaseModel):
 
 
 def _resolve_kiosk_department(kiosk_id: str | None) -> str | None:
-    """Resolve a kiosk label like CSE or EEE to a department code. Unknown kiosk IDs are ignored."""
+    """Resolve department kiosks while leaving generic kiosk labels unscoped."""
     if kiosk_id is None:
         return None
-    compact = re.sub(r"[^A-Za-z]", "", str(kiosk_id).strip()).upper()
+    compact = re.sub(r"[^A-Za-z0-9]", "", str(kiosk_id).strip()).upper()
     if not compact:
         return None
+    if compact.startswith("KIOSK"):
+        compact = compact[5:]
     if compact.endswith("KIOSK"):
         compact = compact[:-5]
-    if compact in {"CSE", "EEE"}:
-        return compact
-    return None
+    return compact if compact and compact not in {"MAIN", "DEFAULT"} else None
 
 
 def _eligible_students(db: Session, course_id: int | None = None, department: str | None = None):
@@ -383,7 +383,7 @@ def _resolve_active_class_for_student(db: Session, student: User, now: datetime)
     return selected_course, teacher_id, selected_routine
 
 
-def _get_or_create_session_for_routine(db: Session, course: Course, teacher_id: int | None, now: datetime, student_count: int = 1) -> ClassSession:
+def _get_or_create_session_for_routine(db: Session, course: Course, teacher_id: int | None, now: datetime, student_count: int = 1, routine: ClassRoutine | None = None) -> ClassSession:
     day_start = datetime.combine(now.date(), datetime.min.time())
     next_day = day_start + timedelta(days=1)
     existing = db.scalar(
@@ -400,12 +400,31 @@ def _get_or_create_session_for_routine(db: Session, course: Course, teacher_id: 
     if existing is not None:
         return existing
 
+    session_start_at = now
+    matched_routine = routine
+    if matched_routine is None:
+        today_name = now.strftime("%A").strip().lower()
+        matched_routine = db.scalar(
+            select(ClassRoutine).where(
+                func.upper(func.trim(ClassRoutine.course_code)) == func.upper(func.trim(course.code)),
+                func.lower(func.trim(ClassRoutine.day)) == today_name,
+            )
+        )
+    if matched_routine and matched_routine.start_time:
+        for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p"):
+            try:
+                dt = datetime.strptime(str(matched_routine.start_time).strip().replace(".", ":"), fmt)
+                session_start_at = datetime.combine(now.date(), dt.time())
+                break
+            except ValueError:
+                pass
+
     session = ClassSession(
         course_id=course.id,
         teacher_id=teacher_id,
-        start_at=now,
+        start_at=session_start_at,
         end_at=now,
-        room=None,
+        room=matched_routine.room if matched_routine else None,
         students=student_count,
         status="completed",
     )
@@ -799,12 +818,22 @@ def open_kiosk(
         .order_by(ClassSession.start_at)
     )
     if class_session is None:
+        session_start_at = now
+        if selected_routine and selected_routine.start_time:
+            for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p"):
+                try:
+                    dt = datetime.strptime(str(selected_routine.start_time).strip().replace(".", ":"), fmt)
+                    session_start_at = datetime.combine(now.date(), dt.time())
+                    break
+                except ValueError:
+                    pass
+
         class_session = ClassSession(
             course_id=course.id,
             teacher_id=teacher_id,
-            start_at=now,
+            start_at=session_start_at,
             end_at=now,
-            room=None,
+            room=selected_routine.room if selected_routine else None,
             students=len(students),
             status="completed",
         )

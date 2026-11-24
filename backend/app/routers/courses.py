@@ -45,9 +45,15 @@ def _dept_for_role(user: User) -> str | None:
     """Return the department an admin is scoped to, or None for unrestricted roles (super_admin)."""
     if user.role == "super_admin":
         return None
-    if user.role in {"eee_system_admin", "eee_admin"}:
-        return "EEE"
-    if user.role in {"system_admin", "admin"}:
+    if user.role.endswith("_system_admin"):
+        prefix = user.role[:-13].upper()
+        return prefix if prefix else "CSE"
+    if user.role == "system_admin":
+        return "CSE"
+    if user.role.endswith("_admin") and user.role != "super_admin":
+        prefix = user.role[:-6].upper()
+        return prefix if prefix else "CSE"
+    if user.role == "admin":
         return "CSE"
     return None
 
@@ -1796,10 +1802,10 @@ def update_teacher_status(
             raise HTTPException(status.HTTP_403_FORBIDDEN, f"You can only manage {scoped_dept} teachers.")
 
     status_value = (body.get("status") or "Active").strip()
-    valid_statuses = {"Active", "On leave", "Pending", "Disabled"}
+    valid_statuses = {"Active", "On leave", "Pending", "Disabled", "Resigned"}
     if status_value not in valid_statuses:
         status_value = "Active"
-    teacher.is_active = status_value != "Disabled"
+    teacher.is_active = status_value not in {"Disabled", "Resigned"}
 
     prof = db.scalar(select(TeacherProfile).where(TeacherProfile.user_id == teacher.id))
     if not prof:

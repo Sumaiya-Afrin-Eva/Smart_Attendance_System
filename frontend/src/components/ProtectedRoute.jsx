@@ -8,17 +8,27 @@ export default function ProtectedRoute({ role, setupStep }) {
   if (loading) return <FullPageSpinner />
   if (!user) return <Navigate to="/login" replace />
 
-  const allowed = Array.isArray(role) ? (role.includes(user.role) || user.role === 'super_admin') : (user.role === role || user.role === 'super_admin')
+  const isRoleAllowed = () => {
+    if (!user) return false
+    if (user.role === 'super_admin') return true
+    const roleList = Array.isArray(role) ? role : [role]
+    if (roleList.includes(user.role)) return true
+    if (roleList.includes('admin') && (user.role.endsWith('_admin') || user.role === 'admin')) return true
+    if (roleList.includes('system_admin') && (user.role.endsWith('_system_admin') || user.role === 'system_admin')) return true
+    return false
+  }
+
+  const allowed = isRoleAllowed()
   if (!allowed) {
-    const defaultRoute = user.role === 'super_admin'
-      ? '/admin/super-admin'
-      : user.role === 'system_admin'
-        ? '/admin/system-admin'
-        : user.role === 'eee_system_admin'
-          ? '/admin/eee-system-admin'
-          : user.role === 'eee_admin'
-            ? '/admin/eee-student-admin'
-            : '/admin/student-admin'
+    let defaultRoute = '/admin/system-admin'
+    if (user.role === 'super_admin') defaultRoute = '/admin/super-admin'
+    else if (user.role === 'system_admin' || user.role === 'cse_system_admin') defaultRoute = '/admin/system-admin'
+    else if (user.role === 'admin' || user.role === 'cse_admin') defaultRoute = '/admin/student-admin'
+    else if (user.role === 'eee_system_admin') defaultRoute = '/admin/eee-system-admin'
+    else if (user.role === 'eee_admin') defaultRoute = '/admin/eee-student-admin'
+    else if (user.role?.endsWith('_system_admin')) defaultRoute = `/admin/${user.role.replace('_system_admin', '').toLowerCase()}-system-admin`
+    else if (user.role?.endsWith('_admin')) defaultRoute = `/admin/${user.role.replace('_admin', '').toLowerCase()}-student-admin`
+    else defaultRoute = `/${user.role}`
     return <Navigate to={defaultRoute} replace />
   }
 

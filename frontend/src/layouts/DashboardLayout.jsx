@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   Bell, BookOpen, CalendarDays, ChevronLeft, ChevronRight, ClipboardCheck, FileText,
   GraduationCap, LayoutDashboard, LogOut, Menu, Radio, Settings,
-  ShieldAlert, UserRound, Users, X, Clock,
+  Scan, ShieldAlert, UserRound, Users, X, Clock,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
@@ -52,8 +52,53 @@ export const NAV = {
   ],
   super_admin: [
     { to: '/admin/super-admin', label: 'Super Admin Dashboard', icon: LayoutDashboard, end: true },
+    { to: '/admin/kiosks', label: 'Kiosk Management', icon: Scan },
     { to: '/admin/settings', label: 'System Settings', icon: Settings },
   ],
+}
+
+export function getNavForRole(role) {
+  if (!role) return []
+  if (NAV[role]) return NAV[role]
+
+  if (role.endsWith('_system_admin')) {
+    const dept = role.replace('_system_admin', '').toUpperCase()
+    const deptSlug = dept.toLowerCase()
+    return [
+      { to: `/admin/${deptSlug}-system-admin`, label: `${dept} System Admin Dashboard`, icon: LayoutDashboard, end: true },
+      { to: '/admin/courses', label: 'Course Management', icon: BookOpen },
+      { to: '/admin/routine', label: 'Routine Management', icon: CalendarDays },
+      { to: '/admin/assignments', label: 'Teacher Assignment', icon: ClipboardCheck },
+      { to: '/admin/teachers', label: 'Teacher Management', icon: Users },
+    ]
+  }
+
+  if (role.endsWith('_admin') && role !== 'super_admin') {
+    const dept = role.replace('_admin', '').toUpperCase()
+    const deptSlug = dept.toLowerCase()
+    return [
+      { to: `/admin/${deptSlug}-student-admin`, label: `${dept} Student Admin Dashboard`, icon: LayoutDashboard, end: true },
+      { to: '/admin/students', label: 'Student Records', icon: GraduationCap, end: true },
+      { to: '/admin/students/new', label: 'Add Student', icon: UserRound, end: true },
+      { to: '/admin/course-assignments', label: 'Course Assignments', icon: Users },
+    ]
+  }
+
+  return []
+}
+
+export function getRoleLabel(role) {
+  if (!role) return ''
+  if (ROLE_LABEL[role]) return ROLE_LABEL[role]
+  if (role.endsWith('_system_admin')) {
+    const dept = role.replace('_system_admin', '').toUpperCase()
+    return `${dept} System Administrator`
+  }
+  if (role.endsWith('_admin') && role !== 'super_admin') {
+    const dept = role.replace('_admin', '').toUpperCase()
+    return `${dept} Student Administrator`
+  }
+  return role
 }
 
 const ROLE_LABEL = {
@@ -127,6 +172,15 @@ export default function DashboardLayout() {
   const [collapsed, setCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
   const [resizingSidebar, setResizingSidebar] = useState(false)
+
+  const mainRef = useRef(null)
+
+  useEffect(() => {
+    if (mainRef.current) {
+      mainRef.current.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+    }
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+  }, [pathname])
   const hasSuperBackup = typeof window !== 'undefined' && Boolean(localStorage.getItem('super_admin_backup_token'))
   const isImpersonated = user?.role !== 'super_admin' && hasSuperBackup
 
@@ -137,7 +191,7 @@ export default function DashboardLayout() {
     }
   }
 
-  const navItems = NAV[user?.role] || []
+  const navItems = getNavForRole(user?.role)
   const activeItem = navItems.find((item) => item.to === pathname)
     ?? (pathname.startsWith('/admin/students/') ? navItems.find((item) => item.to === '/admin/students/new') : undefined)
   const pageTitle = pathname.endsWith('/edit') && pathname.startsWith('/admin/students/')
@@ -235,7 +289,13 @@ export default function DashboardLayout() {
               key={to}
               to={to}
               end={end}
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                setOpen(false)
+                if (mainRef.current) {
+                  mainRef.current.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+                }
+                window.scrollTo({ top: 0, left: 0, behavior: 'smooth' })
+              }}
               title={collapsed ? label : undefined}
               className={({ isActive }) =>
                 `group relative flex items-center gap-3.5 rounded-xl px-3.5 py-3 text-sm font-semibold transition-all duration-150 ${isActive
@@ -354,7 +414,7 @@ export default function DashboardLayout() {
             )}
 
             {/* Notification Bell */}
-            {user?.role !== 'admin' && user?.role !== 'eee_admin' && <button
+            {user?.role !== 'admin' && user?.role !== 'eee_admin' && !user?.role?.endsWith('_admin') && <button
               aria-label="System notifications"
               className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-700 shadow-2xs transition hover:border-stone-300 hover:bg-stone-50 hover:text-stone-900 cursor-pointer"
             >
@@ -369,10 +429,10 @@ export default function DashboardLayout() {
               <Avatar user={user} size="sm" />
               <div className="hidden leading-tight md:block">
                 <p className="text-sm font-semibold text-stone-900">{user?.name}</p>
-                <p className="text-xs text-stone-500 capitalize">{ROLE_LABEL[user?.role] || user?.role}</p>
+                <p className="text-xs text-stone-500 capitalize">{getRoleLabel(user?.role)}</p>
               </div>
               {/* Only show header Sign Out button for non-student and non-admin roles (e.g. teacher) */}
-              {!['student', 'admin', 'system_admin', 'eee_system_admin', 'eee_admin', 'super_admin'].includes(user?.role) && (
+              {!['student', 'admin', 'system_admin', 'eee_system_admin', 'eee_admin', 'super_admin'].includes(user?.role) && !user?.role?.endsWith('_admin') && !user?.role?.endsWith('_system_admin') && (
                 <button
                   onClick={handleLogout}
                   title="Sign Out"
@@ -386,7 +446,7 @@ export default function DashboardLayout() {
         </header>
 
         {/* Page Main Content */}
-        <main className="flex-1 overflow-y-auto p-5 sm:p-7 lg:p-9">
+        <main ref={mainRef} className="flex-1 overflow-y-auto p-5 sm:p-7 lg:p-9">
           <div className="mx-auto max-w-6xl animate-fade-in">
             <Outlet />
           </div>

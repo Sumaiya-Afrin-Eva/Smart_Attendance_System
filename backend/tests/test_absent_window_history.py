@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.database import Base, SessionLocal, engine
 from app.main import ensure_seed_settings
-from app.models import Course, CourseRosterAssignment, Enrollment, StudentProfile, StudentRoster, User, ClassSession
+from app.models import Course, CourseRosterAssignment, Enrollment, StudentProfile, StudentRoster, User, ClassSession, ClassRoutine
 from app.routers import face, students
 def test_student_attendance_history_includes_absence_window_for_absent_sessions():
     Base.metadata.drop_all(bind=engine)
@@ -55,7 +55,7 @@ def test_student_attendance_history_includes_absence_window_for_absent_sessions(
 
         db.add(profile)
         db.add(CourseRosterAssignment(course_id=course.id, roster_id=roster.id))
-        db.add(Enrollment(student_id=user.id, course_id=course.id, semester=course.semester))
+        db.add(Enrollment(student_id=user.id, course_id=course.id, semester=course.semester, created_at=now - timedelta(days=2)))
 
         session = ClassSession(
             course_id=course.id,
@@ -97,3 +97,83 @@ def test_face_scan_within_first_five_minutes_is_marked_as_late():
 
     assert face._attendance_status_for_session(session, late_at) == "late"
     assert face._attendance_status_for_session(session, present_at) == "present"
+
+
+def test_student_attendance_history_uses_routine_start_time_for_absence_window():
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+    ensure_seed_settings()
+
+    now = datetime(2026, 11, 24, 19, 2, 0)
+
+    with SessionLocal() as db:
+        user = User(email="student-absent2@stud.kuet.ac.bd", name="Absent Student 2", role="student", password_hash=None)
+        roster = StudentRoster(
+            roll="2201002",
+            full_name="Absent Student 2",
+            email="student-absent2@stud.kuet.ac.bd",
+            department="CSE",
+            session="2022-2023",
+            phone="01700000001",
+            is_active=True,
+        )
+        profile = StudentProfile(
+            user_id=None,
+            full_name="Absent Student 2",
+            roll="2201002",
+            department="CSE",
+            series="2022",
+            session="2022-2023",
+            current_semester="3-2",
+            phone="01700000001",
+            roster_id=None,
+        )
+        course = Course(code="CSE 3200", title="System Development Project", department="CSE", semester="3-2", is_active=True)
+        routine = ClassRoutine(
+            department="CSE",
+            semester="3-2",
+            day="Tuesday",
+            start_time="08:00 AM",
+            end_time="10:00 PM",
+            course_code="CSE 3200",
+            course_title="System Development Project",
+            teacher_name="Dr. M. M. A. Hashem",
+            room="Room 301",
+        )
+
+        db.add_all([user, roster, course, routine])
+        db.commit()
+        db.refresh(user)
+        db.refresh(roster)
+        db.refresh(course)
+
+        profile.user_id = user.id
+        profile.roster_id = roster.id
+        user.profile = profile
+        roster.profile = profile
+
+        db.add(profile)
+        db.add(CourseRosterAssignment(course_id=course.id, roster_id=roster.id))
+        db.add(Enrollment(student_id=user.id, course_id=course.id, semester=course.semester, created_at=now - timedelta(days=2)))
+
+        session = ClassSession(
+            course_id=course.id,
+            teacher_id=None,
+            start_at=now,
+            end_at=now + timedelta(seconds=14),
+            room="Room 301",
+            students=40,
+            status="completed",
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+
+        result = students.attendance_history(semester="3-2", user=user, db=db)
+
+        assert result["rows"]
+        row = result["rows"][0]
+        assert row["status"] == "absent"
+        assert row["absence_window"]["start_at"] == datetime(2026, 11, 24, 8, 0, 0).isoformat()
+        assert row["absence_window"]["end_at"] == (now + timedelta(seconds=14)).isoformat()
+

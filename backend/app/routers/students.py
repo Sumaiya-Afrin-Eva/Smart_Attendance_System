@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import jwt
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -476,9 +476,57 @@ def _routine_contains_minute(start: int, end: int, minute: int) -> bool:
     return minute >= start or minute <= end
 
 
-def _absence_window_for_session(session: ClassSession) -> dict | None:
+def _parse_time_str(time_str: str | None) -> time | None:
+    if not time_str:
+        return None
+    normalized = str(time_str).strip().replace(".", ":")
+    for fmt in ("%I:%M %p", "%I:%M%p", "%H:%M", "%H:%M:%S"):
+        try:
+            return datetime.strptime(normalized, fmt).time()
+        except ValueError:
+            pass
+    return None
+
+
+def _absence_window_for_session(session: ClassSession, db: Session | None = None) -> dict | None:
     start_at = session.start_at
     end_at = session.end_at or start_at
+
+    # Resolve scheduled class start time from ClassRoutine when possible
+    if db is not None and session.start_at is not None:
+        try:
+            course = session.course or db.get(Course, session.course_id)
+            if course:
+                day_name = session.start_at.strftime("%A").strip().lower()
+                routines = db.scalars(
+                    select(ClassRoutine).where(
+                        func.upper(func.trim(ClassRoutine.course_code)) == func.upper(func.trim(course.code)),
+                        func.lower(func.trim(ClassRoutine.day)) == day_name,
+                    )
+                ).all()
+
+                matched_routine = None
+                if routines:
+                    for r in routines:
+                        dept_match = (r.department or "").strip().upper() == (course.department or "").strip().upper()
+                        sem_match = (r.semester or "").strip() == (course.semester or "").strip()
+                        if dept_match and sem_match:
+                            matched_routine = r
+                            break
+                    if not matched_routine:
+                        matched_routine = routines[0]
+
+                if matched_routine and matched_routine.start_time:
+                    parsed_time = _parse_time_str(matched_routine.start_time)
+                    if parsed_time:
+                        class_start_dt = datetime.combine(session.start_at.date(), parsed_time)
+                        if class_start_dt <= end_at:
+                            start_at = class_start_dt
+                        elif start_at > class_start_dt:
+                            start_at = class_start_dt
+        except Exception:
+            pass
+
     if end_at < start_at:
         end_at = start_at
     delta_seconds = max(0, (end_at - start_at).total_seconds())
@@ -717,6 +765,6 @@ def attendance_history(
             "status": record.status if record else "absent",
             "marked_at": record.marked_at if record else None,
             "method": record.method if record else None,
-            "absence_window": _absence_window_for_session(s) if record is None else None,
+            "absence_window": _absence_window_for_session(s, db=db) if record is None else None,
         })
     return {"semester": semester, "rows": rows}

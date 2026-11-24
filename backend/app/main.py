@@ -13,7 +13,7 @@ from .database import Base, SessionLocal, engine
 from .models import (
     AdminSetting, Course, Enrollment, StudentProfile, StudentRoster, StudentSemesterFaceEnrollment, SystemMigration,
 )
-from .routers import auth, courses, devices, face, routine, students
+from .routers import auth, courses, devices, face, kiosks, routine, students
 
 
 def ensure_seed_settings() -> None:
@@ -648,6 +648,7 @@ app.include_router(devices.router)
 app.include_router(routine.router)
 app.include_router(students.router)
 app.include_router(face.router)
+app.include_router(kiosks.router)
 
 
 @app.get("/api/health")

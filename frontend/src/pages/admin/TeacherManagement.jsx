@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import {
   BriefcaseBusiness,
   CheckCircle2,
@@ -9,6 +9,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Filter,
   ShieldCheck,
   UserCog,
   UserRound,
@@ -16,9 +17,11 @@ import {
   UploadCloud,
   Phone,
   Smartphone,
-  BookOpen
+  BookOpen,
+  ChevronDown,
+  Check
 } from 'lucide-react'
-import api, { errorMessage } from '../../lib/api'
+import api, { errorMessage, getScopedDept } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 
 const statusColors = {
@@ -26,15 +29,311 @@ const statusColors = {
   'On leave': 'bg-amber-50 text-amber-700 ring-amber-200',
   Pending: 'bg-sky-50 text-sky-700 ring-sky-200',
   Disabled: 'bg-rose-50 text-rose-700 ring-rose-200',
+  Resigned: 'bg-rose-50 text-rose-700 ring-rose-200',
 }
 
 const DEPARTMENTS = ["CSE", "EEE", "ECE", "ME", "CE", "IEM", "BME", "MSE", "URP", "ARCH", "BECM", "LE", "TE", "ChE", "MTE", "PHY", "CHEM", "MATH", "HUM"];
 
+const RESEARCH_FIELDS = [
+  "Artificial Intelligence", "Machine Learning", "Data Science", "Computer Vision",
+  "Natural Language Processing", "Software Engineering", "Computer Networks",
+  "Cybersecurity", "Database Systems", "Human-Computer Interaction",
+  "Internet of Things (IoT)", "VLSI Design", "Power Systems",
+  "Renewable Energy", "Robotics", "Bioinformatics", "Cloud Computing"
+];
+
+function SearchableDropdown({
+  label = "All Research Areas",
+  value,
+  onChange,
+  options = [],
+  placeholder = "Search research area...",
+  className = "",
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const [searchTerm, setSearchTerm] = useState('')
+  const dropdownRef = useRef(null)
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  const filteredOptions = useMemo(() => {
+    if (!searchTerm.trim()) return options
+    const q = searchTerm.toLowerCase().trim()
+    return options.filter(opt => opt.toLowerCase().includes(q))
+  }, [options, searchTerm])
+
+  const isSelected = value && value !== 'All'
+
+  return (
+    <div ref={dropdownRef} className={`relative flex-1 min-w-[185px] ${className}`}>
+      {/* Dropdown Trigger Button */}
+      <button
+        type="button"
+        onClick={() => {
+          setIsOpen(!isOpen)
+          if (!isOpen) setSearchTerm('')
+        }}
+        className={`h-9 w-full flex items-center justify-between rounded-xl border px-3 text-xs font-semibold shadow-2xs transition-colors cursor-pointer ${
+          isSelected
+            ? 'border-emerald-400 bg-emerald-50/70 text-emerald-900 font-bold'
+            : 'border-stone-200 bg-white text-stone-700 hover:border-stone-300'
+        }`}
+      >
+        <span className="truncate pr-1 text-left">
+          {isSelected ? value : label}
+        </span>
+        <div className="flex items-center gap-1 shrink-0 text-stone-400">
+          {isSelected && (
+            <span
+              onClick={(e) => {
+                e.stopPropagation()
+                onChange('All')
+              }}
+              className="p-0.5 hover:text-stone-700 transition-colors cursor-pointer"
+              title="Clear selection"
+            >
+              <X size={12} />
+            </span>
+          )}
+          <ChevronDown size={14} className={`transition-transform duration-150 ${isOpen ? 'rotate-180 text-emerald-700' : ''}`} />
+        </div>
+      </button>
+
+      {/* Popover Menu with search inside */}
+      {isOpen && (
+        <div className="absolute left-0 top-full z-50 mt-1.5 w-full min-w-[280px] max-w-sm rounded-xl border border-stone-200 bg-white p-2.5 shadow-xl animate-in fade-in zoom-in-95 duration-100">
+          {/* Inner Search Input */}
+          <div className="relative mb-2">
+            <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-stone-400" />
+            <input
+              type="text"
+              autoFocus
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder={placeholder}
+              className="h-8 w-full rounded-lg border border-stone-200 bg-stone-50/80 pl-8 pr-7 text-xs font-medium text-stone-800 placeholder-stone-400 focus:bg-white focus:border-emerald-500 focus:outline-none"
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="absolute right-2 top-2 p-0.5 text-stone-400 hover:text-stone-600 cursor-pointer"
+                title="Clear search"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+
+          {/* Options List */}
+          <div className="max-h-56 overflow-y-auto space-y-0.5 pr-1 text-xs">
+            {/* "All" reset option */}
+            <button
+              type="button"
+              onClick={() => {
+                onChange('All')
+                setIsOpen(false)
+              }}
+              className={`w-full text-left px-2.5 py-1.5 rounded-lg font-medium transition-colors cursor-pointer flex items-center justify-between ${
+                !isSelected
+                  ? 'bg-emerald-50 text-emerald-800 font-bold'
+                  : 'text-stone-700 hover:bg-stone-100'
+              }`}
+            >
+              <span>{label}</span>
+              {!isSelected && <Check size={12} className="text-emerald-700" />}
+            </button>
+
+            {filteredOptions.length === 0 ? (
+              <div className="py-4 text-center text-xs text-stone-400">
+                No research areas matched "{searchTerm}"
+              </div>
+            ) : (
+              filteredOptions.map((opt) => {
+                const active = value === opt
+                return (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => {
+                      onChange(opt)
+                      setIsOpen(false)
+                    }}
+                    className={`w-full text-left px-2.5 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center justify-between ${
+                      active
+                        ? 'bg-emerald-50 text-emerald-900 font-bold'
+                        : 'text-stone-700 hover:bg-stone-100'
+                    }`}
+                  >
+                    <span className="truncate pr-2">{opt}</span>
+                    {active && <Check size={12} className="text-emerald-700 shrink-0" />}
+                  </button>
+                )
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FacultyFilterBar({
+  sectionKey,
+  sectionTitle,
+  filterState,
+  onUpdateFilter,
+  onResetFilters,
+  allDesignations,
+  allResearchFields,
+  allMemberships,
+}) {
+  const hasActiveFilter =
+    Boolean(filterState.search.trim()) ||
+    filterState.designation !== 'All' ||
+    filterState.research !== 'All' ||
+    filterState.membership !== 'All'
+
+  return (
+    <div className="mt-3.5 space-y-2.5 rounded-xl border border-stone-200/90 bg-stone-50/70 p-3.5">
+      {/* Search Input on its own line - Long and prominent */}
+      <div className="relative w-full">
+        <Search className="absolute left-3.5 top-3 h-4 w-4 text-stone-400" />
+        <input
+          type="text"
+          value={filterState.search}
+          onChange={(e) => onUpdateFilter(sectionKey, 'search', e.target.value)}
+          placeholder={`Search ${sectionTitle.toLowerCase()} by name, email, education, research, or phone...`}
+          className="h-10 w-full rounded-xl border border-stone-200 bg-white pl-10 pr-9 text-sm font-medium text-stone-800 placeholder-stone-400 shadow-2xs focus:border-emerald-500 focus:outline-none transition-colors"
+        />
+        {filterState.search && (
+          <button
+            type="button"
+            onClick={() => onUpdateFilter(sectionKey, 'search', '')}
+            className="absolute right-3 top-2.5 p-0.5 text-stone-400 hover:text-stone-600 transition-colors cursor-pointer"
+            title="Clear search query"
+          >
+            <X size={15} />
+          </button>
+        )}
+      </div>
+
+      {/* Single & Group Filter Dropdowns */}
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-stone-500 shrink-0">
+          <Filter size={13} className="text-stone-400" />
+          Filter by:
+        </div>
+
+        {/* Designation Filter */}
+        <select
+          value={filterState.designation}
+          onChange={(e) => onUpdateFilter(sectionKey, 'designation', e.target.value)}
+          className={`h-9 min-w-[145px] flex-1 rounded-xl border px-3 text-xs font-semibold shadow-2xs focus:border-emerald-500 focus:outline-none cursor-pointer transition-colors ${
+            filterState.designation !== 'All'
+              ? 'border-emerald-400 bg-emerald-50/60 text-emerald-900 font-bold'
+              : 'border-stone-200 bg-white text-stone-700'
+          }`}
+        >
+          <option value="All">All Designations</option>
+          {allDesignations.map((d) => (
+            <option key={d} value={d}>{d}</option>
+          ))}
+        </select>
+
+        {/* Searchable Research Area Filter */}
+        <SearchableDropdown
+          label="All Research Areas"
+          value={filterState.research}
+          onChange={(val) => onUpdateFilter(sectionKey, 'research', val)}
+          options={allResearchFields}
+          placeholder="Search research area..."
+        />
+
+        {/* Professional Body Filter */}
+        <select
+          value={filterState.membership}
+          onChange={(e) => onUpdateFilter(sectionKey, 'membership', e.target.value)}
+          className={`h-9 min-w-[170px] flex-1 rounded-xl border px-3 text-xs font-semibold shadow-2xs focus:border-emerald-500 focus:outline-none cursor-pointer transition-colors ${
+            filterState.membership !== 'All'
+              ? 'border-emerald-400 bg-emerald-50/60 text-emerald-900 font-bold'
+              : 'border-stone-200 bg-white text-stone-700'
+          }`}
+        >
+          <option value="All">All Professional Bodies</option>
+          {allMemberships.map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+        </select>
+
+        {/* Reset button */}
+        {hasActiveFilter && (
+          <button
+            type="button"
+            onClick={() => onResetFilters(sectionKey)}
+            className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 text-xs font-bold text-rose-700 hover:bg-rose-100 shadow-2xs transition-colors cursor-pointer shrink-0"
+            title={`Reset all filters for ${sectionTitle}`}
+          >
+            <RotateCcw size={12} /> Reset
+          </button>
+        )}
+      </div>
+
+      {/* Active Filter Chips / Tags (Allows removing single filter from group) */}
+      {hasActiveFilter && (
+        <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs">
+          <span className="text-[11px] font-semibold text-stone-400 uppercase tracking-wider">Active:</span>
+          {filterState.search.trim() && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-stone-200/80 px-2.5 py-0.5 text-stone-700 font-medium">
+              Search: "{filterState.search}"
+              <button type="button" onClick={() => onUpdateFilter(sectionKey, 'search', '')} className="hover:text-stone-900 cursor-pointer">
+                <X size={11} />
+              </button>
+            </span>
+          )}
+          {filterState.designation !== 'All' && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-emerald-800 font-medium">
+              Designation: {filterState.designation}
+              <button type="button" onClick={() => onUpdateFilter(sectionKey, 'designation', 'All')} className="hover:text-emerald-950 cursor-pointer">
+                <X size={11} />
+              </button>
+            </span>
+          )}
+          {filterState.research !== 'All' && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-teal-100 px-2.5 py-0.5 text-teal-800 font-medium">
+              Research: {filterState.research}
+              <button type="button" onClick={() => onUpdateFilter(sectionKey, 'research', 'All')} className="hover:text-teal-950 cursor-pointer">
+                <X size={11} />
+              </button>
+            </span>
+          )}
+          {filterState.membership !== 'All' && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2.5 py-0.5 text-sky-800 font-medium">
+              Member: {filterState.membership}
+              <button type="button" onClick={() => onUpdateFilter(sectionKey, 'membership', 'All')} className="hover:text-sky-950 cursor-pointer">
+                <X size={11} />
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 
 export default function TeacherManagement() {
   const { user } = useAuth()
-  const defaultDept = user?.role === 'eee_system_admin' ? 'EEE' : 'CSE'
-  const scopedDept = user?.role === 'eee_system_admin' ? 'EEE' : user?.role === 'system_admin' ? 'CSE' : null
+  const scopedDept = getScopedDept(user)
+  const defaultDept = scopedDept || 'CSE'
   const [teachers, setTeachers] = useState([])
   const [search, setSearch] = useState('')
   const [department, setDepartment] = useState(scopedDept || 'All')
@@ -59,13 +358,6 @@ export default function TeacherManagement() {
   
   const [researchSearch, setResearchSearch] = useState('')
   const [showResearchDropdown, setShowResearchDropdown] = useState(false)
-  const RESEARCH_FIELDS = [
-    "Artificial Intelligence", "Machine Learning", "Data Science", "Computer Vision",
-    "Natural Language Processing", "Software Engineering", "Computer Networks",
-    "Cybersecurity", "Database Systems", "Human-Computer Interaction",
-    "Internet of Things (IoT)", "VLSI Design", "Power Systems",
-    "Renewable Energy", "Robotics", "Bioinformatics", "Cloud Computing"
-  ]
   const filteredResearchFields = RESEARCH_FIELDS.filter(f => f.toLowerCase().includes(researchSearch.toLowerCase()))
 
   const [entryMode, setEntryMode] = useState('manual')
@@ -87,6 +379,14 @@ export default function TeacherManagement() {
   }, [])
 
   useEffect(() => {
+    const mainEl = document.querySelector('main')
+    if (mainEl) {
+      mainEl.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+    }
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' })
+  }, [])
+
+  useEffect(() => {
     if (notice) {
       const timer = setTimeout(() => {
         setNotice('')
@@ -95,20 +395,137 @@ export default function TeacherManagement() {
     }
   }, [notice])
 
-  const filteredTeachers = useMemo(() => {
-    return teachers.filter((teacher) => {
-      const matchesSearch = `${teacher.name} ${teacher.email}`.toLowerCase().includes(search.toLowerCase())
-      const matchesDepartment = department === 'All' || teacher.department === department
-      const matchesStatus = statusFilter === 'All' || teacher.status === statusFilter
-      return matchesSearch && matchesDepartment && matchesStatus
+  const [filters, setFilters] = useState({
+    active: { search: '', designation: 'All', research: 'All', membership: 'All' },
+    leave: { search: '', designation: 'All', research: 'All', membership: 'All' },
+    resigned: { search: '', designation: 'All', research: 'All', membership: 'All' },
+  })
+
+  const updateFilter = (sectionKey, field, value) => {
+    setFilters(prev => ({
+      ...prev,
+      [sectionKey]: { ...prev[sectionKey], [field]: value }
+    }))
+  }
+
+  const resetFilters = (sectionKey) => {
+    setFilters(prev => ({
+      ...prev,
+      [sectionKey]: { search: '', designation: 'All', research: 'All', membership: 'All' }
+    }))
+  }
+
+  const isFilterActive = (sectionKey) => {
+    const f = filters[sectionKey]
+    if (!f) return false
+    return Boolean(f.search.trim()) || f.designation !== 'All' || f.research !== 'All' || f.membership !== 'All'
+  }
+
+  const allDesignations = useMemo(() => {
+    const set = new Set()
+    teachers.forEach(t => {
+      if (t.designation) set.add(t.designation.trim())
     })
-  }, [teachers, search, department, statusFilter])
+    const list = Array.from(set).sort()
+    return list.length ? list : ['Professor', 'Associate Professor', 'Assistant Professor', 'Lecturer']
+  }, [teachers])
+
+  const allResearchFields = useMemo(() => {
+    const set = new Set()
+    RESEARCH_FIELDS.forEach(f => set.add(f.trim()))
+    teachers.forEach(t => {
+      if (t.researchFields) {
+        t.researchFields.split(',').forEach(f => {
+          const trimmed = f.trim()
+          if (trimmed) set.add(trimmed)
+        })
+      }
+    })
+    return Array.from(set).sort()
+  }, [teachers])
+
+  const allMemberships = useMemo(() => {
+    const set = new Set()
+    teachers.forEach(t => {
+      if (t.professionalMembership) {
+        t.professionalMembership.split(',').forEach(m => {
+          const trimmed = m.trim()
+          if (trimmed) set.add(trimmed)
+        })
+      }
+    })
+    return Array.from(set).sort()
+  }, [teachers])
+
+  const filterFaculty = (teacherList, sectionFilter) => {
+    return teacherList.filter((teacher) => {
+      const { search, designation, research, membership } = sectionFilter
+
+      // 1. Free text keyword search (name, email, education, phone, etc.)
+      if (search && search.trim()) {
+        const q = search.toLowerCase().trim()
+        const text = `${teacher.name} ${teacher.email} ${teacher.phone || ''} ${teacher.education || ''} ${teacher.designation || ''} ${teacher.researchFields || ''} ${teacher.professionalMembership || ''}`.toLowerCase()
+        if (!text.includes(q)) return false
+      }
+
+      // 2. Designation Filter (Single / Group)
+      if (designation && designation !== 'All') {
+        const teacherDesig = (teacher.designation || '').toLowerCase()
+        if (!teacherDesig.includes(designation.toLowerCase())) return false
+      }
+
+      // 3. Research Area Filter (Single / Group)
+      if (research && research !== 'All') {
+        const fields = (teacher.researchFields || '').toLowerCase()
+        if (!fields.includes(research.toLowerCase())) return false
+      }
+
+      // 4. Professional Membership Filter (Single / Group)
+      if (membership && membership !== 'All') {
+        const mem = (teacher.professionalMembership || '').toLowerCase()
+        if (!mem.includes(membership.toLowerCase())) return false
+      }
+
+      return true
+    })
+  }
+
+  const rawActive = useMemo(() => {
+    return teachers.filter((t) => t.status === 'Active' || !t.status)
+  }, [teachers])
+
+  const rawLeave = useMemo(() => {
+    return teachers.filter((t) => t.status === 'On leave' || t.status === 'Leave')
+  }, [teachers])
+
+  const rawResigned = useMemo(() => {
+    return teachers.filter((t) => t.status === 'Resigned' || t.status === 'Disabled')
+  }, [teachers])
+
+  const activeTeachers = useMemo(() => {
+    return filterFaculty(rawActive, filters.active)
+  }, [rawActive, filters.active])
+
+  const leaveTeachers = useMemo(() => {
+    return filterFaculty(rawLeave, filters.leave)
+  }, [rawLeave, filters.leave])
+
+  const resignedTeachers = useMemo(() => {
+    return filterFaculty(rawResigned, filters.resigned)
+  }, [rawResigned, filters.resigned])
+
+  const scrollToSection = (sectionId) => {
+    const el = document.getElementById(sectionId)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
 
   const summary = [
     { label: 'Total teachers', value: teachers.length, icon: BriefcaseBusiness, tone: 'emerald' },
-    { label: 'Active faculty', value: teachers.filter((t) => t.status === 'Active').length, icon: CheckCircle2, tone: 'sky' },
+    { label: 'Active faculty', value: teachers.filter((t) => t.status === 'Active' || !t.status).length, icon: CheckCircle2, tone: 'sky' },
     { label: 'Pending review', value: teachers.filter((t) => t.status === 'Pending').length, icon: UserCog, tone: 'amber' },
-    { label: 'Assigned courses', value: teachers.reduce((sum, t) => sum + t.courses, 0), icon: GraduationCap, tone: 'violet' },
+    { label: 'Assigned courses', value: teachers.reduce((sum, t) => sum + (t.courses || 0), 0), icon: GraduationCap, tone: 'violet' },
   ]
 
   const resetTeacherForm = () => {
@@ -258,6 +675,122 @@ export default function TeacherManagement() {
     }
   }
 
+  const renderTeacherCard = (teacher) => (
+    <div key={teacher.id} className="rounded-2xl border border-stone-200 bg-[#fcfbfa] p-5 shadow-2xs flex flex-col md:flex-row gap-6">
+      {/* Left Column: Text Info */}
+      <div className="flex-1">
+        <div className="mb-4">
+          <h3 className="mt-1 font-display text-2xl font-bold text-stone-900">{teacher.name}</h3>
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs font-medium">
+            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700 ring-1 ring-emerald-200 font-semibold">
+              {teacher.designation || 'Teacher'}
+            </span>
+            {teacher.status && teacher.status !== 'Active' && (
+              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${statusColors[teacher.status] || 'bg-stone-50 text-stone-700 ring-stone-200'}`}>
+                {teacher.status}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <p className="text-[15px] leading-relaxed text-stone-800">
+          {teacher.education || 'Education not specified'}
+        </p>
+        
+        {teacher.professionalMembership && (
+          <p className="mt-1 text-[15px] leading-relaxed text-stone-800">
+            {teacher.professionalMembership}
+          </p>
+        )}
+
+        <div className="mt-2 text-[15px] leading-relaxed text-stone-800">
+          <span className="font-bold">Research Fields:</span> {teacher.researchFields || 'Not specified'}
+        </div>
+
+        <div className="mt-2 text-[15px] leading-relaxed text-stone-800">
+          <span className="font-bold">PABX Ext:</span> {teacher.pabxExt || 'N/A'} <span className="mx-2 text-stone-300">|</span> <span className="font-bold">Mobile:</span> {teacher.phone || 'N/A'}
+        </div>
+
+        <div className="mt-1 text-[15px] leading-relaxed text-stone-800">
+          <span className="font-bold">Email:</span> {teacher.email}
+        </div>
+
+        {teacher.website && (
+          <div className="mt-1 text-[15px] leading-relaxed text-stone-800">
+            <span className="font-bold">Website:</span>{' '}
+            <a
+              href={teacher.website.startsWith('http') ? teacher.website : `https://${teacher.website}`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-emerald-700 hover:underline"
+            >
+              {teacher.website}
+            </a>
+          </div>
+        )}
+
+        {/* Action Buttons: Edit details | Active | Leave | Resigned */}
+        <div className="mt-5 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => handleEditTeacher(teacher)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-[13px] font-semibold text-stone-700 hover:bg-stone-50 transition-colors shadow-2xs cursor-pointer"
+          >
+            Edit details
+          </button>
+          
+          <button
+            type="button"
+            onClick={() => updateStatus(teacher.id, 'Active')}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[13px] font-semibold ring-1 transition-all shadow-2xs cursor-pointer ${
+              (teacher.status === 'Active' || !teacher.status)
+                ? 'bg-emerald-50 text-emerald-800 ring-emerald-300 font-bold'
+                : 'border border-stone-200 bg-white text-stone-600 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200'
+            }`}
+          >
+            Active
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateStatus(teacher.id, 'On leave')}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[13px] font-semibold ring-1 transition-all shadow-2xs cursor-pointer ${
+              (teacher.status === 'On leave' || teacher.status === 'Leave')
+                ? 'bg-amber-50 text-amber-800 ring-amber-300 font-bold'
+                : 'border border-amber-200 bg-amber-50/60 text-amber-800 hover:bg-amber-100/80'
+            }`}
+          >
+            Leave
+          </button>
+
+          <button
+            type="button"
+            onClick={() => updateStatus(teacher.id, 'Resigned')}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[13px] font-semibold ring-1 transition-all shadow-2xs cursor-pointer ${
+              (teacher.status === 'Resigned' || teacher.status === 'Disabled')
+                ? 'bg-rose-50 text-rose-800 ring-rose-300 font-bold'
+                : 'border border-rose-200 bg-rose-50/60 text-rose-800 hover:bg-rose-100/80'
+            }`}
+          >
+            Resigned
+          </button>
+        </div>
+      </div>
+
+      {/* Right Column: Photo */}
+      <div className="w-32 shrink-0 md:w-36 self-start">
+        {teacher.picture ? (
+          <img src={teacher.picture} alt={teacher.name} className="w-full aspect-[3/4] object-cover bg-stone-100 border-4 border-white shadow-sm ring-1 ring-stone-200" />
+        ) : (
+          <div className="w-full aspect-[3/4] bg-stone-100 border-4 border-white shadow-sm ring-1 ring-stone-200 flex flex-col items-center justify-center text-stone-400">
+            <UserRound size={32} />
+            <span className="mt-2 text-[10px] uppercase tracking-wider font-semibold">No Photo</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
   return (
 
     <div className="space-y-6">
@@ -275,9 +808,36 @@ export default function TeacherManagement() {
 
       <section className="rounded-2xl border border-stone-200 bg-white p-4 shadow-2xs">
         <div className="flex flex-wrap items-center gap-6 text-sm font-medium">
-          <button type="button" onClick={() => setStatusFilter(statusFilter === 'Active' ? 'All' : 'Active')} className={`underline hover:text-blue-800 transition-colors ${statusFilter === 'Active' ? 'text-blue-800 font-bold' : 'text-blue-600'}`}>Active Faculty</button>
-          <button type="button" onClick={() => setStatusFilter(statusFilter === 'On leave' ? 'All' : 'On leave')} className={`underline hover:text-blue-800 transition-colors ${statusFilter === 'On leave' ? 'text-blue-800 font-bold' : 'text-blue-600'}`}>Faculty on leave</button>
-          <button type="button" onClick={() => setStatusFilter(statusFilter === 'Disabled' ? 'All' : 'Disabled')} className={`underline hover:text-blue-800 transition-colors ${statusFilter === 'Disabled' ? 'text-blue-800 font-bold' : 'text-blue-600'}`}>Resigned faculty</button>
+          <button
+            type="button"
+            onClick={() => scrollToSection('active-faculty-section')}
+            className="text-blue-600 hover:text-blue-800 underline transition-colors cursor-pointer flex items-center gap-1.5"
+          >
+            Active Faculty
+            <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
+              {rawActive.length}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => scrollToSection('leave-faculty-section')}
+            className="text-blue-600 hover:text-blue-800 underline transition-colors cursor-pointer flex items-center gap-1.5"
+          >
+            Faculty on leave
+            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-bold text-amber-700 ring-1 ring-amber-200">
+              {rawLeave.length}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => scrollToSection('resigned-faculty-section')}
+            className="text-blue-600 hover:text-blue-800 underline transition-colors cursor-pointer flex items-center gap-1.5"
+          >
+            Resigned faculty
+            <span className="rounded-full bg-rose-50 px-2 py-0.5 text-xs font-bold text-rose-700 ring-1 ring-rose-200">
+              {rawResigned.length}
+            </span>
+          </button>
         </div>
       </section>
 
@@ -507,118 +1067,118 @@ export default function TeacherManagement() {
 
       {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 shadow-sm">{notice}</div>}
 
-      <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-400">Faculty roster</p>
-            <h3 className="mt-2 text-2xl font-bold text-stone-900">Teachers</h3>
+      {/* Active Faculty Section */}
+      <section id="active-faculty-section" className="scroll-mt-6 rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-stone-100 pb-3.5">
+          <div className="flex items-center gap-3">
+            <h3 className="text-2xl font-bold text-stone-900">Active Faculty</h3>
+            <span className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
+              {activeTeachers.length}{activeTeachers.length !== rawActive.length ? ` / ${rawActive.length}` : ''}
+            </span>
           </div>
-          <div className="flex items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-stone-600">
-            <Search size={15} />
-            <input value={search} onChange={(event) => setSearch(event.target.value)} type="text" placeholder="Search name or email" className="w-44 bg-transparent text-sm text-stone-700 outline-none placeholder:text-stone-400" />
+          <button 
+            onClick={handleDeleteAllTeachers} 
+            className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-rose-700 active:scale-95 cursor-pointer"
+          >
+            <X size={16} /> Delete All
+          </button>
+        </div>
+
+        {/* Search & Multi-Criteria Filtering on the line below */}
+        <FacultyFilterBar
+          sectionKey="active"
+          sectionTitle="Active Faculty"
+          filterState={filters.active}
+          onUpdateFilter={updateFilter}
+          onResetFilters={resetFilters}
+          allDesignations={allDesignations}
+          allResearchFields={allResearchFields}
+          allMemberships={allMemberships}
+        />
+
+        <div className="mt-5 space-y-4">
+          {loading ? (
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-8 text-center text-sm text-stone-500">Loading active faculty...</div>
+          ) : activeTeachers.length === 0 ? (
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-8 text-center text-sm text-stone-500">
+              {isFilterActive('active') ? 'No active faculty matched your search and filter criteria.' : 'No active faculty found.'}
+            </div>
+          ) : (
+            activeTeachers.map((teacher) => renderTeacherCard(teacher))
+          )}
+        </div>
+      </section>
+
+      {/* Faculty on Leave Section */}
+      <section id="leave-faculty-section" className="scroll-mt-6 rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-stone-100 pb-3.5">
+          <div className="flex items-center gap-3">
+            <h3 className="text-2xl font-bold text-stone-900">Faculty on leave</h3>
+            <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-bold text-amber-700 ring-1 ring-amber-200">
+              {leaveTeachers.length}{leaveTeachers.length !== rawLeave.length ? ` / ${rawLeave.length}` : ''}
+            </span>
           </div>
         </div>
 
-          <div className="mt-5 flex flex-wrap gap-2 items-center justify-between">
-            <div className="flex flex-wrap gap-2">
-              {scopedDept ? (
-                <div className="rounded-xl border border-stone-200 bg-stone-100 px-3 py-2 text-sm text-stone-700 font-semibold">
-                  {scopedDept} Department
-                </div>
-              ) : (
-                <select value={department} onChange={(event) => setDepartment(event.target.value)} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 outline-none">
-                  <option value="All">All departments</option>
-                  {DEPARTMENTS.map(dept => <option key={dept} value={dept}>{dept}</option>)}
-                </select>
-              )}
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 outline-none">
-                <option value="All">All status</option>
-                <option value="Active">Active</option>
-                <option value="On leave">On leave</option>
-                <option value="Pending">Pending</option>
-                <option value="Disabled">Disabled</option>
-              </select>
+        {/* Search & Multi-Criteria Filtering on the line below */}
+        <FacultyFilterBar
+          sectionKey="leave"
+          sectionTitle="Faculty on leave"
+          filterState={filters.leave}
+          onUpdateFilter={updateFilter}
+          onResetFilters={resetFilters}
+          allDesignations={allDesignations}
+          allResearchFields={allResearchFields}
+          allMemberships={allMemberships}
+        />
+
+        <div className="mt-5 space-y-4">
+          {loading ? (
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-8 text-center text-sm text-stone-500">Loading faculty on leave...</div>
+          ) : leaveTeachers.length === 0 ? (
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-8 text-center text-sm text-stone-500">
+              {isFilterActive('leave') ? 'No faculty on leave matched your search and filter criteria.' : 'No faculty currently on leave.'}
             </div>
-            <button 
-              onClick={handleDeleteAllTeachers} 
-              className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-rose-700 active:scale-95"
-            >
-              <X size={16} /> Delete All
-            </button>
+          ) : (
+            leaveTeachers.map((teacher) => renderTeacherCard(teacher))
+          )}
+        </div>
+      </section>
+
+      {/* Resigned Faculty Section */}
+      <section id="resigned-faculty-section" className="scroll-mt-6 rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-stone-100 pb-3.5">
+          <div className="flex items-center gap-3">
+            <h3 className="text-2xl font-bold text-stone-900">Resigned Faculty</h3>
+            <span className="rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-bold text-rose-700 ring-1 ring-rose-200">
+              {resignedTeachers.length}{resignedTeachers.length !== rawResigned.length ? ` / ${rawResigned.length}` : ''}
+            </span>
           </div>
+        </div>
 
-          <div className="mt-5 space-y-4">
-            {loading ? (
-              <div className="rounded-2xl border border-stone-200 bg-stone-50 p-8 text-center text-sm text-stone-500">Loading teachers...</div>
-            ) : filteredTeachers.length === 0 ? (
-              <div className="rounded-2xl border border-stone-200 bg-stone-50 p-8 text-center text-sm text-stone-500">No teachers matched your search.</div>
-            ) : (
-              filteredTeachers.map((teacher) => (
-                <div key={teacher.id} className="rounded-2xl border border-stone-200 bg-[#fcfbfa] p-5 shadow-2xs flex flex-col md:flex-row gap-6">
-                  {/* Left Column: Text Info */}
-                  <div className="flex-1">
-                    <div className="mb-4">
-                      <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-700">{teacher.department}</p>
-                      <h3 className="mt-2 font-display text-2xl font-bold text-stone-900">{teacher.name}</h3>
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs font-medium">
-                        <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-emerald-700 ring-1 ring-emerald-200">{teacher.designation || 'Teacher'}</span>
-                      </div>
-                    </div>
+        {/* Search & Multi-Criteria Filtering on the line below */}
+        <FacultyFilterBar
+          sectionKey="resigned"
+          sectionTitle="Resigned Faculty"
+          filterState={filters.resigned}
+          onUpdateFilter={updateFilter}
+          onResetFilters={resetFilters}
+          allDesignations={allDesignations}
+          allResearchFields={allResearchFields}
+          allMemberships={allMemberships}
+        />
 
-                    <p className="text-[15px] leading-relaxed text-stone-800">
-                      {teacher.education || 'Education not specified'}
-                    </p>
-                    
-                    <p className="mt-1 text-[15px] leading-relaxed text-stone-800">
-                      {teacher.professionalMembership || 'N/A'}
-                    </p>
-
-                    <div className="mt-2 text-[15px] leading-relaxed text-stone-800">
-                      <span className="font-bold">Research Fields:</span> {teacher.researchFields || 'Not specified'}
-                    </div>
-
-                    <div className="mt-2 text-[15px] leading-relaxed text-stone-800">
-                      <span className="font-bold">PABX Ext:</span> {teacher.pabxExt || 'N/A'} <span className="mx-2 text-stone-300">|</span> <span className="font-bold">Mobile:</span> {teacher.phone || 'N/A'}
-                    </div>
-
-                    <div className="mt-1 text-[15px] leading-relaxed text-stone-800">
-                      <span className="font-bold">Email:</span> {teacher.email}
-                    </div>
-
-                    {teacher.website && (
-                      <div className="mt-1 text-[15px] leading-relaxed text-stone-800">
-                        <span className="font-bold">Website:</span> <a href={teacher.website.startsWith('http') ? teacher.website : `https://${teacher.website}`} target="_blank" rel="noreferrer" className="hover:underline">{teacher.website}</a>
-                      </div>
-                    )}
-
-                    <div className="mt-5 flex flex-wrap items-center gap-2">
-                      <button type="button" onClick={() => handleEditTeacher(teacher)} className="inline-flex items-center gap-2 rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-[13px] font-semibold text-stone-700 hover:bg-stone-50">
-                        Edit details
-                      </button>
-                      <button type="button" onClick={() => updateStatus(teacher.id, teacher.status === 'Active' ? 'Disabled' : 'Active')} className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-[13px] font-semibold ring-1 transition-colors cursor-pointer ${teacher.status === 'Disabled' ? 'bg-rose-50 text-rose-700 ring-rose-200 hover:bg-rose-100' : 'bg-emerald-50 text-emerald-700 ring-emerald-200 hover:bg-emerald-100'}`}>
-                        {teacher.status || 'Active'}
-                      </button>
-                      <button type="button" onClick={() => updateStatus(teacher.id, 'On leave')} className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-[13px] font-semibold text-amber-700 hover:bg-amber-100">
-                        Leave
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Right Column: Photo */}
-                  <div className="w-32 shrink-0 md:w-36 self-start">
-                    {teacher.picture ? (
-                      <img src={teacher.picture} alt={teacher.name} className="w-full aspect-[3/4] object-cover bg-stone-100 border-4 border-white shadow-sm ring-1 ring-stone-200" />
-                    ) : (
-                      <div className="w-full aspect-[3/4] bg-stone-100 border-4 border-white shadow-sm ring-1 ring-stone-200 flex flex-col items-center justify-center text-stone-400">
-                        <UserRound size={32} />
-                        <span className="mt-2 text-[10px] uppercase tracking-wider font-semibold">No Photo</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+        <div className="mt-5 space-y-4">
+          {loading ? (
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-8 text-center text-sm text-stone-500">Loading resigned faculty...</div>
+          ) : resignedTeachers.length === 0 ? (
+            <div className="rounded-2xl border border-stone-200 bg-stone-50 p-8 text-center text-sm text-stone-500">
+              {isFilterActive('resigned') ? 'No resigned faculty matched your search and filter criteria.' : 'No resigned faculty found.'}
+            </div>
+          ) : (
+            resignedTeachers.map((teacher) => renderTeacherCard(teacher))
+          )}
+        </div>
       </section>
     </div>
   )

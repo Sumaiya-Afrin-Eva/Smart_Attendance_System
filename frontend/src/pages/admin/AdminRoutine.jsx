@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   CalendarDays,
   Plus,
@@ -20,7 +21,7 @@ import {
   List,
   RotateCcw,
 } from 'lucide-react'
-import api, { errorMessage } from '../../lib/api'
+import api, { errorMessage, getScopedDept } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday']
@@ -39,7 +40,7 @@ const TIME_PRESETS = [
 
 export default function AdminRoutine() {
   const { user } = useAuth()
-  const scopedDept = user?.role === 'eee_system_admin' ? 'EEE' : user?.role === 'system_admin' ? 'CSE' : null
+  const scopedDept = getScopedDept(user)
   const [routine, setRoutine] = useState([])
   const [courses, setCourses] = useState([])
   const [teachers, setTeachers] = useState([])
@@ -88,6 +89,17 @@ export default function AdminRoutine() {
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [uploadFile, setUploadFile] = useState(null)
   const [uploading, setUploading] = useState(false)
+
+  // Prevent background scrolling while any modal is open
+  useEffect(() => {
+    if (showManualModal || showUploadModal) {
+      const originalOverflow = document.body.style.overflow
+      document.body.style.overflow = 'hidden'
+      return () => {
+        document.body.style.overflow = originalOverflow
+      }
+    }
+  }, [showManualModal, showUploadModal])
 
   // Fetch initial routine, courses, and teachers
   useEffect(() => {
@@ -340,7 +352,8 @@ export default function AdminRoutine() {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
 
-      showNotice(`Routine import completed: Added ${data.added} slots. Skipped ${data.skipped} rows.`)
+      const updatedPart = data.updated ? `, Updated ${data.updated} slots` : ''
+      showNotice(`Routine import completed: Added ${data.added} slots${updatedPart}. Skipped ${data.skipped} rows.`)
       setShowUploadModal(false)
       setUploadFile(null)
       // Reload routine
@@ -633,15 +646,6 @@ export default function AdminRoutine() {
                 Table
               </button>
             </div>
-
-            <button
-              onClick={handleExportCSV}
-              className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer"
-              title="Export current view to CSV"
-            >
-              <Download className="h-4 w-4 text-slate-500" />
-              CSV
-            </button>
 
             {routine.length > 0 && (
               <button
@@ -1021,9 +1025,12 @@ export default function AdminRoutine() {
       )}
 
       {/* MANUAL ADD / EDIT MODAL */}
-      {showManualModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
-          <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-xl animate-in fade-in zoom-in-95 duration-150">
+      {showManualModal && createPortal(
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) setShowManualModal(false) }}
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4"
+        >
+          <div className="relative w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
               <div className="flex items-center gap-2.5">
                 <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-800">
@@ -1239,13 +1246,17 @@ export default function AdminRoutine() {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* EXCEL / CSV BULK UPLOAD MODAL */}
-      {showUploadModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
-          <div className="w-full max-w-lg rounded-3xl border border-slate-200 bg-white p-6 shadow-xl animate-in fade-in zoom-in-95 duration-150">
+      {showUploadModal && createPortal(
+        <div
+          onClick={(e) => { if (e.target === e.currentTarget) setShowUploadModal(false) }}
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4"
+        >
+          <div className="relative w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
               <div className="flex items-center gap-2.5">
                 <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-800">
@@ -1356,7 +1367,8 @@ export default function AdminRoutine() {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

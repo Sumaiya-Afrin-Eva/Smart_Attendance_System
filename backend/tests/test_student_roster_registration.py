@@ -482,8 +482,8 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
         files={"image": ("camera.jpg", b"kiosk-student-one", "image/jpeg")},
     )
     assert marked.status_code == 200, marked.text
-    assert marked.json()["matched"] is True
-    assert marked.json()["attendance"]["status"] == "late"
+    assert marked.json()["matched"] is True, marked.text
+    assert marked.json()["attendance"]["status"] == "present"
     assert marked.json()["attendance"]["already_marked"] is False
 
     TestFaceService.proof_available = True
@@ -631,6 +631,12 @@ def test_kiosk_department_filter_limits_students_to_that_department():
         assert [candidate[0].roll for candidate in eee_candidates] == ["2202001"]
 
 
+def test_generic_kiosk_label_does_not_apply_department_filter():
+    assert face_module._resolve_kiosk_department("kiosk-main") is None
+    assert face_module._resolve_kiosk_department("kiosk-CSE") == "CSE"
+    assert face_module._resolve_kiosk_department("EEE-kiosk") == "EEE"
+
+
 def test_kiosk_marks_attendance_to_the_active_routine_teacher_only(monkeypatch):
     reset_db()
     client = TestClient(app)
@@ -743,7 +749,7 @@ def test_kiosk_marks_attendance_to_the_active_routine_teacher_only(monkeypatch):
     )
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["matched"] is True
+    assert payload["matched"] is True, response.text
     assert payload["student"]["roll"] == "2107001"
 
     with SessionLocal() as db:

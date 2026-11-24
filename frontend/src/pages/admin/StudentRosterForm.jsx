@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Eye, EyeOff, ImagePlus, Lock, Mail, Plus, RotateCcw, UploadCloud, UserRound, X } from 'lucide-react'
-import api, { errorMessage } from '../../lib/api'
+import api, { errorMessage, getScopedDept } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 
 const emptyForm = { name: '', roll: '', email: '', password: '', session: '', department: 'CSE', phone: '' }
 
 export default function StudentRosterForm() {
   const { user } = useAuth()
-  const scopedDept = (user?.role === 'eee_system_admin' || user?.role === 'eee_admin') ? 'EEE' : (user?.role === 'system_admin' || user?.role === 'admin') ? 'CSE' : null
+  const scopedDept = getScopedDept(user)
   const { studentId } = useParams()
   const navigate = useNavigate()
   const editing = Boolean(studentId)
