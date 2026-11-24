@@ -9,10 +9,10 @@ class_sessions   each class held for a course (created by the teacher)
 attendance       one row per student who was marked in a session
                  (a completed session with no row = absent)
 """
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
-    Boolean, DateTime as SQLDateTime, Float, ForeignKey, Integer, LargeBinary, String, Text,
+    Boolean, Date as SQLDate, DateTime as SQLDateTime, Float, ForeignKey, Integer, LargeBinary, String, Text,
     Index, TypeDecorator, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -320,6 +320,24 @@ class ClassRoutine(Base):
     teacher_name: Mapped[str | None] = mapped_column(String(120), default=None)
     room: Mapped[str | None] = mapped_column(String(50), default=None)
     session: Mapped[str | None] = mapped_column(String(20), default="2025-2026")
+    created_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
+
+
+class ClassScheduleChangeRequest(Base):
+    __tablename__ = "class_schedule_change_requests"
+    __table_args__ = (
+        Index("ix_schedule_change_date_status", "target_date", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    routine_id: Mapped[int] = mapped_column(ForeignKey("class_routines.id", ondelete="CASCADE"), index=True)
+    teacher_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    target_date: Mapped[date] = mapped_column(SQLDate(), index=True)
+    requested_start_time: Mapped[str] = mapped_column(String(20))
+    requested_end_time: Mapped[str] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None)
+    reviewed_at: Mapped[datetime | None] = mapped_column(ISODateTime(), default=None)
     created_at: Mapped[datetime] = mapped_column(ISODateTime(), default=datetime.now)
 
 

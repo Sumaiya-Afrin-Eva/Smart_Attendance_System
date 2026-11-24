@@ -24,6 +24,7 @@ export default function FaceEnrollment() {
   const checkTimerRef = useRef(null)
   const checkingRef = useRef(false)
   const checkAbortRef = useRef(null)
+  const livenessVerifiedRef = useRef(false)
   const [cameraActive, setCameraActive] = useState(false)
   const [humanDetected, setHumanDetected] = useState(false)
   const [livenessReady, setLivenessReady] = useState(false)
@@ -78,24 +79,31 @@ export default function FaceEnrollment() {
         skipNetworkRetry: true,
       })
       if (controller.signal.aborted || streamRef.current !== activeStream) return
-      setHumanDetected(data.human)
-      setLivenessReady(data.liveness === true)
+      const verified = data.liveness === true
+      if (verified) livenessVerifiedRef.current = true
+      setHumanDetected(Boolean(data.human || verified))
+      setLivenessReady(verified)
       setStatus(data.message)
     } catch (error) {
       if (controller.signal.aborted || streamRef.current !== activeStream) return
-      setHumanDetected(false)
-      setLivenessReady(false)
-      setStatus(errorMessage(error, error.message || 'Live face verification is unavailable.'))
+      if (!livenessVerifiedRef.current) {
+        setHumanDetected(false)
+        setLivenessReady(false)
+        setStatus(errorMessage(error, error.message || 'Live face verification is unavailable.'))
+      }
     } finally {
       if (checkAbortRef.current === controller) {
         checkAbortRef.current = null
         checkingRef.current = false
-        if (streamRef.current === activeStream) scheduleCheck(LIVENESS_POLL_INTERVAL_MS)
+        if (streamRef.current === activeStream && !livenessVerifiedRef.current) {
+          scheduleCheck(LIVENESS_POLL_INTERVAL_MS)
+        }
       }
     }
   }
 
   const startCamera = async () => {
+    livenessVerifiedRef.current = false
     setHumanDetected(false)
     setLivenessReady(false)
     setStatus('Checking the live camera for a human face...')
@@ -120,6 +128,7 @@ export default function FaceEnrollment() {
   }
 
   const stopCamera = () => {
+    livenessVerifiedRef.current = false
     if (checkTimerRef.current) window.clearTimeout(checkTimerRef.current)
     checkTimerRef.current = null
     checkAbortRef.current?.abort()

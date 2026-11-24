@@ -14,7 +14,6 @@ import MyCourses from './pages/student/MyCourses'
 import MyProfile from './pages/student/MyProfile'
 import TeacherDashboard from './pages/teacher/TeacherDashboard'
 import TeacherMyCourses from './pages/teacher/TeacherMyCourses'
-import TeacherCourses from './pages/teacher/TeacherCourses'
 import TeacherRoutine from './pages/teacher/TeacherRoutine'
 import TeacherHistory from './pages/teacher/TeacherHistory'
 import TeacherAnalytics from './pages/teacher/TeacherAnalytics'
@@ -129,10 +128,11 @@ export default function App() {
           <Route index element={<TeacherDashboard />} />
           <Route path="routine" element={<TeacherRoutine />} />
           <Route path="my-courses" element={<TeacherMyCourses />} />
-          <Route path="courses" element={<TeacherCourses />} />
           <Route path="biometrics" element={<FaceLab />} />
           <Route path="history" element={<TeacherHistory />} />
+          <Route path="history/:courseId" element={<TeacherHistory />} />
           <Route path="analytics" element={<TeacherAnalytics />} />
+          <Route path="analytics/:courseId" element={<TeacherAnalytics />} />
           <Route path="settings" element={<TeacherSettings />} />
         </Route>
       </Route>

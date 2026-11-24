@@ -1,8 +1,10 @@
 package com.example.attendancemobileapp;
 
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -48,6 +50,7 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
     private static final long COUNTDOWN_UPDATE_MS = 250L;
+    private static final String LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK";
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
@@ -60,6 +63,7 @@ public class MainActivity extends AppCompatActivity {
 
     private GoogleSignInClient googleSignInClient;
     private ActivityResultLauncher<Intent> signInLauncher;
+    private ActivityResultLauncher<String> localNetworkPermissionLauncher;
     private MaterialButton signInButton;
     private MaterialButton signOutButton;
     private MaterialButton retryQrButton;
@@ -128,20 +132,35 @@ public class MainActivity extends AppCompatActivity {
                 }
         );
 
-        signInButton.setOnClickListener(view -> signInLauncher.launch(googleSignInClient.getSignInIntent()));
+        localNetworkPermissionLauncher = registerForActivityResult(
+                new ActivityResultContracts.RequestPermission(),
+                isGranted -> {
+                    if (isGranted) {
+                        signInLauncher.launch(googleSignInClient.getSignInIntent());
+                    } else {
+                        showStatus(getString(R.string.local_network_permission_denied));
+                    }
+                }
+        );
+
+        signInButton.setOnClickListener(view -> startGoogleSignIn());
         signOutButton.setOnClickListener(view -> signOut());
         retryQrButton.setOnClickListener(view -> fetchAttendanceQr());
 
         GoogleSignInAccount previousAccount = GoogleSignIn.getLastSignedInAccount(this);
         if (previousAccount != null) {
-            showStatus(getString(R.string.reconnecting_account));
-            googleSignInClient.silentSignIn().addOnCompleteListener(this, task -> {
-                if (task.isSuccessful() && task.getResult() != null) {
-                    authenticateWithBackend(task.getResult());
-                } else {
-                    showSignedOut();
-                }
-            });
+            if (hasLocalNetworkPermission()) {
+                showStatus(getString(R.string.reconnecting_account));
+                googleSignInClient.silentSignIn().addOnCompleteListener(this, task -> {
+                    if (task.isSuccessful() && task.getResult() != null) {
+                        authenticateWithBackend(task.getResult());
+                    } else {
+                        showSignedOut();
+                    }
+                });
+            } else {
+                showStatus(getString(R.string.local_network_permission_required));
+            }
         }
     }
 
@@ -164,6 +183,20 @@ public class MainActivity extends AppCompatActivity {
         handler.removeCallbacks(countdownRunnable);
         networkExecutor.shutdownNow();
         super.onDestroy();
+    }
+
+    private void startGoogleSignIn() {
+        if (Build.VERSION.SDK_INT >= 37 && !hasLocalNetworkPermission()) {
+            showStatus(getString(R.string.local_network_permission_required));
+            localNetworkPermissionLauncher.launch(LOCAL_NETWORK_PERMISSION);
+            return;
+        }
+        signInLauncher.launch(googleSignInClient.getSignInIntent());
+    }
+
+    private boolean hasLocalNetworkPermission() {
+        return Build.VERSION.SDK_INT < 37
+                || checkSelfPermission(LOCAL_NETWORK_PERMISSION) == PackageManager.PERMISSION_GRANTED;
     }
 
     private void authenticateWithBackend(GoogleSignInAccount account) {

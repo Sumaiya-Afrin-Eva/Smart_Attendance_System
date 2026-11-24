@@ -23,6 +23,7 @@ import {
 } from 'lucide-react'
 import api, { errorMessage, getScopedDept } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+import ScheduleChangeRequestsPanel from '../../components/admin/ScheduleChangeRequestsPanel'
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday']
 const DEPARTMENTS = ['CSE', 'EEE', 'ECE', 'ME', 'CE', 'IEM', 'BME', 'MSE', 'URP', 'ARCH', 'BECM', 'LE', 'TE', 'ChE', 'MTE', 'PHY', 'CHEM', 'MATH', 'HUM']
@@ -467,6 +468,8 @@ export default function AdminRoutine() {
           </button>
         </div>
       )}
+
+      <ScheduleChangeRequestsPanel />
 
       {/* Header Banner */}
       <div className="rounded-3xl border border-slate-200/80 bg-white/95 p-6 md:p-8 shadow-xs">

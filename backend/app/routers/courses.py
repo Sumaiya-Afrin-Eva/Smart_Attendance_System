@@ -1,7 +1,7 @@
 import json
 import shutil
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -33,6 +33,7 @@ from pydantic import BaseModel
 class CourseStatusUpdateIn(BaseModel):
     status: str
 from ..security import get_current_user, hash_password, require_role
+from ..schedule_utils import approved_schedule_changes, effective_routine_times, teacher_routine_slots, time_to_minutes
 from ..services import course_out
 
 router = APIRouter(prefix="/api", tags=["courses"])
@@ -117,6 +118,73 @@ def _get_teacher_assigned_courses(db: Session, user: User) -> list[Course]:
     return sorted(courses_by_id.values(), key=lambda c: (c.semester or "", c.code or ""))
 
 
+def _course_roster_students(db: Session, course: Course) -> list[dict]:
+    students = []
+    students_by_user = {}
+    students_by_roll = {}
+
+    def add_student(student_id, roll, name, department):
+        normalized_roll = str(roll or "").strip().casefold()
+        if normalized_roll in {"", "n/a", "na"}:
+            normalized_roll = ""
+        student = students_by_user.get(student_id) if student_id is not None else None
+        if student is None and normalized_roll:
+            student = students_by_roll.get(normalized_roll)
+        if student is None:
+            student = {
+                "studentId": student_id,
+                "roll": str(roll or "N/A"),
+                "name": name or "Student",
+                "department": department or course.department,
+            }
+            students.append(student)
+        elif student_id is not None:
+            student["studentId"] = student_id
+        if student_id is not None:
+            students_by_user[student_id] = student
+        if normalized_roll:
+            students_by_roll[normalized_roll] = student
+
+    assigned_rosters = db.scalars(
+        select(StudentRoster)
+        .join(CourseRosterAssignment, CourseRosterAssignment.roster_id == StudentRoster.id)
+        .where(
+            CourseRosterAssignment.course_id == course.id,
+            StudentRoster.is_active.is_(True),
+        )
+    ).all()
+    for roster in assigned_rosters:
+        profile = roster.profile
+        add_student(
+            profile.user_id if profile else None,
+            profile.roll if profile else roster.roll,
+            profile.full_name if profile else roster.full_name,
+            profile.department if profile else roster.department,
+        )
+
+    enrolled_users = db.scalars(
+        select(User)
+        .join(Enrollment, Enrollment.student_id == User.id)
+        .where(Enrollment.course_id == course.id)
+    ).all()
+    for student_user in enrolled_users:
+        profile = student_user.profile
+        add_student(
+            student_user.id,
+            profile.roll if profile else "N/A",
+            profile.full_name if profile else student_user.name,
+            profile.department if profile else course.department,
+        )
+
+    students.sort(
+        key=lambda student: (
+            not str(student["roll"]).isdigit(),
+            int(student["roll"]) if str(student["roll"]).isdigit() else str(student["roll"]).casefold(),
+        )
+    )
+    return students
+
+
 @router.get("/meta")
 def meta(db: Session = Depends(get_db)):
     settings_rows = db.scalars(select(AdminSetting).where(AdminSetting.key.in_(["instName", "deptName", "instLogo"]))).all()
@@ -195,28 +263,81 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
         else:
             avg_attendance = "N/A"
 
-    upcoming_sessions = db.scalars(
-        select(ClassSession)
-        .where(
-            ClassSession.course_id.in_(course_ids),
-            ClassSession.start_at >= datetime.now(),
-            (ClassSession.teacher_id == user.id) | (ClassSession.teacher_id.is_(None)),
-        )
-        .order_by(ClassSession.start_at)
-        .limit(3)
-    ).all() if course_ids else []
+    now = datetime.now()
+    today = now.date()
+    horizon = today + timedelta(days=7)
+    weekdays = {day: index for index, day in enumerate(
+        ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+    )}
+    weekdays.update({
+        "mon": 0, "tue": 1, "wed": 2, "thu": 3,
+        "fri": 4, "sat": 5, "sun": 6,
+    })
+    routine_slots = teacher_routine_slots(db, user)
+    scheduled_slots = []
+    candidate_dates = set()
+    for routine in routine_slots:
+        day = (routine.day or "").strip().title()
+        weekday = weekdays.get(day, weekdays.get(day[:3]))
+        if weekday is None:
+            continue
+        class_date = today + timedelta(days=(weekday - today.weekday()) % 7)
+        candidate_dates.add(class_date)
+        if class_date == today:
+            candidate_dates.add(class_date + timedelta(days=7))
+        scheduled_slots.append((routine, class_date))
 
+    changes_by_date = {
+        target_date: approved_schedule_changes(db, target_date)
+        for target_date in candidate_dates
+    }
     upcoming = []
-    for s in upcoming_sessions:
-        c = course_map[s.course_id]
+    for routine, class_date in scheduled_slots:
+        start_time, end_time = effective_routine_times(
+            routine,
+            changes_by_date.get(class_date, {}),
+        )
+        start_minutes = time_to_minutes(start_time)
+        end_minutes = time_to_minutes(end_time)
+        if start_minutes is None or end_minutes is None:
+            continue
+        if class_date == today and start_minutes <= now.hour * 60 + now.minute:
+            class_date += timedelta(days=7)
+            start_time, end_time = effective_routine_times(
+                routine,
+                changes_by_date.get(class_date, {}),
+            )
+            start_minutes = time_to_minutes(start_time)
+            end_minutes = time_to_minutes(end_time)
+            if start_minutes is None or end_minutes is None:
+                continue
+        if class_date > horizon:
+            continue
+        class_start = datetime.combine(
+            class_date,
+            datetime.min.time().replace(hour=start_minutes // 60, minute=start_minutes % 60),
+        )
+        if class_start <= now:
+            continue
+        start_display = datetime.strptime(
+            f"{start_minutes // 60:02d}:{start_minutes % 60:02d}", "%H:%M"
+        ).strftime("%I:%M %p")
+        end_display = datetime.strptime(
+            f"{end_minutes // 60:02d}:{end_minutes % 60:02d}", "%H:%M"
+        ).strftime("%I:%M %p")
         upcoming.append({
-            "id": s.id,
-            "course": c.code,
-            "title": c.title,
-            "room": s.room or "TBA",
-            "time": f"{s.start_at.strftime('%a')} · {s.start_at.strftime('%I:%M %p')}",
-            "section": f"{c.semester}, Section {c.section}"
+            "id": f"routine-{routine.id}-{class_date.isoformat()}",
+            "course": routine.course_code,
+            "title": routine.course_title or routine.course_code,
+            "room": routine.room or "TBA",
+            "date": class_date.strftime("%A, %B %d, %Y").replace(" 0", " "),
+            "time": f"{start_display} - {end_display}",
+            "section": f"{routine.semester}, Section {routine.section}",
+            "_sort": (class_date, start_minutes),
         })
+    upcoming.sort(key=lambda item: item["_sort"])
+    for item in upcoming:
+        item.pop("_sort")
 
     if not upcoming and course_ids:
         course_codes = [c.code for c in courses]
@@ -261,7 +382,7 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
         recent.append({
             "id": s.id,
             "class": f"{c.code} · {c.title}",
-            "date": s.start_at.strftime("%b %-d"),
+            "date": s.start_at.strftime("%b %d").replace(" 0", " "),
             "students": f"{present} / {tot} present",
             "score": score
         })
@@ -288,7 +409,7 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
                 "course_code": c.code if c else "N/A",
                 "course_title": c.title if c else "N/A",
                 "time": att.marked_at.strftime("%I:%M:%S %p") if att.marked_at else "",
-                "date": att.marked_at.strftime("%a, %-d %b %Y") if att.marked_at else "",
+                "date": att.marked_at.strftime("%a, %d %b %Y").replace(" 0", " ") if att.marked_at else "",
                 "status": att.status.capitalize(),
                 "method": "Face Recognition Scan" if att.method == "face" else (att.method.capitalize() if att.method else "Manual"),
                 "confidence": f"{round(att.confidence * 100, 2)}%" if att.confidence else None,
@@ -486,42 +607,99 @@ def teacher_attendance_history(
     )
     sessions = db.scalars(query.order_by(ClassSession.start_at.desc())).all()
 
+    sessions_by_id = {class_session.id: class_session for class_session in sessions}
+    course_session_counts = {}
+    held_session_ids = set()
+    now = datetime.now()
+    for class_session in sessions:
+        if class_session.start_at <= now and (class_session.status or "").lower() != "cancelled":
+            held_session_ids.add(class_session.id)
+            course_session_counts[class_session.course_id] = (
+                course_session_counts.get(class_session.course_id, 0) + 1
+            )
+
+    all_attendances = db.scalars(
+        select(Attendance).where(Attendance.session_id.in_(sessions_by_id))
+    ).all() if sessions_by_id else []
+    attendances_by_session = {}
+    student_present_counts = {}
+    for attendance in all_attendances:
+        attendances_by_session.setdefault(attendance.session_id, []).append(attendance)
+        if attendance.status in {"present", "late"} and attendance.session_id in held_session_ids:
+            class_session = sessions_by_id[attendance.session_id]
+            course_student_counts = student_present_counts.setdefault(class_session.course_id, {})
+            course_student_counts[attendance.student_id] = (
+                course_student_counts.get(attendance.student_id, 0) + 1
+            )
+
     history = []
     for s in sessions:
         c = course_map[s.course_id]
         if session and session != "All Sessions" and c.session != session:
             continue
 
-        enrollment_count = db.query(Enrollment).filter(Enrollment.course_id == c.id).count()
-        attendances = db.scalars(
-            select(Attendance)
-            .where(Attendance.session_id == s.id)
-            .order_by(Attendance.marked_at.asc())
-        ).all()
-
-        attendees = []
+        attendees = [dict(student) for student in _course_roster_students(db, c)]
+        attendances = sorted(
+            attendances_by_session.get(s.id, []),
+            key=lambda attendance: attendance.marked_at or datetime.min,
+        )
+        attendance_by_student = {}
         for att in attendances:
             student_user = db.get(User, att.student_id)
             profile = student_user.profile if student_user else None
-            roll = profile.roll if profile else "N/A"
-            name = profile.full_name if profile else (student_user.name if student_user else "Student")
-            dept = profile.department if profile else c.department
-            attendees.append({
-                "id": att.id,
-                "roll": roll,
-                "name": name,
-                "department": dept,
-                "status": att.status.capitalize(),
-                "time": att.marked_at.strftime("%I:%M:%S %p") if att.marked_at else "",
-                "method": "Face Recognition Scan" if att.method == "face" else (att.method.capitalize() if att.method else "Manual"),
-                "confidence": f"{round(att.confidence * 100, 2)}%" if att.confidence else None,
-            })
+            student = next(
+                (item for item in attendees if item.get("studentId") == att.student_id),
+                None,
+            )
+            if student is None and profile:
+                student = next(
+                    (item for item in attendees if item["roll"] == profile.roll),
+                    None,
+                )
+            if student is None:
+                student = {
+                    "studentId": att.student_id,
+                    "roll": profile.roll if profile else "N/A",
+                    "name": profile.full_name if profile else (student_user.name if student_user else "Student"),
+                    "department": profile.department if profile else c.department,
+                }
+                attendees.append(student)
+            elif student.get("studentId") is None:
+                student["studentId"] = att.student_id
+            if att.status in {"present", "late"}:
+                attendance_by_student[att.student_id] = att
 
-        present_count = len(attendees)
-        total_students = max(enrollment_count, present_count, s.students or 0)
-        if total_students == 0:
-            total_students = 1
-        pct = round((present_count / total_students) * 100, 1)
+        total_sessions = course_session_counts.get(c.id, 0)
+        for student in attendees:
+            att = attendance_by_student.get(student.get("studentId"))
+            student["id"] = student.get("studentId") or student["roll"]
+            student["status"] = "Present" if att else "Absent"
+            student["time"] = (
+                att.marked_at.strftime("%I:%M:%S %p") if att and att.marked_at else ""
+            )
+            student["method"] = (
+                "Face Recognition Scan" if att and att.method == "face"
+                else (att.method.capitalize() if att and att.method else "Manual")
+            )
+            student["confidence"] = (
+                f"{round(att.confidence * 100, 2)}%" if att and att.confidence else None
+            )
+            attended_count = student_present_counts.get(c.id, {}).get(student.get("studentId"), 0)
+            student["attendancePercent"] = (
+                round((attended_count / total_sessions) * 100, 1)
+                if total_sessions and student.get("studentId") is not None
+                else 0
+            )
+
+        attendees.sort(
+            key=lambda student: (
+                not str(student["roll"]).isdigit(),
+                int(student["roll"]) if str(student["roll"]).isdigit() else str(student["roll"]).casefold(),
+            )
+        )
+        present_count = sum(1 for student in attendees if student["status"] == "Present")
+        total_students = max(len(attendees), present_count)
+        pct = round((present_count / total_students) * 100, 1) if total_students else 0
 
         start_time_str = s.start_at.strftime("%I:%M %p") if s.start_at else ""
         end_time_str = s.end_at.strftime("%I:%M %p") if s.end_at else ""
@@ -535,7 +713,7 @@ def teacher_attendance_history(
             "title": f"{c.code}: {c.title}",
             "session": c.session or "Default",
             "semester": c.semester,
-            "date": s.start_at.strftime("%b %-d, %Y") if s.start_at else "",
+            "date": s.start_at.strftime("%b %d, %Y").replace(" 0", " ") if s.start_at else "",
             "time": time_display,
             "room": s.room or "KUET-CSE-KIOSK-01",
             "total": total_students,
@@ -545,6 +723,128 @@ def teacher_attendance_history(
         })
 
     return history
+
+
+@router.get("/teacher/attendance-sheets")
+def teacher_course_attendance_sheets(
+    db: Session = Depends(get_db),
+    user: User = Depends(teacher_only),
+):
+    courses = _get_teacher_assigned_courses(db, user)
+    if not courses:
+        return []
+
+    course_ids = [course.id for course in courses]
+    sessions = db.scalars(
+        select(ClassSession)
+        .where(
+            ClassSession.course_id.in_(course_ids),
+            (ClassSession.teacher_id == user.id) | (ClassSession.teacher_id.is_(None)),
+        )
+        .order_by(ClassSession.start_at)
+    ).all()
+
+    now = datetime.now()
+    sessions_by_course = {}
+    held_session_ids = set()
+    for class_session in sessions:
+        if class_session.start_at <= now and (class_session.status or "").lower() != "cancelled":
+            sessions_by_course.setdefault(class_session.course_id, []).append(class_session)
+            held_session_ids.add(class_session.id)
+
+    attendances = db.scalars(
+        select(Attendance).where(Attendance.session_id.in_(held_session_ids))
+    ).all() if held_session_ids else []
+    present_by_session = {}
+    for attendance in attendances:
+        if attendance.status in {"present", "late"}:
+            present_by_session.setdefault(attendance.session_id, set()).add(attendance.student_id)
+
+    sheets = []
+    for course in courses:
+        held_sessions = sessions_by_course.get(course.id, [])
+        displayed_sessions = held_sessions[-15:]
+        class_slots = [
+            {
+                "sessionId": class_session.id,
+                "date": class_session.start_at.strftime("%d.%m.%y"),
+                "time": class_session.start_at.strftime("%I:%M %p"),
+            }
+            for class_session in displayed_sessions
+        ]
+        class_slots.extend([None] * (15 - len(class_slots)))
+
+        students = _course_roster_students(db, course)
+        student_rows = []
+        present_total = 0
+        for student in students:
+            student_id = student["studentId"]
+            attended_count = sum(
+                1
+                for class_session in held_sessions
+                if student_id in present_by_session.get(class_session.id, set())
+            )
+            present_total += attended_count
+            attendance = [
+                (
+                    "Present"
+                    if student_id in present_by_session.get(class_session.id, set())
+                    else "Absent"
+                )
+                for class_session in displayed_sessions
+            ]
+            attendance.extend([None] * (15 - len(attendance)))
+            student_rows.append({
+                **student,
+                "attendedCount": attended_count,
+                "attendance": attendance,
+                "attendancePercent": (
+                    round((attended_count / len(held_sessions)) * 100, 1)
+                    if held_sessions
+                    else 0
+                ),
+            })
+
+        total_possible_attendance = len(students) * len(held_sessions)
+        attendance_trend = []
+        for class_number, class_session in enumerate(held_sessions, start=1):
+            present_count = sum(
+                1
+                for student in students
+                if student["studentId"] in present_by_session.get(class_session.id, set())
+            )
+            attendance_trend.append({
+                "classNumber": class_number,
+                "date": class_session.start_at.strftime("%d.%m.%y"),
+                "presentCount": present_count,
+                "totalStudents": len(students),
+                "percent": (
+                    round((present_count / len(students)) * 100, 1)
+                    if students
+                    else 0
+                ),
+            })
+
+        sheets.append({
+            "courseId": course.id,
+            "courseCode": course.code,
+            "courseTitle": course.title,
+            "session": course.session or "Default",
+            "semester": course.semester,
+            "section": course.section,
+            "classesHeld": len(held_sessions),
+            "classes": class_slots,
+            "attendanceTrend": attendance_trend,
+            "studentCount": len(students),
+            "percent": (
+                round((present_total / total_possible_attendance) * 100, 1)
+                if total_possible_attendance
+                else 0
+            ),
+            "students": student_rows,
+        })
+
+    return sheets
 
 
 @router.get("/admin/overview-stats")
