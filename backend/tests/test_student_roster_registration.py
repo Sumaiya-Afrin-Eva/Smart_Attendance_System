@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 os.environ["DATABASE_URL"] = "sqlite:///./test_attendance.db"
@@ -482,7 +483,7 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
     )
     assert marked.status_code == 200, marked.text
     assert marked.json()["matched"] is True
-    assert marked.json()["attendance"]["status"] == "present"
+    assert marked.json()["attendance"]["status"] == "late"
     assert marked.json()["attendance"]["already_marked"] is False
 
     TestFaceService.proof_available = True
@@ -589,6 +590,45 @@ def test_student_dashboard_includes_routine_class_without_a_created_session():
     assert today[0]["start_time"] == "08:00 AM"
     assert today[0]["end_time"] == "08:50 AM"
     assert today[0]["status"] == "absent"
+
+
+def test_kiosk_department_filter_limits_students_to_that_department():
+    reset_db()
+    with SessionLocal() as db:
+        cse_student = User(email="cse_student@stud.kuet.ac.bd", name="CSE Student", role="student", password_hash=None)
+        eee_student = User(email="eee_student@stud.kuet.ac.bd", name="EEE Student", role="student", password_hash=None)
+        cse_roster = StudentRoster(
+            roll="2201001",
+            full_name="CSE Student",
+            email=cse_student.email,
+            department="CSE",
+            session="2022-2023",
+            phone="01710000001",
+            is_active=True,
+        )
+        eee_roster = StudentRoster(
+            roll="2202001",
+            full_name="EEE Student",
+            email=eee_student.email,
+            department="EEE",
+            session="2022-2023",
+            phone="01710000002",
+            is_active=True,
+        )
+        db.add_all([cse_student, eee_student, cse_roster, eee_roster])
+        db.flush()
+        cse_profile = StudentProfile(user_id=cse_student.id, roster_id=cse_roster.id, full_name="CSE Student", roll="2201001", department="CSE", series="2022", session="2022-2023", current_semester="2-1", phone="01710000001")
+        eee_profile = StudentProfile(user_id=eee_student.id, roster_id=eee_roster.id, full_name="EEE Student", roll="2202001", department="EEE", series="2022", session="2022-2023", current_semester="2-1", phone="01710000002")
+        cse_roster.profile = cse_profile
+        eee_roster.profile = eee_profile
+        db.add_all([cse_profile, eee_profile])
+        db.commit()
+
+        cse_candidates = face_module._eligible_students(db, department="CSE")
+        eee_candidates = face_module._eligible_students(db, department="EEE")
+
+        assert [candidate[0].roll for candidate in cse_candidates] == ["2201001"]
+        assert [candidate[0].roll for candidate in eee_candidates] == ["2202001"]
 
 
 def test_kiosk_marks_attendance_to_the_active_routine_teacher_only(monkeypatch):
@@ -829,6 +869,16 @@ def test_kiosk_opens_when_multiple_active_routines_overlap(monkeypatch):
     assert response.json()["session_id"]
 
 
+def test_kiosk_open_allows_empty_body_for_idle_camera_poll():
+    reset_db()
+    client = TestClient(app)
+    response = client.post("/api/face/kiosk/open")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["session_id"] is not None
+    assert payload["course"]["code"] == "KIOSK"
+
+
 def test_kiosk_rejects_unknown_course_code():
     reset_db()
     response = TestClient(app).post("/api/face/kiosk/open", json={"course_code": "CSE 9999"})
@@ -1019,6 +1069,11 @@ def test_semester_face_enrollment_is_required_once_and_keeps_old_attendance(monk
         files=photos,
     )
     assert enrolled.status_code == 200, enrolled.text
+
+    dept_dir = settings.picture_dir / "CSE"
+    assert (dept_dir / "2107001_look_straight.jpg").exists()
+    assert (dept_dir / "2107001_turn_left.jpg").exists()
+    assert (dept_dir / "2107001.jpg").exists()
 
     with SessionLocal() as db:
         assert db.scalar(

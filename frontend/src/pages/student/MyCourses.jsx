@@ -15,7 +15,7 @@ export default function MyCourses() {
         <div>
           <h2 className="font-display text-2xl font-bold tracking-tight text-stone-900">Enrolled Courses</h2>
           <p className="mt-1 text-sm text-stone-500 font-medium">
-            {profile?.department} Department · Active Semester {profile?.current_semester}
+            Active Semester {profile?.current_semester}
           </p>
         </div>
       </div>

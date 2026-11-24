@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import {
-  BookOpen, Calendar, CalendarX,
-  ScanFace, UserCheck, ShieldCheck,
+  BookOpen, Calendar, CalendarDays, CalendarX,
+  ScanFace, UserCheck, ShieldCheck, X,
 } from 'lucide-react'
 import { useAttendanceHistory, useDashboard } from '../../lib/queries'
 import { errorMessage } from '../../lib/api'
@@ -21,6 +21,7 @@ export default function MyAttendance() {
   const [semester, setSemester] = useState()
   const [searchParams, setSearchParams] = useSearchParams()
   const [courseId, setCourseId] = useState(() => searchParams.get('course_id') || '')
+  const [selectedDate, setSelectedDate] = useState('')
   const [filter, setFilter] = useState('all')
   const history = useAttendanceHistory(semester)
   const dashboard = useDashboard(semester)
@@ -38,19 +39,41 @@ export default function MyAttendance() {
     setSearchParams(nextParams)
   }
 
-  const rows = useMemo(
-    () =>
-      (history.data?.rows ?? []).filter(
-        (r) => (!courseId || r.course_id === Number(courseId)) && (filter === 'all' || r.status === filter),
-      ),
-    [history.data, courseId, filter],
-  )
+  // Filter rows based on course, selected date (YYYY-MM-DD), and status filter
+  const rows = useMemo(() => {
+    return (history.data?.rows ?? []).filter((r) => {
+      if (courseId && r.course_id !== Number(courseId)) return false
+      if (filter !== 'all' && r.status !== filter) return false
+      if (selectedDate) {
+        // Match start_at local date string (YYYY-MM-DD)
+        const rowDate = new Date(r.start_at)
+        const year = rowDate.getFullYear()
+        const month = String(rowDate.getMonth() + 1).padStart(2, '0')
+        const day = String(rowDate.getDate()).padStart(2, '0')
+        const rowDateStr = `${year}-${month}-${day}`
+        if (rowDateStr !== selectedDate) return false
+      }
+      return true
+    })
+  }, [history.data, courseId, filter, selectedDate])
+
   const selectedCourse = dashboard.data?.courses.find((c) => c.id === Number(courseId))
 
   const counts = useMemo(() => {
-    const base = (history.data?.rows ?? []).filter((r) => !courseId || r.course_id === Number(courseId))
+    const base = (history.data?.rows ?? []).filter((r) => {
+      if (courseId && r.course_id !== Number(courseId)) return false
+      if (selectedDate) {
+        const rowDate = new Date(r.start_at)
+        const year = rowDate.getFullYear()
+        const month = String(rowDate.getMonth() + 1).padStart(2, '0')
+        const day = String(rowDate.getDate()).padStart(2, '0')
+        const rowDateStr = `${year}-${month}-${day}`
+        if (rowDateStr !== selectedDate) return false
+      }
+      return true
+    })
     return Object.fromEntries(FILTERS.map((f) => [f, f === 'all' ? base.length : base.filter((r) => r.status === f).length]))
-  }, [history.data, courseId])
+  }, [history.data, courseId, selectedDate])
 
   if (history.isLoading || dashboard.isLoading) return <Spinner label="Loading attendance history…" />
   if (history.error) return <ErrorBox>{errorMessage(history.error)}</ErrorBox>
@@ -58,18 +81,46 @@ export default function MyAttendance() {
   return (
     <div className="space-y-7">
       {/* Header & Filter Controls */}
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="font-display text-2xl font-bold tracking-tight text-stone-900">Attendance History &amp; Logs</h2>
+          <p className="mt-1 text-xs sm:text-sm text-stone-500 font-medium">Filter attendance records by course, specific date, or attendance status</p>
         </div>
-        <div className="flex flex-wrap items-center gap-3.5">
+
+        <div className="flex flex-wrap items-center gap-3">
           <SemesterSelect value={semester} onChange={(s) => { setSemester(s); changeCourse('') }} />
+
+          {/* Date Picker Filter */}
+          <div className="relative flex items-center">
+            <div className="pointer-events-none absolute left-3.5 text-stone-400">
+              <CalendarDays size={16} />
+            </div>
+            <input
+              type="date"
+              aria-label="Filter by date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="h-11 rounded-xl border border-stone-300/80 bg-white pl-9.5 pr-8 text-sm font-semibold text-stone-800 shadow-2xs outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15"
+            />
+            {selectedDate && (
+              <button
+                type="button"
+                onClick={() => setSelectedDate('')}
+                title="Clear date filter"
+                className="absolute right-2.5 flex h-5 w-5 items-center justify-center rounded-full bg-stone-100 text-stone-400 hover:bg-stone-200 hover:text-stone-700 transition"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+
+          {/* Course Select Filter */}
           <div className="relative">
             <select
               aria-label="Filter by course"
               value={courseId}
               onChange={(e) => changeCourse(e.target.value)}
-              className="h-11 rounded-xl border border-stone-300/80 bg-white px-4 pr-9 text-sm font-semibold text-stone-800 shadow-2xs outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15"
+              className="h-11 max-w-[260px] truncate rounded-xl border border-stone-300/80 bg-white px-4 pr-9 text-sm font-semibold text-stone-800 shadow-2xs outline-none transition focus:border-emerald-600 focus:ring-2 focus:ring-emerald-600/15"
             >
               <option value="">All Registered Courses</option>
               {dashboard.data?.courses.map((c) => (
@@ -178,7 +229,17 @@ export default function MyAttendance() {
                       </td>
 
                       <td className="whitespace-nowrap px-6 py-4.5">
-                        {r.marked_at ? (
+                        {r.status === 'absent' && r.absence_window ? (
+                          <div className="space-y-0.5">
+                            <span className="inline-flex items-center gap-1 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-800">
+                              <CalendarX size={13} />
+                              Absent window
+                            </span>
+                            <span className="block font-mono text-xs text-stone-500">
+                              {formatTime(r.absence_window.start_at)} – {formatTime(r.absence_window.end_at)}
+                            </span>
+                          </div>
+                        ) : r.marked_at ? (
                           <div className="space-y-0.5">
                             <div className="flex items-center gap-1.5">
                               <span className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-semibold ${methodCfg.tone}`}>

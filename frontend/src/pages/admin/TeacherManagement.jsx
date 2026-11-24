@@ -19,6 +19,7 @@ import {
   BookOpen
 } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
+import { useAuth } from '../../context/AuthContext'
 
 const statusColors = {
   Active: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
@@ -31,9 +32,12 @@ const DEPARTMENTS = ["CSE", "EEE", "ECE", "ME", "CE", "IEM", "BME", "MSE", "URP"
 
 
 export default function TeacherManagement() {
+  const { user } = useAuth()
+  const defaultDept = user?.role === 'eee_system_admin' ? 'EEE' : 'CSE'
+  const scopedDept = user?.role === 'eee_system_admin' ? 'EEE' : user?.role === 'system_admin' ? 'CSE' : null
   const [teachers, setTeachers] = useState([])
   const [search, setSearch] = useState('')
-  const [department, setDepartment] = useState('All')
+  const [department, setDepartment] = useState(scopedDept || 'All')
   const [statusFilter, setStatusFilter] = useState('All')
   const [editingId, setEditingId] = useState(null)
   const [form, setForm] = useState({ 
@@ -46,7 +50,7 @@ export default function TeacherManagement() {
     email: '', 
     password: '', 
     website: '',
-    department: 'CSE'
+    department: defaultDept
   })
   const [photo, setPhoto] = useState(null)
   const [photoName, setPhotoName] = useState('')
@@ -120,7 +124,7 @@ export default function TeacherManagement() {
       email: '', 
       password: '', 
       website: '',
-      department: 'CSE'
+      department: defaultDept
     })
     setResearchSearch('')
     setPhoto(null)
@@ -424,9 +428,15 @@ export default function TeacherManagement() {
 
               <label className="block space-y-1.5">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.2em] text-stone-500">Department</span>
-                <select value={form.department} onChange={(event) => setForm({ ...form, department: event.target.value })} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
-                  {DEPARTMENTS.map(dept => <option key={dept} value={dept}>{dept}</option>)}
-                </select>
+                {scopedDept ? (
+                  <div className="w-full rounded-xl border border-stone-200 bg-stone-100 px-3 py-2.5 text-stone-700 font-semibold cursor-not-allowed">
+                    {scopedDept}
+                  </div>
+                ) : (
+                  <select value={form.department} onChange={(event) => setForm({ ...form, department: event.target.value })} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
+                    {DEPARTMENTS.map(dept => <option key={dept} value={dept}>{dept}</option>)}
+                  </select>
+                )}
               </label>
 
               <label className="block space-y-1.5">
@@ -511,10 +521,16 @@ export default function TeacherManagement() {
 
           <div className="mt-5 flex flex-wrap gap-2 items-center justify-between">
             <div className="flex flex-wrap gap-2">
-              <select value={department} onChange={(event) => setDepartment(event.target.value)} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 outline-none">
-                <option value="All">All departments</option>
-                {DEPARTMENTS.map(dept => <option key={dept} value={dept}>{dept}</option>)}
-              </select>
+              {scopedDept ? (
+                <div className="rounded-xl border border-stone-200 bg-stone-100 px-3 py-2 text-sm text-stone-700 font-semibold">
+                  {scopedDept} Department
+                </div>
+              ) : (
+                <select value={department} onChange={(event) => setDepartment(event.target.value)} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 outline-none">
+                  <option value="All">All departments</option>
+                  {DEPARTMENTS.map(dept => <option key={dept} value={dept}>{dept}</option>)}
+                </select>
+              )}
               <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 outline-none">
                 <option value="All">All status</option>
                 <option value="Active">Active</option>

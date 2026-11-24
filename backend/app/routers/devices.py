@@ -7,7 +7,7 @@ from ..models import DeviceReset, StudentProfile, User
 from ..security import require_role
 
 router = APIRouter(prefix="/api/admin/students", tags=["admin"])
-admin_only = require_role("admin", "system_admin")
+admin_only = require_role("admin", "system_admin", "eee_system_admin", "eee_admin", "super_admin")
 
 
 @router.post("/{roster_id}/reset-device")

@@ -1,12 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import api, { errorMessage } from '../../lib/api'
+import api from '../../lib/api'
 
 // How often the liveness check polls (ms)
 const LIVENESS_POLL_MS = 180
 // After a final decision (matched or not), wait this long before resetting to scan again
-const RESET_DELAY_MS = 4000
-// How long to wait before retrying /kiosk/open when no active class found
-const RETRY_OPEN_MS = 30000
+const RESET_DELAY_MS = 3000
 
 /** Capture a JPEG frame from the live video element. */
 const captureFrame = (video, maxWidth = 320) =>
@@ -48,25 +46,25 @@ function _flushSpeech() {
 }
 
 // ─── Kiosk states ─────────────────────────────────────────────────────────────
-// 'opening'   – waiting for /kiosk/open to respond
-// 'no-class'  – no active routine right now, retrying
-// 'liveness'  – camera on, checking liveness
-// 'scanning'  – sending frame for face recognition
-// 'success'   – face matched → show green banner, then reset
-// 'qr'        – face not matched → show QR prompt, wait for QR scan
+// 'liveness'  – camera on, ready & checking for live human face
+// 'scanning'  – sending frame for instant student & routine matching
+// 'success'   – face matched → show green banner, then auto-reset
+// 'qr'        – face not recognized → show QR prompt, wait for QR scan
 // 'qr-scan'   – QR token detected, verifying
-// 'qr-ok'     – QR verified → show success banner, then reset
+// 'qr-ok'     – QR verified → show success banner, then auto-reset
 // 'qr-fail'   – QR failed
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default function FaceLab() {
-  const [phase, setPhase] = useState('opening')      // kiosk phase
+export default function FaceLab({ kioskId = 'CSE' }) {
+  const normalizedKioskId = String(kioskId || 'CSE').trim().toUpperCase()
+  const [phase, setPhase] = useState('liveness')      // starts immediately ready
   const [activeClass, setActiveClass] = useState(null)
   const [liveness, setLiveness] = useState({ human: false, liveness: false, message: '' })
   const [banner, setBanner] = useState(null)         // { text, ok } for overlay
   const [recentLogs, setRecentLogs] = useState([])
   const [currentTime, setCurrentTime] = useState(new Date())
   const [cameraReady, setCameraReady] = useState(false)
+  const [cameraError, setCameraError] = useState(null)
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -75,7 +73,6 @@ export default function FaceLab() {
   const qrLockRef = useRef(false)
   const autoScanRef = useRef(false)
   const resetTimerRef = useRef(null)
-  const openRetryRef = useRef(null)
 
   // ── Digital clock ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -86,7 +83,11 @@ export default function FaceLab() {
   // ── Camera start / stop ────────────────────────────────────────────────────
   const startCamera = useCallback(async () => {
     if (streamRef.current) return   // already running
+    setCameraError(null)
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('This browser does not support camera access.')
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
         audio: false,
@@ -97,9 +98,13 @@ export default function FaceLab() {
         videoRef.current.onloadedmetadata = () => videoRef.current?.play().catch(() => {})
       }
       setCameraReady(true)
+      setCameraError(null)
     } catch (err) {
       console.error('Camera error:', err)
       setCameraReady(false)
+      setCameraError(
+        'Camera access was blocked. Please allow camera access for this site in the browser permissions and click retry.'
+      )
     }
   }, [])
 
@@ -118,41 +123,24 @@ export default function FaceLab() {
     }
   }, [cameraReady])
 
-  // ── Open kiosk session ─────────────────────────────────────────────────────
-  const openKiosk = useCallback(async () => {
-    setPhase('opening')
-    setBanner(null)
-    setLiveness({ human: false, liveness: false, message: '' })
-    clearTimeout(openRetryRef.current)
-    try {
-      const { data } = await api.post('/face/kiosk/open', {})
-      setActiveClass(data)
-      setPhase('liveness')
-      livenessKeyRef.current += 1
-    } catch (err) {
-      const status = err?.response?.status
-      if (status === 404 || status === 409) {
-        setPhase('no-class')
-        openRetryRef.current = setTimeout(openKiosk, RETRY_OPEN_MS)
-      } else {
-        // transient error – retry sooner
-        setPhase('no-class')
-        openRetryRef.current = setTimeout(openKiosk, 8000)
-      }
-    }
-  }, [])
+  // Optional background fetch of routine info for the header (never blocks scanning)
+  useEffect(() => {
+    let unmounted = false
+    api.post('/face/kiosk/open', { kiosk_id: normalizedKioskId })
+      .then((res) => { if (!unmounted) setActiveClass(res.data) })
+      .catch(() => {})
+    return () => { unmounted = true }
+  }, [normalizedKioskId])
 
-  // ── Boot: start camera + open kiosk immediately ────────────────────────────
+  // ── Boot: start camera immediately ─────────────────────────────────────────
   useEffect(() => {
     void startCamera()
-    void openKiosk()
     return () => {
       stopCamera()
       clearTimeout(resetTimerRef.current)
-      clearTimeout(openRetryRef.current)
       if ('speechSynthesis' in window) window.speechSynthesis.cancel()
     }
-  }, [openKiosk, startCamera, stopCamera])
+  }, [startCamera, stopCamera])
 
   // ── Reset to liveness after a decision ────────────────────────────────────
   const scheduleReset = useCallback(() => {
@@ -162,16 +150,15 @@ export default function FaceLab() {
       lastQrRef.current = null
       qrLockRef.current = false
       autoScanRef.current = false
+      setPhase('liveness')
       setLiveness({ human: false, liveness: false, message: '' })
       livenessKeyRef.current += 1
-      // Re-open kiosk session to handle time-slot changes
-      void openKiosk()
     }, RESET_DELAY_MS)
-  }, [openKiosk])
+  }, [])
 
-  // ── Liveness polling ───────────────────────────────────────────────────────
+  // ── Liveness polling: checks if a human is in front of camera ──────────────
   useEffect(() => {
-    if (phase !== 'liveness' || !activeClass || !cameraReady) return undefined
+    if (phase !== 'liveness' || !cameraReady) return undefined
     const key = livenessKeyRef.current
     let cancelled = false
     let inFlight = false
@@ -189,7 +176,8 @@ export default function FaceLab() {
       try {
         const frame = await captureFrame(video, 480)
         const fd = new FormData()
-        fd.append('session_id', activeClass.session_id)
+        fd.append('kiosk_id', normalizedKioskId)
+        if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
         fd.append('image', frame, 'live.jpg')
         const { data } = await api.post('/face/kiosk/liveness', fd, { timeout: 5000, skipNetworkRetry: true })
         if (cancelled || key !== livenessKeyRef.current) return
@@ -208,16 +196,17 @@ export default function FaceLab() {
     timer = setTimeout(poll, 150)
     return () => { cancelled = true; clearTimeout(timer) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, activeClass, cameraReady, livenessKeyRef.current])
+  }, [phase, cameraReady, livenessKeyRef.current])
 
-  // ── Auto face scan when liveness is confirmed ─────────────────────────────
+  // ── Auto face scan when human presence/liveness is verified ────────────────
   const handleFaceScan = useCallback(async () => {
-    if (!activeClass || !videoRef.current || !cameraReady) return
+    if (!videoRef.current || !cameraReady) return
     setPhase('scanning')
     try {
       const frame = await captureFrame(videoRef.current, 320)
       const fd = new FormData()
-      fd.append('session_id', activeClass.session_id)
+      fd.append('kiosk_id', normalizedKioskId)
+      if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
       fd.append('image', frame, 'kiosk-frame.jpg')
       fd.append('threshold', 0.55)
       const { data } = await api.post('/face/kiosk/scan', fd, { timeout: 15000, skipNetworkRetry: true })
@@ -241,16 +230,7 @@ export default function FaceLab() {
         setPhase('qr')
         autoScanRef.current = false
       }
-    } catch (err) {
-      const payload = err?.response?.data
-      if (payload && payload.matched === false) {
-        setBanner({ text: 'Face Not Recognized. Please show your QR code', ok: false })
-        speak('Face Not Recognized. Please show your QR code')
-        setPhase('qr')
-        autoScanRef.current = false
-        return
-      }
-      // unexpected error – reset
+    } catch {
       setBanner({ text: 'Face Not Recognized. Please show your QR code', ok: false })
       speak('Face Not Recognized. Please show your QR code')
       setPhase('qr')
@@ -264,16 +244,15 @@ export default function FaceLab() {
     void handleFaceScan()
   }, [phase, liveness.liveness, handleFaceScan])
 
-  // ── QR scanning via BarcodeDetector ───────────────────────────────────────
+  // ── QR fallback scanning ───────────────────────────────────────────────────
   const handleQrToken = useCallback(async (token) => {
-    if (qrLockRef.current || !activeClass) return
+    if (qrLockRef.current) return
     qrLockRef.current = true
     setPhase('qr-scan')
     try {
-      const { data } = await api.post('/face/kiosk/qr-scan', {
-        session_id: activeClass.session_id,
-        token,
-      }, { timeout: 10000, skipNetworkRetry: true })
+      const payload = { token, kiosk_id: normalizedKioskId }
+      if (activeClass?.session_id) payload.session_id = activeClass.session_id
+      const { data } = await api.post('/face/kiosk/qr-scan', payload, { timeout: 10000, skipNetworkRetry: true })
 
       setBanner({ text: data?.message || 'Attendance Recorded', ok: true })
       speak('Attendance Recorded')
@@ -296,7 +275,7 @@ export default function FaceLab() {
   }, [activeClass, scheduleReset])
 
   useEffect(() => {
-    if ((phase !== 'qr') || !activeClass || !cameraReady) return undefined
+    if (phase !== 'qr' || !cameraReady) return undefined
     if (typeof window?.BarcodeDetector !== 'function') return undefined
 
     let cancelled = false
@@ -322,19 +301,38 @@ export default function FaceLab() {
     }
     rafId = requestAnimationFrame(loop)
     return () => { cancelled = true; cancelAnimationFrame(rafId) }
-  }, [phase, activeClass, cameraReady, handleQrToken])
+  }, [phase, cameraReady, handleQrToken])
 
   // ── Derived display values ─────────────────────────────────────────────────
   const timeStr = currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   const dateStr = currentTime.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+  const kioskLabel = `${normalizedKioskId} Kiosk`
 
   const isQrPhase = phase === 'qr' || phase === 'qr-scan' || phase === 'qr-ok' || phase === 'qr-fail'
-  const showFrame = cameraReady && (phase === 'liveness' || phase === 'scanning' || isQrPhase || phase === 'success')
+  const showFrame = cameraReady
 
-  // Liveness hint (shown while waiting for liveness)
+  // Liveness hint (subtle prompt when human is detected)
   const livenessHint = (phase === 'liveness' && !liveness.liveness)
-    ? (liveness.message || 'Face detected. Blink once and slowly move your head.')
+    ? (liveness.message || 'Look at the camera to verify attendance.')
     : ''
+
+  const permissionBanner = cameraError ? (
+    <div className="absolute inset-x-0 top-24 flex justify-center px-6 pointer-events-none">
+      <div className="max-w-[720px] rounded-2xl border border-amber-300/60 bg-black/55 px-6 py-4 text-center text-base font-medium text-amber-100 shadow-xl backdrop-blur-sm">
+        <div className="mb-2 font-bold text-lg text-white">Camera permission required</div>
+        {cameraError}
+        <div className="mt-3 flex justify-center">
+          <button
+            type="button"
+            onClick={() => { void startCamera() }}
+            className="pointer-events-auto rounded-lg bg-amber-500 px-4 py-2 text-sm font-bold text-black shadow-lg transition hover:bg-amber-400"
+          >
+            Retry camera
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null
 
   return (
     <div className="fixed inset-0 bg-black overflow-hidden select-none">
@@ -350,18 +348,15 @@ export default function FaceLab() {
       {/* Dark vignette overlay */}
       <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-black/60 pointer-events-none" />
 
-      {/* ── Top bar: clock + course info ───────────────────────────────── */}
+      {/* ── Top bar: clock + kiosk label ───────────────────────────────── */}
       <div className="absolute top-0 inset-x-0 flex items-start justify-between px-8 pt-6 pointer-events-none">
         <div>
           <div className="text-4xl font-bold text-white tabular-nums drop-shadow">{timeStr}</div>
           <div className="text-sm text-white/70 mt-1 drop-shadow">{dateStr}</div>
-        </div>
-        {activeClass && (
-          <div className="text-right">
-            <div className="text-lg font-semibold text-white/90 drop-shadow">{activeClass.course?.title || activeClass.course?.code}</div>
-            <div className="text-sm text-white/60">{activeClass.course?.code} · {activeClass.course?.semester}</div>
+          <div className="mt-2 inline-flex rounded-full border border-white/15 bg-black/30 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] text-white/80">
+            {kioskLabel}
           </div>
-        )}
+        </div>
       </div>
 
       {/* ── Face scan frame ─────────────────────────────────────────────── */}
@@ -395,7 +390,7 @@ export default function FaceLab() {
       )}
 
       {/* ── QR mode: big QR icon prompt ─────────────────────────────────── */}
-      {phase === 'qr' && (
+      {isQrPhase && (
         <div className="absolute inset-0 flex flex-col items-center justify-end pb-32 pointer-events-none">
           <div className="flex flex-col items-center gap-3">
             <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-white/80 animate-bounce" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -419,8 +414,10 @@ export default function FaceLab() {
         </div>
       )}
 
+      {permissionBanner}
+
       {/* ── Liveness hint (subtle, centre-bottom) ───────────────────────── */}
-      {!banner && livenessHint && (
+      {!banner && !cameraError && livenessHint && (
         <div className="absolute inset-x-0 bottom-10 flex justify-center px-6 pointer-events-none">
           <div className="rounded-xl bg-black/40 backdrop-blur-sm border border-white/10 px-6 py-3 text-center text-sm text-white/70 max-w-[80vw]">
             {livenessHint}
@@ -428,43 +425,9 @@ export default function FaceLab() {
         </div>
       )}
 
-      {/* ── No-class waiting state ───────────────────────────────────────── */}
-      {phase === 'no-class' && !cameraReady && (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="text-center text-white/50 space-y-3">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mx-auto opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z" />
-            </svg>
-            <p className="text-lg">No class is running right now</p>
-            <p className="text-sm opacity-60">The kiosk will automatically activate when a class begins</p>
-          </div>
-        </div>
-      )}
-
-      {phase === 'no-class' && cameraReady && (
-        <div className="absolute inset-x-0 bottom-10 flex justify-center pointer-events-none">
-          <div className="rounded-xl bg-black/40 backdrop-blur-sm border border-white/10 px-6 py-3 text-center text-sm text-white/50">
-            Waiting for an active class routine…
-          </div>
-        </div>
-      )}
-
-      {/* ── Opening spinner ──────────────────────────────────────────────── */}
-      {phase === 'opening' && (
-        <div className="absolute inset-x-0 bottom-10 flex justify-center pointer-events-none">
-          <div className="flex items-center gap-2 text-white/40 text-sm">
-            <svg className="h-4 w-4 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
-            </svg>
-            Connecting…
-          </div>
-        </div>
-      )}
-
       {/* ── Recent attendance log (top-right corner, subtle) ────────────── */}
       {recentLogs.length > 0 && (
-        <div className="absolute top-24 right-6 w-56 space-y-2 pointer-events-none">
+        <div className="absolute top-24 right-6 w-64 space-y-2 pointer-events-none">
           {recentLogs.map((log, i) => (
             <div key={i} className={`rounded-xl px-4 py-2.5 text-xs backdrop-blur-md border transition-all ${
               log.alreadyMarked
@@ -472,11 +435,11 @@ export default function FaceLab() {
                 : 'bg-emerald-500/15 border-emerald-400/30 text-emerald-100'
             }`}>
               <div className="font-semibold truncate">{log.name}</div>
-              <div className="flex justify-between text-white/50 mt-0.5">
+              <div className="flex justify-between gap-2 text-white/60 mt-0.5">
                 <span>Roll: {log.roll}</span>
                 <span>{log.time}</span>
               </div>
-              {log.alreadyMarked && <div className="text-amber-300/70 mt-0.5">Already marked</div>}
+              {log.alreadyMarked && <div className="text-amber-300/80 mt-0.5">Already marked</div>}
             </div>
           ))}
         </div>

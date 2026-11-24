@@ -9,12 +9,28 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import ClassRoutine, Course, CourseTeacher, TeacherProfile, User
+from ..models import ClassRoutine, Course, CourseTeacher, Enrollment, TeacherProfile, User
 from ..security import get_current_user, require_role
 
 router = APIRouter(prefix="/api", tags=["routine"])
-admin_or_sysadmin = require_role("admin", "system_admin")
-system_admin_only = require_role("system_admin")
+admin_or_sysadmin = require_role("admin", "system_admin", "eee_system_admin", "eee_admin", "super_admin")
+system_admin_only = require_role("system_admin", "eee_system_admin", "super_admin")
+
+
+def _dept_for_role(user: User) -> str | None:
+    """Return the department an admin is scoped to.
+    super_admin -> None (unrestricted)
+    system_admin / admin  -> CSE
+    eee_system_admin / eee_admin -> EEE
+    teacher -> None
+    """
+    if user.role == "super_admin":
+        return None
+    if user.role in {"eee_system_admin", "eee_admin"}:
+        return "EEE"
+    if user.role in {"system_admin", "admin"}:
+        return "CSE"
+    return None
 
 DAYS_OF_WEEK = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 DAY_ORDER = {day: idx for idx, day in enumerate(DAYS_OF_WEEK)}
@@ -76,10 +92,14 @@ def list_admin_routine(
     day: str | None = None,
     session_val: str | None = None,
     db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
+    current_user: User = Depends(system_admin_only),
 ):
     query = select(ClassRoutine)
-    if department and department != "All":
+    # Enforce department scope: each system admin only sees their own dept
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept:
+        query = query.where(ClassRoutine.department == scoped_dept)
+    elif department and department != "All":
         query = query.where(ClassRoutine.department == department)
     if semester and semester != "All":
         query = query.where(ClassRoutine.semester == semester)
@@ -130,7 +150,7 @@ def list_public_routine(
 def create_routine_slot(
     body: RoutineSlotIn,
     db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
+    current_user: User = Depends(system_admin_only),
 ):
     dept = (body.department or "").strip().upper()
     sem = (body.semester or "").strip()
@@ -144,6 +164,14 @@ def create_routine_slot(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "Department, semester, day, start time, end time, and course code are required."
+        )
+
+    # Enforce: each system admin can only create routines for their own dept
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept and dept != scoped_dept:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"You can only manage routines for the {scoped_dept} department."
         )
 
     # Auto-resolve course title if blank
@@ -209,14 +237,22 @@ def update_routine_slot(
     routine_id: int,
     body: dict,
     db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
+    current_user: User = Depends(system_admin_only),
 ):
     slot = db.get(ClassRoutine, routine_id)
     if not slot:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Routine slot not found.")
 
+    # Enforce dept scoping on read
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept and slot.department != scoped_dept:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"You can only manage routines for the {scoped_dept} department.")
+
     if "department" in body:
-        slot.department = (body["department"] or "").strip().upper()
+        new_dept = (body["department"] or "").strip().upper()
+        if scoped_dept and new_dept != scoped_dept:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"You can only manage routines for the {scoped_dept} department.")
+        slot.department = new_dept
     if "semester" in body:
         slot.semester = (body["semester"] or "").strip()
     if "section" in body:
@@ -251,10 +287,14 @@ def clear_routine_slots(
     semester: str | None = None,
     section: str | None = None,
     db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
+    current_user: User = Depends(system_admin_only),
 ):
     stmt = delete(ClassRoutine)
-    if department and department != "All":
+    # Enforce dept scoping: admins can only clear their own dept
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept:
+        stmt = stmt.where(ClassRoutine.department == scoped_dept)
+    elif department and department != "All":
         stmt = stmt.where(ClassRoutine.department == department)
     if semester and semester != "All":
         stmt = stmt.where(ClassRoutine.semester == semester)
@@ -270,11 +310,15 @@ def clear_routine_slots(
 def delete_routine_slot(
     routine_id: int,
     db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
+    current_user: User = Depends(system_admin_only),
 ):
     slot = db.get(ClassRoutine, routine_id)
     if not slot:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Routine slot not found.")
+    # Enforce dept scoping
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept and slot.department != scoped_dept:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"You can only manage routines for the {scoped_dept} department.")
     db.delete(slot)
     db.commit()
     return {"detail": "Routine slot deleted successfully."}
@@ -443,8 +487,12 @@ async def bulk_upload_routine(
     default_semester: str | None = None,
     default_section: str | None = "A",
     db: Session = Depends(get_db),
-    _: User = Depends(system_admin_only),
+    current_user: User = Depends(system_admin_only),
 ):
+    # Enforce dept scoping on bulk upload
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept:
+        default_department = scoped_dept
     content = await file.read()
     filename = (file.filename or "").lower()
 
@@ -539,6 +587,10 @@ async def bulk_upload_routine(
         m_dept = re.match(r"^([A-Za-z]+)", base_code)
         derived_dept = m_dept.group(1).upper() if m_dept else (default_department or "CSE")
         dept = str(row_dict.get("department", "")).strip().upper() or derived_dept or (default_department or "CSE")
+
+        # Enforce dept scoping: skip rows that don't belong to this admin's dept
+        if scoped_dept and dept != scoped_dept:
+            dept = scoped_dept  # override to admin's dept
 
         derived_sem = _derive_semester_from_code(base_code)
         sem = str(row_dict.get("semester", "")).strip() or derived_sem or (default_semester or "1-1")
@@ -660,7 +712,7 @@ async def bulk_upload_routine(
 @router.get("/teacher/routine")
 def get_teacher_routine(
     db: Session = Depends(get_db),
-    user: User = Depends(require_role("teacher", "admin", "system_admin")),
+    user: User = Depends(require_role("teacher", "admin", "system_admin", "eee_system_admin", "eee_admin", "super_admin")),
 ):
     """Retrieve the logged-in teacher's personalized weekly routine schedule."""
     ct_courses = db.scalars(
@@ -700,4 +752,300 @@ def get_teacher_routine(
         key=lambda r: (DAY_ORDER.get(r.day, 99), r.start_time or "")
     )
     return [_routine_out(r) for r in sorted_slots]
+
+
+@router.get("/student/routine")
+def get_student_routine(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role("student")),
+):
+    """Retrieve the logged-in student's weekly routine schedule for assigned/enrolled courses."""
+    profile = user.profile
+    if not profile:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Student profile not found")
+
+    student_dept = (profile.department or "").strip().upper()
+    student_section = (profile.section or "A").strip().upper()
+    current_semester = (profile.current_semester or "").strip()
+
+    # Get student enrolled courses
+    enrolled_courses = db.scalars(
+        select(Course).join(Enrollment, Enrollment.course_id == Course.id).where(
+            Enrollment.student_id == user.id
+        )
+    ).all()
+    enrolled_codes = {c.code.strip() for c in enrolled_courses if c.code}
+
+    # Query master routine slots
+    # Matches:
+    # 1. Course code is in enrolled_codes
+    # 2. Or department + semester match
+    query = select(ClassRoutine)
+    if student_dept:
+        query = query.where(func.upper(ClassRoutine.department) == student_dept)
+    if current_semester:
+        query = query.where(ClassRoutine.semester == current_semester)
+
+    all_dept_sem_slots = db.scalars(query).all()
+
+    student_slots = []
+    seen = set()
+
+    for s in all_dept_sem_slots:
+        # Check course code match if student has enrolled courses
+        if enrolled_codes and s.course_code and s.course_code.strip() not in enrolled_codes:
+            continue
+
+        # Check section match: slot section matches student's section or is universal/both
+        slot_sec = (s.section or "A").strip().upper()
+        if student_section and slot_sec not in {"BOTH", "ALL", "", student_section}:
+            continue
+
+        # Deduplicate identical day+time+course+teacher
+        key = (s.day, s.start_time, s.end_time, s.course_code, s.teacher_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        student_slots.append(s)
+
+    sorted_slots = sorted(
+        student_slots,
+        key=lambda r: (DAY_ORDER.get(r.day, 99), r.start_time or "")
+    )
+    return [_routine_out(r) for r in sorted_slots]
+
+
+@router.get("/student/routine/download")
+def download_student_routine_pdf(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role("student")),
+):
+    """Directly download the student's complete weekly routine as a PDF file."""
+    import os
+    os.environ.setdefault("MPLCONFIGDIR", "/tmp")
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    profile = user.profile
+    if not profile:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Student profile not found")
+
+    student_dept = (profile.department or "").strip().upper()
+    student_section = (profile.section or "A").strip().upper()
+    current_semester = (profile.current_semester or "").strip()
+
+    # Enrolled courses
+    enrolled_courses = db.scalars(
+        select(Course).join(Enrollment, Enrollment.course_id == Course.id).where(
+            Enrollment.student_id == user.id
+        )
+    ).all()
+    enrolled_codes = {c.code.strip() for c in enrolled_courses if c.code}
+
+    query = select(ClassRoutine)
+    if student_dept:
+        query = query.where(func.upper(ClassRoutine.department) == student_dept)
+    if current_semester:
+        query = query.where(ClassRoutine.semester == current_semester)
+
+    all_dept_sem_slots = db.scalars(query).all()
+
+    student_slots = []
+    seen = set()
+
+    for s in all_dept_sem_slots:
+        if enrolled_codes and s.course_code and s.course_code.strip() not in enrolled_codes:
+            continue
+        slot_sec = (s.section or "A").strip().upper()
+        if student_section and slot_sec not in {"BOTH", "ALL", "", student_section}:
+            continue
+        key = (s.day, s.start_time, s.end_time, s.course_code, s.teacher_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        student_slots.append(s)
+
+    sorted_slots = sorted(
+        student_slots,
+        key=lambda r: (DAY_ORDER.get(r.day, 99), r.start_time or "")
+    )
+
+    by_day = {d: [] for d in DAYS_OF_WEEK[:5]}  # Sunday - Thursday
+    for s in sorted_slots:
+        if s.day in by_day:
+            by_day[s.day].append(s)
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        for day in DAYS_OF_WEEK[:5]:
+            slots = by_day[day]
+            fig, ax = plt.subplots(figsize=(11.69, 8.27))  # A4 landscape
+            ax.axis("off")
+
+            # Page header
+            fig.text(0.08, 0.93, f"Class Routine — {day}", fontsize=17, weight="bold", color="#0f3422")
+            sub_meta = f"Student: {profile.full_name}   |   Roll: {profile.roll}   |   Dept: {student_dept}   |   Semester: {current_semester}   |   Section: {student_section}"
+            fig.text(0.08, 0.89, sub_meta, fontsize=9.5, color="#555555")
+
+            if not slots:
+                fig.text(0.5, 0.5, f"No classes scheduled on {day}", ha="center", fontsize=13, style="italic", color="#888888")
+            else:
+                table_data = []
+                for s in slots:
+                    c_type = s.course_type or "Theory"
+                    room_val = s.room if (s.room and s.room != "TBA") else "TBA"
+                    table_data.append([
+                        f"{s.start_time} – {s.end_time}",
+                        s.course_code,
+                        s.course_title or "Class Session",
+                        c_type,
+                        room_val,
+                        s.teacher_name or "—",
+                    ])
+
+                col_labels = ["Time Slot", "Course Code", "Course Title", "Type", "Room", "Faculty"]
+                table = ax.table(
+                    cellText=table_data,
+                    colLabels=col_labels,
+                    loc="center",
+                    cellLoc="left",
+                    colWidths=[0.18, 0.14, 0.32, 0.10, 0.08, 0.18],
+                )
+                table.auto_set_font_size(False)
+                table.set_fontsize(9)
+                table.scale(1, 1.8)
+
+                for (r, c), cell in table.get_celld().items():
+                    if r == 0:
+                        cell.set_facecolor("#0f3422")
+                        cell.set_text_props(color="white", weight="bold")
+                    else:
+                        cell.set_facecolor("#f9fbf9" if r % 2 == 0 else "#ffffff")
+
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close()
+
+    buf.seek(0)
+    filename = f"class_routine_{profile.roll}_{current_semester.replace('-', '_')}.pdf"
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
+
+
+@router.get("/admin/routine/download-pdf")
+def download_master_routine_pdf(
+    department: str | None = None,
+    day: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(admin_or_sysadmin),
+):
+    """Directly download the complete department master routine as a formatted PDF."""
+    import os
+    os.environ.setdefault("MPLCONFIGDIR", "/tmp")
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    scoped = _dept_for_role(user)
+    dept_target = scoped if scoped else (department if (department and department != "All") else None)
+
+    query = select(ClassRoutine)
+    if dept_target:
+        query = query.where(func.upper(ClassRoutine.department) == dept_target.upper())
+    if day and day != "All":
+        query = query.where(ClassRoutine.day == day)
+
+    slots = db.scalars(query).all()
+
+    sorted_slots = sorted(
+        slots,
+        key=lambda r: (DAY_ORDER.get(r.day, 99), r.semester or "", r.section or "", r.start_time or "")
+    )
+
+    days_to_render = [day] if (day and day != "All") else DAYS_OF_WEEK[:5]
+    by_day = {d: [] for d in days_to_render}
+    for s in sorted_slots:
+        if s.day in by_day:
+            by_day[s.day].append(s)
+
+    buf = io.BytesIO()
+    dept_label = dept_target if dept_target else "Central All Departments"
+
+    with PdfPages(buf) as pdf:
+        for d in days_to_render:
+            day_slots = by_day.get(d, [])
+
+            # Split slots into pages of at most 18 rows per page for clarity
+            chunk_size = 18
+            chunks = [day_slots[i:i + chunk_size] for i in range(0, len(day_slots), chunk_size)] if day_slots else [[]]
+
+            for page_idx, chunk in enumerate(chunks):
+                fig, ax = plt.subplots(figsize=(11.69, 8.27))  # A4 Landscape
+                ax.axis("off")
+
+                # Header Banner
+                fig.text(0.08, 0.93, f"Master Class Routine — {d}", fontsize=17, weight="bold", color="#0f3422")
+                sub_meta = f"Department: {dept_label}   |   Total Slots: {len(day_slots)}   |   Page {page_idx + 1} of {len(chunks)}   |   Generated: {datetime.now().strftime('%d %b %Y')}"
+                fig.text(0.08, 0.89, sub_meta, fontsize=9.5, color="#555555")
+
+                if not chunk:
+                    fig.text(0.5, 0.5, f"No routine slots scheduled on {d}", ha="center", fontsize=13, style="italic", color="#888888")
+                else:
+                    table_data = []
+                    for s in chunk:
+                        c_type = s.course_type or "Theory"
+                        room_val = s.room if (s.room and s.room != "TBA") else "TBA"
+                        sem_sec = f"{s.semester or ''} (Sec {s.section or 'A'})"
+                        table_data.append([
+                            f"{s.start_time} – {s.end_time}",
+                            sem_sec,
+                            s.course_code,
+                            s.course_title or "Class Session",
+                            c_type,
+                            room_val,
+                            s.teacher_name or "—",
+                        ])
+
+                    col_labels = ["Time Slot", "Term & Sec", "Course Code", "Course Title", "Type", "Room", "Faculty"]
+                    table = ax.table(
+                        cellText=table_data,
+                        colLabels=col_labels,
+                        loc="center",
+                        cellLoc="left",
+                        colWidths=[0.16, 0.12, 0.12, 0.28, 0.10, 0.07, 0.15],
+                    )
+                    table.auto_set_font_size(False)
+                    table.set_fontsize(8.5)
+                    table.scale(1, 1.6)
+
+                    for (r, c), cell in table.get_celld().items():
+                        if r == 0:
+                            cell.set_facecolor("#0f3422")
+                            cell.set_text_props(color="white", weight="bold")
+                        else:
+                            cell.set_facecolor("#f9fbf9" if r % 2 == 0 else "#ffffff")
+
+                pdf.savefig(fig, bbox_inches="tight")
+                plt.close()
+
+    buf.seek(0)
+    dept_slug = (dept_target or "central").lower()
+    filename = f"master_routine_{dept_slug}.pdf"
+    return StreamingResponse(
+        buf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
+
+
+
 

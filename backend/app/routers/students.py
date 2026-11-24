@@ -316,6 +316,13 @@ async def upload_face_samples(
     old_paths = json.loads(roster.face_sample_paths or "[]")
     paths: list[str] = []
     new_filenames: set[str] = set()
+    main_suffix = ".png" if validated[0][1] == "image/png" else ".jpg"
+    main_filename = f"{roster.roll}{main_suffix}"
+    (dept_dir / main_filename).write_bytes(validated[0][0])
+    roster.photo_path = f"picture/{dept}/{main_filename}"
+    roster.photo_data = validated[0][0]
+    roster.photo_mime_type = validated[0][1]
+
     for index, ((content, mime_type), photo) in enumerate(zip(validated, photos)):
         suffix = ".png" if mime_type == "image/png" else ".jpg"
         pose_name = _resolve_pose_name(photo, index)
@@ -327,14 +334,11 @@ async def upload_face_samples(
     for relative_path in old_paths:
         old_file = (settings.picture_dir.parent / relative_path).resolve()
         if (old_file.parent == picture_root or picture_root in old_file.parents) and old_file.is_file():
-            if old_file.name not in new_filenames:
+            if old_file.name not in new_filenames and old_file.name != main_filename:
                 old_file.unlink(missing_ok=True)
 
     roster.face_sample_paths = json.dumps(paths)
     roster.face_enrollment_version = FACE_ENROLLMENT_VERSION
-    roster.photo_path = paths[0]
-    roster.photo_data = validated[0][0]
-    roster.photo_mime_type = validated[0][1]
     semester_enrollment = db.scalar(
         select(StudentSemesterFaceEnrollment).where(
             StudentSemesterFaceEnrollment.user_id == user.id,
@@ -470,6 +474,27 @@ def _routine_contains_minute(start: int, end: int, minute: int) -> bool:
     if start <= end:
         return start <= minute <= end
     return minute >= start or minute <= end
+
+
+def _absence_window_for_session(session: ClassSession) -> dict | None:
+    start_at = session.start_at
+    end_at = session.end_at or start_at
+    if end_at < start_at:
+        end_at = start_at
+    delta_seconds = max(0, (end_at - start_at).total_seconds())
+    if delta_seconds == 0:
+        return {
+            "start_at": start_at.isoformat(),
+            "end_at": end_at.isoformat(),
+            "duration_minutes": 0,
+            "label": "Absent since class started",
+        }
+    return {
+        "start_at": start_at.isoformat(),
+        "end_at": end_at.isoformat(),
+        "duration_minutes": int(delta_seconds // 60),
+        "label": "Absent during class window",
+    }
 
 
 @router.get("/dashboard")
@@ -645,6 +670,7 @@ def dashboard(semester: str | None = None, user: User = Depends(student_only), d
 
     return {
         "semester": semester,
+        "department": profile.department or "CSE",
         "marking_rule": RULE,
         "summary": {
             "courses": len(course_rows),
@@ -691,5 +717,6 @@ def attendance_history(
             "status": record.status if record else "absent",
             "marked_at": record.marked_at if record else None,
             "method": record.method if record else None,
+            "absence_window": _absence_window_for_session(s) if record is None else None,
         })
     return {"semester": semester, "rows": rows}

@@ -1,42 +1,58 @@
 import { useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
-  BookOpen, CalendarDays, ChevronLeft, ChevronRight, ClipboardCheck, FileText,
+  Bell, BookOpen, CalendarDays, ChevronLeft, ChevronRight, ClipboardCheck, FileText,
   GraduationCap, LayoutDashboard, LogOut, Menu, Radio, Settings,
   ShieldAlert, UserRound, Users, X, Clock,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
+
 
 export const NAV = {
   teacher: [
     { to: '/teacher', label: 'Dashboard', icon: LayoutDashboard, end: true },
     { to: '/teacher/routine', label: 'Class Routine', icon: CalendarDays },
     { to: '/teacher/my-courses', label: 'Your courses', icon: BookOpen },
-    { to: '/teacher/courses', label: 'Manage Classes', icon: FileText },
     { to: '/teacher/history', label: 'Class History', icon: FileText },
     { to: '/teacher/analytics', label: 'Analytics', icon: Radio },
     { to: '/teacher/settings', label: 'Settings', icon: Settings },
   ],
   student: [
     { to: '/student', label: 'Dashboard', icon: LayoutDashboard, end: true },
+    { to: '/student/routine', label: 'My Routine', icon: CalendarDays },
     { to: '/student/attendance', label: 'My Attendance', icon: ClipboardCheck },
     { to: '/student/courses', label: 'My Courses', icon: BookOpen },
     { to: '/student/profile', label: 'Academic Profile', icon: UserRound },
   ],
   system_admin: [
-    { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true },
+    { to: '/admin/system-admin', label: 'CSE System Admin Dashboard', icon: LayoutDashboard, end: true },
     { to: '/admin/courses', label: 'Course Management', icon: BookOpen },
     { to: '/admin/routine', label: 'Routine Management', icon: CalendarDays },
     { to: '/admin/assignments', label: 'Teacher Assignment', icon: ClipboardCheck },
     { to: '/admin/teachers', label: 'Teacher Management', icon: Users },
-    { to: '/admin/alerts', label: 'Security Alerts', icon: ShieldAlert },
-    { to: '/admin/settings', label: 'System Settings', icon: Settings },
+  ],
+  eee_system_admin: [
+    { to: '/admin/eee-system-admin', label: 'EEE System Admin Dashboard', icon: LayoutDashboard, end: true },
+    { to: '/admin/courses', label: 'Course Management', icon: BookOpen },
+    { to: '/admin/routine', label: 'Routine Management', icon: CalendarDays },
+    { to: '/admin/assignments', label: 'Teacher Assignment', icon: ClipboardCheck },
+    { to: '/admin/teachers', label: 'Teacher Management', icon: Users },
   ],
   admin: [
+    { to: '/admin/student-admin', label: 'CSE Student Admin Dashboard', icon: LayoutDashboard, end: true },
     { to: '/admin/students', label: 'Student Records', icon: GraduationCap, end: true },
     { to: '/admin/students/new', label: 'Add Student', icon: UserRound, end: true },
-    { to: '/admin/courses', label: 'Student Courses & Terms', icon: BookOpen },
     { to: '/admin/course-assignments', label: 'Course Assignments', icon: Users },
+  ],
+  eee_admin: [
+    { to: '/admin/eee-student-admin', label: 'EEE Student Admin Dashboard', icon: LayoutDashboard, end: true },
+    { to: '/admin/students', label: 'Student Records', icon: GraduationCap, end: true },
+    { to: '/admin/students/new', label: 'Add Student', icon: UserRound, end: true },
+    { to: '/admin/course-assignments', label: 'Course Assignments', icon: Users },
+  ],
+  super_admin: [
+    { to: '/admin/super-admin', label: 'Super Admin Dashboard', icon: LayoutDashboard, end: true },
+    { to: '/admin/settings', label: 'System Settings', icon: Settings },
   ],
 }
 
@@ -45,12 +61,18 @@ const ROLE_LABEL = {
   student: 'Undergraduate Student',
   admin: 'Student Administrator',
   system_admin: 'System Administrator',
+  eee_system_admin: 'EEE System Administrator',
+  eee_admin: 'EEE Student Administrator',
+  super_admin: 'Super Administrator',
 }
 const ROLE_BADGE = {
   teacher: 'bg-emerald-50 text-emerald-800 border-emerald-200/80',
   student: 'bg-teal-50 text-teal-800 border-teal-200/80',
   admin: 'bg-blue-50 text-blue-800 border-blue-200/80',
+  eee_admin: 'bg-blue-50 text-blue-800 border-blue-200/80',
   system_admin: 'bg-purple-50 text-purple-800 border-purple-200/80',
+  eee_system_admin: 'bg-purple-50 text-purple-800 border-purple-200/80',
+  super_admin: 'bg-indigo-50 text-indigo-800 border-indigo-200/80',
 }
 
 const SIDEBAR_MIN_WIDTH = 220
@@ -97,13 +119,23 @@ function Avatar({ user, size = 'md' }) {
 }
 
 export default function DashboardLayout() {
-  const { user, logout } = useAuth()
+  const auth = useAuth() || {}
+  const { user = null, logout = () => { }, returnToSuperAdmin } = auth
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const [open, setOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
   const [resizingSidebar, setResizingSidebar] = useState(false)
+  const hasSuperBackup = typeof window !== 'undefined' && Boolean(localStorage.getItem('super_admin_backup_token'))
+  const isImpersonated = user?.role !== 'super_admin' && hasSuperBackup
+
+  const handleReturnToSuper = async () => {
+    if (returnToSuperAdmin) {
+      await returnToSuperAdmin()
+      navigate('/admin/super-admin')
+    }
+  }
 
   const navItems = NAV[user?.role] || []
   const activeItem = navItems.find((item) => item.to === pathname)
@@ -166,7 +198,6 @@ export default function DashboardLayout() {
             {!collapsed && (
               <div className="min-w-0 leading-tight">
                 <p className="font-display truncate text-base font-bold tracking-tight text-stone-900">Smart Attendance</p>
-                <p className="truncate text-xs font-medium text-stone-500">KUET CSE Portal</p>
               </div>
             )}
           </div>
@@ -256,6 +287,18 @@ export default function DashboardLayout() {
           />
         )}
 
+        {!collapsed && (user?.role === 'admin' || user?.role === 'eee_admin') && (
+          <div className="mx-3.5 mb-2.5 shrink-0 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3 shadow-2xs">
+            <div className="flex items-center justify-between text-xs">
+              <span className="flex items-center gap-1.5 text-stone-700 font-medium">
+                <GraduationCap size={13} className="text-emerald-700" /> Student database
+              </span>
+              <span className="font-bold text-emerald-800">Active</span>
+            </div>
+            <p className="mt-1 text-xs text-stone-500">Admin-approved student roster</p>
+          </div>
+        )}
+
         {/* Logout Button (Replaced User Info) */}
         <div className="border-t border-[#f0eee6] p-3.5 mt-auto shrink-0">
           <button
@@ -298,6 +341,27 @@ export default function DashboardLayout() {
               <span className="font-semibold">{currentDateStr}</span>
             </div>
 
+            {/* Back to Super Admin Button if switched */}
+            {isImpersonated && (
+              <button
+                type="button"
+                onClick={handleReturnToSuper}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-bold text-indigo-800 shadow-2xs transition hover:bg-indigo-100 hover:border-indigo-300 cursor-pointer"
+                title="Return to Super Admin Dashboard"
+              >
+                <span>← Super Admin</span>
+              </button>
+            )}
+
+            {/* Notification Bell */}
+            {user?.role !== 'admin' && user?.role !== 'eee_admin' && <button
+              aria-label="System notifications"
+              className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-700 shadow-2xs transition hover:border-stone-300 hover:bg-stone-50 hover:text-stone-900 cursor-pointer"
+            >
+              <Bell size={18} />
+              <span className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-emerald-600 ring-2 ring-white" />
+            </button>}
+
             <div className="hidden sm:block h-7 w-px bg-stone-200" aria-hidden="true" />
 
             {/* User Profile Info */}
@@ -307,13 +371,16 @@ export default function DashboardLayout() {
                 <p className="text-sm font-semibold text-stone-900">{user?.name}</p>
                 <p className="text-xs text-stone-500 capitalize">{ROLE_LABEL[user?.role] || user?.role}</p>
               </div>
-              <button
-                onClick={handleLogout}
-                title="Sign Out"
-                className="flex h-9 w-9 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-500 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 shadow-2xs cursor-pointer ml-1"
-              >
-                <LogOut size={15} />
-              </button>
+              {/* Only show header Sign Out button for non-student and non-admin roles (e.g. teacher) */}
+              {!['student', 'admin', 'system_admin', 'eee_system_admin', 'eee_admin', 'super_admin'].includes(user?.role) && (
+                <button
+                  onClick={handleLogout}
+                  title="Sign Out"
+                  className="flex h-9 w-9 items-center justify-center rounded-xl border border-stone-200 bg-white text-stone-500 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 shadow-2xs cursor-pointer ml-1"
+                >
+                  <LogOut size={15} />
+                </button>
+              )}
             </div>
           </div>
         </header>

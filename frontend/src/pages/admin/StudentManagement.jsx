@@ -2,16 +2,19 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Search } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
+import { useAuth } from '../../context/AuthContext'
 
 const semesters = ['1-1', '1-2', '2-1', '2-2', '3-1', '3-2', '4-1', '4-2']
 const DEPARTMENTS = ['CSE', 'EEE', 'ECE', 'ME', 'CE', 'IEM', 'BME', 'MSE', 'URP', 'ARCH', 'BECM', 'LE', 'TE', 'ChE', 'MTE', 'PHY', 'CHEM', 'MATH', 'HUM']
 
 export default function StudentManagement() {
+  const { user } = useAuth()
+  const scopedDept = (user?.role === 'eee_system_admin' || user?.role === 'eee_admin') ? 'EEE' : (user?.role === 'system_admin' || user?.role === 'admin') ? 'CSE' : null
   const navigate = useNavigate()
   const location = useLocation()
   const [students, setStudents] = useState([])
   const [search, setSearch] = useState('')
-  const [department, setDepartment] = useState('All')
+  const [department, setDepartment] = useState(scopedDept || 'All')
   const [semester, setSemester] = useState('All')
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState(() => location.state?.notice ?? '')
@@ -90,10 +93,16 @@ export default function StudentManagement() {
           </div>
 
           <div className="mt-5 flex flex-wrap gap-2">
-            <select value={department} onChange={(event) => setDepartment(event.target.value)} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 outline-none">
-              <option value="All">All departments</option>
-              {DEPARTMENTS.map(dept => <option key={dept} value={dept}>{dept}</option>)}
-            </select>
+            {scopedDept ? (
+              <div className="rounded-xl border border-stone-200 bg-stone-100 px-3 py-2 text-sm text-stone-700 font-semibold">
+                {scopedDept} Department
+              </div>
+            ) : (
+              <select value={department} onChange={(event) => setDepartment(event.target.value)} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 outline-none">
+                <option value="All">All departments</option>
+                {DEPARTMENTS.map(dept => <option key={dept} value={dept}>{dept}</option>)}
+              </select>
+            )}
             <select value={semester} onChange={(event) => setSemester(event.target.value)} className="rounded-xl border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 outline-none">
               <option value="All">All semesters</option>
               {semesters.map((term) => <option key={term} value={term}>{term}</option>)}

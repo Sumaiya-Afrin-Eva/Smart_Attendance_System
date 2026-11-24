@@ -78,7 +78,6 @@ export default function SystemSettings() {
   
   const textRows = [
     { key: 'instName', label: 'Institution Name', description: 'The full name of the university or institute', icon: Wrench },
-    { key: 'deptName', label: 'Department Name', description: 'The name of the department', icon: Wrench },
     { key: 'instLogo', label: 'Institution Logo URL', description: 'URL or path to the institution logo', icon: Wrench },
   ]
 

@@ -21,6 +21,7 @@ import {
   RotateCcw,
 } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
+import { useAuth } from '../../context/AuthContext'
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday']
 const DEPARTMENTS = ['CSE', 'EEE', 'ECE', 'ME', 'CE', 'IEM', 'BME', 'MSE', 'URP', 'ARCH', 'BECM', 'LE', 'TE', 'ChE', 'MTE', 'PHY', 'CHEM', 'MATH', 'HUM']
@@ -37,6 +38,8 @@ const TIME_PRESETS = [
 ]
 
 export default function AdminRoutine() {
+  const { user } = useAuth()
+  const scopedDept = user?.role === 'eee_system_admin' ? 'EEE' : user?.role === 'system_admin' ? 'CSE' : null
   const [routine, setRoutine] = useState([])
   const [courses, setCourses] = useState([])
   const [teachers, setTeachers] = useState([])
@@ -45,7 +48,7 @@ export default function AdminRoutine() {
   const [noticeType, setNoticeType] = useState('success') // success | error
 
   // Filters
-  const [selectedDept, setSelectedDept] = useState('All')
+  const [selectedDept, setSelectedDept] = useState(scopedDept || 'All')
   const [selectedDay, setSelectedDay] = useState('All')
   const [selectedTeacher, setSelectedTeacher] = useState('All')
   const [search, setSearch] = useState('')
@@ -212,7 +215,7 @@ export default function AdminRoutine() {
   function openAddModal() {
     setEditingId(null)
     setForm({
-      department: selectedDept !== 'All' ? selectedDept : 'CSE',
+      department: scopedDept || (selectedDept !== 'All' ? selectedDept : 'CSE'),
       semester: '1-1',
       section: 'A',
       day: selectedDay !== 'All' ? selectedDay : 'Sunday',
@@ -232,7 +235,7 @@ export default function AdminRoutine() {
   function openEditModal(slot) {
     setEditingId(slot.id)
     setForm({
-      department: slot.department || 'CSE',
+      department: scopedDept || slot.department || 'CSE',
       semester: slot.semester || '3-1',
       section: slot.section || 'A',
       day: slot.day || 'Sunday',
@@ -350,6 +353,37 @@ export default function AdminRoutine() {
     }
   }
 
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
+
+  // Download Master Routine as PDF
+  async function handleDownloadMasterPdf() {
+    try {
+      setDownloadingPdf(true)
+      const params = new URLSearchParams()
+      if (selectedDept && selectedDept !== 'All') params.set('department', selectedDept)
+      if (selectedDay && selectedDay !== 'All') params.set('day', selectedDay)
+
+      const response = await api.get(`/admin/routine/download-pdf?${params.toString()}`, {
+        responseType: 'blob',
+      })
+      const blob = new Blob([response.data], { type: 'application/pdf' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      const deptSlug = (selectedDept || 'master').toLowerCase()
+      link.setAttribute('download', `master_routine_${deptSlug}.pdf`)
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+      showNotice('Master routine PDF downloaded successfully.')
+    } catch (err) {
+      showNotice(errorMessage(err, 'Failed to download master routine PDF.'), 'error')
+    } finally {
+      setDownloadingPdf(false)
+    }
+  }
+
   // Download Template
   async function handleDownloadTemplate() {
     try {
@@ -437,27 +471,33 @@ export default function AdminRoutine() {
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5">
-            <button
-              onClick={handleDownloadTemplate}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-2xs transition-colors"
-              title="Download sample excel/csv format"
-            >
-              <Download className="h-4 w-4 text-slate-500" />
-              Template
-            </button>
+          <div className="flex flex-col gap-2.5 sm:w-[360px] shrink-0">
+            {/* Top row: Download & Import Excel (side by side, equal width) */}
+            <div className="flex w-full items-center gap-2.5">
+              <button
+                onClick={handleDownloadMasterPdf}
+                disabled={downloadingPdf}
+                className="flex-1 inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 hover:bg-slate-50 hover:text-slate-900 shadow-2xs transition-all cursor-pointer disabled:opacity-50"
+                title="Download complete master routine as PDF"
+              >
+                <Download className={`h-4 w-4 text-slate-600 ${downloadingPdf ? 'animate-bounce' : ''}`} />
+                {downloadingPdf ? 'Downloading...' : 'Download'}
+              </button>
 
-            <button
-              onClick={() => setShowUploadModal(true)}
-              className="inline-flex items-center gap-2 rounded-xl border border-emerald-600/30 bg-emerald-50/70 px-4 py-2.5 text-xs font-bold text-emerald-800 hover:bg-emerald-100/70 shadow-2xs transition-colors"
-            >
-              <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
-              Import Excel
-            </button>
+              <button
+                onClick={() => setShowUploadModal(true)}
+                className="flex-1 inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-emerald-600/30 bg-emerald-50/70 px-3 text-sm font-bold text-emerald-800 hover:bg-emerald-100/70 shadow-2xs transition-all cursor-pointer"
+                title="Import master routine spreadsheet"
+              >
+                <FileSpreadsheet className="h-4 w-4 text-emerald-600" />
+                Import Excel
+              </button>
+            </div>
 
+            {/* Bottom row: Add Class Slot (full width matching the row above) */}
             <button
               onClick={openAddModal}
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2.5 text-xs font-bold text-white hover:bg-emerald-800 shadow-sm transition-colors"
+              className="inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-700 px-5 text-sm font-bold text-white hover:bg-emerald-800 shadow-sm transition-all cursor-pointer"
             >
               <Plus className="h-4 w-4" />
               Add Class Slot
@@ -492,108 +532,114 @@ export default function AdminRoutine() {
       </div>
 
       {/* Filter and Control Bar */}
-      <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-2xs space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          {/* Department, Semester, Section filters */}
-          <div className="flex flex-wrap items-center gap-2.5">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-              <Filter className="h-3.5 w-3.5 text-slate-400" />
-              Filter:
-            </div>
+      <div className="rounded-2xl border border-slate-200/80 bg-white p-4.5 shadow-2xs space-y-3.5">
+        {/* Top Row: Responsive Full-width Filter Row */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-1.5 text-sm font-semibold text-slate-700 shrink-0">
+            <Filter className="h-4 w-4 text-slate-400" />
+            Filter:
+          </div>
 
+          {scopedDept ? (
+            <div className="inline-flex h-10 flex-1 min-w-[150px] items-center justify-center rounded-xl border border-slate-200 bg-slate-100 px-4 text-sm font-bold text-slate-800 shadow-2xs">
+              {scopedDept} Dept
+            </div>
+          ) : (
             <select
               value={selectedDept}
               onChange={(e) => setSelectedDept(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-2xs focus:border-emerald-500 focus:outline-none"
+              className="h-10 flex-1 min-w-[160px] rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-800 shadow-2xs focus:border-emerald-500 focus:outline-none"
             >
               <option value="All">All Depts</option>
               {DEPARTMENTS.map((d) => (
                 <option key={d} value={d}>{d}</option>
               ))}
             </select>
+          )}
 
-            <select
-              value={selectedDay}
-              onChange={(e) => setSelectedDay(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-2xs focus:border-emerald-500 focus:outline-none"
-            >
-              <option value="All">All Days</option>
-              {DAYS.map((d) => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
+          <select
+            value={selectedDay}
+            onChange={(e) => setSelectedDay(e.target.value)}
+            className="h-10 flex-1 min-w-[180px] rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-800 shadow-2xs focus:border-emerald-500 focus:outline-none"
+          >
+            <option value="All">All Days</option>
+            {DAYS.map((d) => (
+              <option key={d} value={d}>{d}</option>
+            ))}
+          </select>
 
-            <select
-              value={selectedTeacher}
-              onChange={(e) => setSelectedTeacher(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 shadow-2xs focus:border-emerald-500 focus:outline-none max-w-[170px] truncate"
-            >
-              <option value="All">All Teachers</option>
-              {availableTeachers.map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
+          <select
+            value={selectedTeacher}
+            onChange={(e) => setSelectedTeacher(e.target.value)}
+            className="h-10 flex-[1.5] min-w-[240px] truncate rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-800 shadow-2xs focus:border-emerald-500 focus:outline-none"
+          >
+            <option value="All">All Teachers</option>
+            {availableTeachers.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Bottom Row: Full-width Search Bar and Action Controls */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-slate-100">
+          <div className="relative flex-1 min-w-[260px]">
+            <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Search routine by course code, title, room or faculty..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50/70 pl-10 pr-3.5 text-sm font-medium text-slate-800 placeholder-slate-400 focus:bg-white focus:border-emerald-500 focus:outline-none shadow-2xs transition-colors"
+            />
           </div>
 
-          {/* Right actions: Search, View Mode, Export, Reset */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-3 top-2 h-3.5 w-3.5 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search routine..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-44 sm:w-56 rounded-xl border border-slate-200 bg-slate-50/70 pl-8.5 pr-3 py-1.5 text-xs font-medium text-slate-800 placeholder-slate-400 focus:bg-white focus:border-emerald-500 focus:outline-none"
-              />
-            </div>
-
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
             {/* View Mode Switcher */}
-            <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-0.5">
+            <div className="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-slate-50 p-1">
               <button
                 onClick={() => setViewMode('grid')}
-                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition-all ${
+                className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3.5 text-xs font-bold transition-all cursor-pointer ${
                   viewMode === 'grid'
                     ? 'bg-white text-emerald-800 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
                 title="Weekly Schedule Grid"
               >
-                <LayoutGrid className="h-3.5 w-3.5" />
+                <LayoutGrid className="h-4 w-4" />
                 Grid
               </button>
               <button
                 onClick={() => setViewMode('faculty')}
-                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition-all ${
+                className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3.5 text-xs font-bold transition-all cursor-pointer ${
                   viewMode === 'faculty'
                     ? 'bg-white text-emerald-800 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
                 title="Grouped by Faculty (Matches Excel format)"
               >
-                <UserCheck className="h-3.5 w-3.5" />
+                <UserCheck className="h-4 w-4" />
                 Faculty
               </button>
               <button
                 onClick={() => setViewMode('table')}
-                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition-all ${
+                className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-3.5 text-xs font-bold transition-all cursor-pointer ${
                   viewMode === 'table'
                     ? 'bg-white text-emerald-800 shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
                 title="List Table"
               >
-                <List className="h-3.5 w-3.5" />
+                <List className="h-4 w-4" />
                 Table
               </button>
             </div>
 
             <button
               onClick={handleExportCSV}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+              className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer"
               title="Export current view to CSV"
             >
-              <Download className="h-3.5 w-3.5 text-slate-500" />
+              <Download className="h-4 w-4 text-slate-500" />
               CSV
             </button>
 
@@ -601,10 +647,10 @@ export default function AdminRoutine() {
               <button
                 type="button"
                 onClick={handleClearRoutine}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100 hover:border-rose-400 transition-colors shadow-2xs"
+                className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-4 text-xs font-bold text-rose-700 hover:bg-rose-100 hover:border-rose-400 transition-colors shadow-2xs cursor-pointer"
                 title="Delete all routine slots"
               >
-                <Trash2 className="h-3.5 w-3.5 text-rose-600" />
+                <Trash2 className="h-4 w-4 text-rose-600" />
                 Clear Routine
               </button>
             )}
@@ -1016,15 +1062,21 @@ export default function AdminRoutine() {
 
                 <div>
                   <label className="text-[11px] font-bold text-slate-700">Dept</label>
-                  <select
-                    value={form.department}
-                    onChange={(e) => setForm({ ...form, department: e.target.value })}
-                    className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-none"
-                  >
-                    {DEPARTMENTS.map((d) => (
-                      <option key={d} value={d}>{d}</option>
-                    ))}
-                  </select>
+                  {scopedDept ? (
+                    <div className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-100 px-2 py-2 text-xs font-bold text-slate-800">
+                      {scopedDept}
+                    </div>
+                  ) : (
+                    <select
+                      value={form.department}
+                      onChange={(e) => setForm({ ...form, department: e.target.value })}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-2 py-2 text-xs font-bold text-slate-800 focus:border-emerald-500 focus:outline-none"
+                    >
+                      {DEPARTMENTS.map((d) => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
 
                 <div>

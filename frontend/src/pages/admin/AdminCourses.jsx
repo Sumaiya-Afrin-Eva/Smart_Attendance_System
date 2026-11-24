@@ -15,6 +15,7 @@ import {
   UploadCloud,
 } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
+import { useAuth } from '../../context/AuthContext'
 
 const semesterOptions = ['1-1', '1-2', '2-1', '2-2', '3-1', '3-2', '4-1', '4-2']
 
@@ -29,10 +30,16 @@ const emptyCourseForm = {
 }
 
 export default function AdminCourses() {
+  const { user } = useAuth()
+  const scopedDept = (user?.role === 'eee_system_admin' || user?.role === 'eee_admin') ? 'EEE' : (user?.role === 'system_admin' || user?.role === 'admin') ? 'CSE' : null
   const [meta, setMeta] = useState({ departments: [], semesters: [] })
   const [courses, setCourses] = useState([])
   const [teachers, setTeachers] = useState([])
   const [search, setSearch] = useState('')
+  const [form, setForm] = useState({ ...emptyCourseForm, department: scopedDept || 'CSE' })
+  const [studentFilter, setStudentFilter] = useState({ department: scopedDept || 'CSE', semester: '3-2', section: '', q: '' })
+  const [selectedCourseId, setSelectedCourseId] = useState('')
+  const [selectedStudentIds, setSelectedStudentIds] = useState([])
   const [form, setForm] = useState(emptyCourseForm)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -234,9 +241,15 @@ export default function AdminCourses() {
             </label>
             <label className="space-y-1.5">
               <span className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Department</span>
-              <select value={form.department} onChange={(event) => setForm({ ...form, department: event.target.value })} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
-                {meta.departments.map((department) => <option key={department} value={department}>{department}</option>)}
-              </select>
+              {scopedDept ? (
+                <div className="w-full rounded-xl border border-stone-200 bg-stone-100 px-3 py-2.5 text-stone-700 font-semibold cursor-not-allowed">
+                  {scopedDept}
+                </div>
+              ) : (
+                <select value={form.department} onChange={(event) => setForm({ ...form, department: event.target.value })} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
+                  {meta.departments.map((department) => <option key={department} value={department}>{department}</option>)}
+                </select>
+              )}
             </label>
             <label className="space-y-1.5">
               <span className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Semester</span>
@@ -327,6 +340,8 @@ export default function AdminCourses() {
       {notice && (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800 shadow-sm">{notice}</div>
       )}
+
+      {/* Course Directory / Course List */}
 
       <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

@@ -2,14 +2,17 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Eye, EyeOff, ImagePlus, Lock, Mail, Plus, RotateCcw, UploadCloud, UserRound, X } from 'lucide-react'
 import api, { errorMessage } from '../../lib/api'
+import { useAuth } from '../../context/AuthContext'
 
 const emptyForm = { name: '', roll: '', email: '', password: '', session: '', department: 'CSE', phone: '' }
 
 export default function StudentRosterForm() {
+  const { user } = useAuth()
+  const scopedDept = (user?.role === 'eee_system_admin' || user?.role === 'eee_admin') ? 'EEE' : (user?.role === 'system_admin' || user?.role === 'admin') ? 'CSE' : null
   const { studentId } = useParams()
   const navigate = useNavigate()
   const editing = Boolean(studentId)
-  const [form, setForm] = useState(emptyForm)
+  const [form, setForm] = useState({ ...emptyForm, department: scopedDept || 'CSE' })
   const [showPassword, setShowPassword] = useState(false)
   const [photo, setPhoto] = useState(null)
   const [photoName, setPhotoName] = useState('')
@@ -242,13 +245,19 @@ export default function StudentRosterForm() {
 
             <label className="block space-y-1.5">
               <span className="text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">Department</span>
-              <select value={form.department} onChange={(event) => setForm({ ...form, department: event.target.value })} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3.5 py-3 outline-none focus:border-emerald-400">
-                <option value="CSE">CSE</option>
-                <option value="EEE">EEE</option>
-                <option value="ECE">ECE</option>
-                <option value="ME">ME</option>
-                <option value="CE">CE</option>
-              </select>
+              {scopedDept ? (
+                <div className="w-full rounded-xl border border-stone-200 bg-stone-100 px-3.5 py-3 text-stone-700 font-semibold cursor-not-allowed">
+                  {scopedDept}
+                </div>
+              ) : (
+                <select value={form.department} onChange={(event) => setForm({ ...form, department: event.target.value })} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3.5 py-3 outline-none focus:border-emerald-400">
+                  <option value="CSE">CSE</option>
+                  <option value="EEE">EEE</option>
+                  <option value="ECE">ECE</option>
+                  <option value="ME">ME</option>
+                  <option value="CE">CE</option>
+                </select>
+              )}
             </label>
           </div>
 

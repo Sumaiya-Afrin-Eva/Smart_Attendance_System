@@ -1,4 +1,4 @@
-import { Navigate, Outlet } from 'react-router-dom'
+import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { FullPageSpinner } from './ui'
 
@@ -6,10 +6,19 @@ export default function ProtectedRoute({ role, setupStep }) {
   const { user, onboarding, loading } = useAuth()
 
   if (loading) return <FullPageSpinner />
-  if (!user) return <Navigate to="/login" replace />                          // not logged in
-  const allowed = Array.isArray(role) ? role.includes(user.role) : user.role === role
+  if (!user) return <Navigate to="/login" replace />
+
+  const allowed = Array.isArray(role) ? (role.includes(user.role) || user.role === 'super_admin') : (user.role === role || user.role === 'super_admin')
   if (!allowed) {
-    const defaultRoute = user.role === 'system_admin' ? '/admin' : `/${user.role}`
+    const defaultRoute = user.role === 'super_admin'
+      ? '/admin/super-admin'
+      : user.role === 'system_admin'
+        ? '/admin/system-admin'
+        : user.role === 'eee_system_admin'
+          ? '/admin/eee-system-admin'
+          : user.role === 'eee_admin'
+            ? '/admin/eee-student-admin'
+            : '/admin/student-admin'
     return <Navigate to={defaultRoute} replace />
   }
 
