@@ -1,6 +1,6 @@
 import io
 import re
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 import openpyxl
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -15,6 +15,7 @@ from ..models import (
     AdminSetting,
     ClassRoutine,
     ClassScheduleChangeRequest,
+    ClassSession,
     Course,
     CourseTeacher,
     Enrollment,
@@ -1430,6 +1431,36 @@ def decide_schedule_change_request(
     request.status = body.status
     request.reviewed_by = admin.id
     request.reviewed_at = datetime.now()
+
+    if body.status == "approved":
+        start_min = time_to_minutes(request.requested_start_time)
+        end_min = time_to_minutes(request.requested_end_time)
+        course = db.scalar(
+            select(Course).where(
+                func.upper(func.trim(Course.code)) == func.upper(func.trim(routine.course_code)),
+                func.upper(func.trim(Course.department)) == func.upper(func.trim(routine.department)),
+                Course.semester == routine.semester,
+                Course.is_active.is_(True),
+            )
+        )
+        if course is not None and start_min is not None and end_min is not None:
+            day_start = datetime.combine(request.target_date, time.min)
+            next_day = day_start + timedelta(days=1)
+            new_start = datetime.combine(request.target_date, time(start_min // 60, start_min % 60))
+            new_end = datetime.combine(request.target_date, time(end_min // 60, end_min % 60))
+            sessions = db.scalars(
+                select(ClassSession).where(
+                    ClassSession.course_id == course.id,
+                    ClassSession.start_at >= day_start,
+                    ClassSession.start_at < next_day,
+                    ClassSession.status != "cancelled",
+                    (ClassSession.teacher_id == request.teacher_id) | (ClassSession.teacher_id.is_(None)),
+                )
+            ).all()
+            for sess in sessions:
+                sess.start_at = new_start
+                sess.end_at = max(new_end, new_start)
+
     db.commit()
     db.refresh(request)
     teacher = db.get(User, request.teacher_id)

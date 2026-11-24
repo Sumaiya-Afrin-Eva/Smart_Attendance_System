@@ -29,6 +29,8 @@ class ISODateTime(TypeDecorator):
             return None
         if isinstance(value, str):
             value = value.strip()
+            if not value:
+                return None
             if value.endswith('Z'):
                 value = value[:-1] + '+00:00'
             try:
