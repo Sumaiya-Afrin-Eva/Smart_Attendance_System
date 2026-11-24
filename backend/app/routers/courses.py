@@ -45,9 +45,15 @@ def _dept_for_role(user: User) -> str | None:
     """Return the department an admin is scoped to, or None for unrestricted roles (super_admin)."""
     if user.role == "super_admin":
         return None
-    if user.role in {"eee_system_admin", "eee_admin"}:
-        return "EEE"
-    if user.role in {"system_admin", "admin"}:
+    if user.role.endswith("_system_admin"):
+        prefix = user.role[:-13].upper()
+        return prefix if prefix else "CSE"
+    if user.role == "system_admin":
+        return "CSE"
+    if user.role.endswith("_admin") and user.role != "super_admin":
+        prefix = user.role[:-6].upper()
+        return prefix if prefix else "CSE"
+    if user.role == "admin":
         return "CSE"
     return None
 

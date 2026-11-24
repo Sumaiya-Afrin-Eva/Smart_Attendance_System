@@ -17,10 +17,13 @@ FACE_ENROLLMENT_VERSION = 1
 
 
 def user_out(user: User) -> dict:
+    name = user.name
+    if user.role == "student" and user.profile and user.profile.full_name:
+        name = user.profile.full_name
     return {
         "id": user.id,
         "email": user.email,
-        "name": user.profile.full_name if user.profile else user.name,
+        "name": name,
         "role": user.role,
         "picture": user.picture,
     }

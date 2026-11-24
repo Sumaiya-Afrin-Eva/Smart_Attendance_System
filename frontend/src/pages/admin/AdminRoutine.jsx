@@ -21,7 +21,7 @@ import {
   List,
   RotateCcw,
 } from 'lucide-react'
-import api, { errorMessage } from '../../lib/api'
+import api, { errorMessage, getScopedDept } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday']
@@ -40,7 +40,7 @@ const TIME_PRESETS = [
 
 export default function AdminRoutine() {
   const { user } = useAuth()
-  const scopedDept = user?.role === 'eee_system_admin' ? 'EEE' : user?.role === 'system_admin' ? 'CSE' : null
+  const scopedDept = getScopedDept(user)
   const [routine, setRoutine] = useState([])
   const [courses, setCourses] = useState([])
   const [teachers, setTeachers] = useState([])
@@ -352,7 +352,8 @@ export default function AdminRoutine() {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
 
-      showNotice(`Routine import completed: Added ${data.added} slots. Skipped ${data.skipped} rows.`)
+      const updatedPart = data.updated ? `, Updated ${data.updated} slots` : ''
+      showNotice(`Routine import completed: Added ${data.added} slots${updatedPart}. Skipped ${data.skipped} rows.`)
       setShowUploadModal(false)
       setUploadFile(null)
       // Reload routine

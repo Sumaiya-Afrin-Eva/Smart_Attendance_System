@@ -50,8 +50,14 @@ def get_current_user(
 
 def require_role(*roles: str):
     def checker(user: User = Depends(get_current_user)) -> User:
-        if user.role not in roles:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not have access to this page")
-        return user
+        if user.role == "super_admin":
+            return user
+        if user.role in roles:
+            return user
+        if "system_admin" in roles and user.role.endswith("_system_admin"):
+            return user
+        if "admin" in roles and user.role.endswith("_admin") and not user.role.endswith("_system_admin"):
+            return user
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You do not have access to this page")
 
     return checker

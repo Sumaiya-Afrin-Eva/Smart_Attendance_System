@@ -15,7 +15,7 @@ import {
   X,
   UploadCloud,
 } from 'lucide-react'
-import api, { errorMessage } from '../../lib/api'
+import api, { errorMessage, getScopedDept } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
 
 const semesterOptions = ['1-1', '1-2', '2-1', '2-2', '3-1', '3-2', '4-1', '4-2']
@@ -32,7 +32,7 @@ const emptyCourseForm = {
 
 export default function AdminCourses() {
   const { user } = useAuth()
-  const scopedDept = (user?.role === 'eee_system_admin' || user?.role === 'eee_admin') ? 'EEE' : (user?.role === 'system_admin' || user?.role === 'admin') ? 'CSE' : null
+  const scopedDept = getScopedDept(user)
   const [meta, setMeta] = useState({ departments: [], semesters: [] })
   const [courses, setCourses] = useState([])
   const [teachers, setTeachers] = useState([])

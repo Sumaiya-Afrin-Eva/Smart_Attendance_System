@@ -39,20 +39,31 @@ export default function Login() {
     }).catch(err => console.error(err))
   }, [])
 
+  const getDestination = (u) => {
+    if (u?.role === 'student' && !u?.onboarding?.complete) {
+      return u?.onboarding?.profile && !u?.onboarding?.face
+        ? '/student/setup/face'
+        : '/student/setup'
+    }
+    if (u?.role === 'super_admin') return '/admin/super-admin'
+    if (u?.role === 'system_admin' || u?.role === 'cse_system_admin') return '/admin/system-admin'
+    if (u?.role === 'eee_system_admin') return '/admin/eee-system-admin'
+    if (u?.role === 'admin' || u?.role === 'cse_admin') return '/admin/student-admin'
+    if (u?.role === 'eee_admin') return '/admin/eee-student-admin'
+    if (u?.role?.endsWith('_system_admin')) {
+      const dept = u.role.replace('_system_admin', '').toLowerCase()
+      return `/admin/${dept}-system-admin`
+    }
+    if (u?.role?.endsWith('_admin')) {
+      const dept = u.role.replace('_admin', '').toLowerCase()
+      return `/admin/${dept}-student-admin`
+    }
+    return `/${u?.role}`
+  }
+
   if (checking) return null
   if (user) {
-    const defaultRoute = user.role === 'super_admin'
-      ? '/admin/super-admin'
-      : user.role === 'system_admin'
-        ? '/admin/system-admin'
-        : user.role === 'eee_system_admin'
-          ? '/admin/eee-system-admin'
-          : user.role === 'eee_admin'
-            ? '/admin/eee-student-admin'
-            : user.role === 'admin'
-              ? '/admin/student-admin'
-              : `/${user.role}`
-    return <Navigate to={defaultRoute} replace />
+    return <Navigate to={getDestination(user)} replace />
   }
 
   const submit = async (action) => {
@@ -60,22 +71,7 @@ export default function Login() {
     setLoading(true)
     try {
       const signedIn = await action()
-      const destination =
-        signedIn.role === 'student' && !signedIn.onboarding?.complete
-          ? signedIn.onboarding?.profile && !signedIn.onboarding?.face
-            ? '/student/setup/face'
-            : '/student/setup'
-          : signedIn.role === 'super_admin'
-            ? '/admin/super-admin'
-            : signedIn.role === 'system_admin'
-              ? '/admin/system-admin'
-              : signedIn.role === 'eee_system_admin'
-                ? '/admin/eee-system-admin'
-                : signedIn.role === 'eee_admin'
-                  ? '/admin/eee-student-admin'
-                  : signedIn.role === 'admin'
-                    ? '/admin/student-admin'
-                    : `/${signedIn.role}`
+      const destination = getDestination(signedIn)
       navigate(destination, { replace: true })
     } catch (err) {
       setError(err.message)

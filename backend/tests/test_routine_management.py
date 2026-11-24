@@ -316,3 +316,125 @@ def test_routine_upload_with_faculty_sheet_and_teacher_dashboard_sync():
     assert "CSE 4122" in hasan_codes
     assert "CSE 4121" in hasan_codes
 
+
+def test_master_routine_matrix_bulk_upload():
+    import os
+    reset_db()
+    token = get_sysadmin_token()
+    client = TestClient(app)
+
+    file_path = "/Users/sumaiyaafrineva/Downloads/CSE_Master_Routine.xlsx"
+    if os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+            upload_res = client.post(
+                "/api/admin/routine/bulk-upload",
+                headers={"Authorization": f"Bearer {token}"},
+                files={"file": ("CSE_Master_Routine.xlsx", f, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+            )
+        assert upload_res.status_code == 200, upload_res.text
+        data = upload_res.json()
+        assert data["added"] >= 150
+        assert data["skipped"] == 0
+
+        # Verify idempotency on second upload
+        with open(file_path, "rb") as f:
+            upload_res2 = client.post(
+                "/api/admin/routine/bulk-upload",
+                headers={"Authorization": f"Bearer {token}"},
+                files={"file": ("CSE_Master_Routine.xlsx", f, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+            )
+        assert upload_res2.status_code == 200
+        assert upload_res2.json()["added"] == 0
+        assert upload_res2.json()["updated"] >= 150
+
+
+def test_download_master_routine_pdf():
+    from app.models import AdminSetting
+    reset_db()
+    token = get_sysadmin_token()
+    client = TestClient(app)
+
+    # Set custom university name in AdminSetting
+    with TestSessionLocal() as db:
+        inst_setting = db.scalar(select(AdminSetting).where(AdminSetting.key == "instName"))
+        if not inst_setting:
+            db.add(AdminSetting(key="instName", label="Institution Name", value="Khulna University of Engineering & Technology (KUET)"))
+        else:
+            inst_setting.value = "Khulna University of Engineering & Technology (KUET)"
+        db.commit()
+
+    # Test PDF download endpoint
+    res = client.get(
+        "/api/admin/routine/download-pdf?department=CSE",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 200
+    assert "application/pdf" in res.headers.get("content-type", "")
+    assert "master_routine_cse.pdf" in res.headers.get("content-disposition", "")
+    assert res.content.startswith(b"%PDF-")
+    assert len(res.content) > 10000
+
+
+def test_download_student_routine_pdf_format():
+    from app.models import StudentProfile, StudentRoster, Course
+    from app.security import create_token
+    reset_db()
+
+    with TestSessionLocal() as db:
+        student_user = User(
+            email="eva2207039@stud.kuet.ac.bd",
+            name="Sumaiya Afrin Eva",
+            password_hash=hash_password("StudentPass123!"),
+            role="student",
+            is_active=True,
+        )
+        db.add(student_user)
+        db.commit()
+        db.refresh(student_user)
+
+        profile = StudentProfile(
+            user_id=student_user.id,
+            roll="2207039",
+            full_name="Sumaiya Afrin Eva",
+            department="CSE",
+            series="2022",
+            section="A",
+            session="2023-2024",
+            current_semester="3-2",
+        )
+        db.add(profile)
+        db.add(Course(code="CSE 3209", title="Artificial Intelligence", department="CSE", semester="3-2"))
+        db.add(ClassRoutine(
+            department="CSE",
+            semester="3-2",
+            section="A",
+            day="Sunday",
+            start_time="10:40 AM",
+            end_time="11:30 AM",
+            course_code="CSE 3209c",
+            course_title="Artificial Intelligence",
+            teacher_name="Mr. Md Tajmilur Rahman",
+            room="B-306",
+            session="2024-2025",
+        ))
+        db.commit()
+
+        token = create_token(student_user)
+
+    client = TestClient(app)
+    res = client.get(
+        "/api/student/routine/download",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 200
+    assert "application/pdf" in res.headers.get("content-type", "")
+    assert "class_routine_2207039_3_2.pdf" in res.headers.get("content-disposition", "")
+    assert res.content.startswith(b"%PDF-")
+    
+    # Check text content in PDF
+    assert b"Khulna 9203" not in res.content
+    assert b"Class Starting Date" not in res.content
+    assert len(res.content) > 15000
+
+
+
