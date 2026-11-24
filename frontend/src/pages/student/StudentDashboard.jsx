@@ -80,8 +80,8 @@ export default function StudentDashboard() {
       >
         {data.today?.length ? (
           <ul className="divide-y divide-[#f0eee6]">
-            {data.today.map((item) => (
-              <li key={item.routine_id} className="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
+            {data.today.map((item, idx) => (
+              <li key={item.routine_id ? `${item.routine_id}-${idx}` : idx} className="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
                 <div>
                   <p className="font-semibold text-stone-900">{item.course_title}</p>
                   <p className="mt-1 text-xs font-medium text-stone-500">
