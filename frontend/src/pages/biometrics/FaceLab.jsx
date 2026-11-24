@@ -2,14 +2,14 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { BrowserQRCodeReader } from '@zxing/browser'
 import api from '../../lib/api'
 
-// How often the liveness check polls (ms)
-const LIVENESS_POLL_MS = 180
+// How often the liveness check polls (ms) - 240ms keeps network throughput smooth over tunnels
+const LIVENESS_POLL_MS = 240
 // After a final decision (matched or not), wait this long before resetting to scan again
 const RESET_DELAY_MS = 3000
 const SUCCESS_RESET_DELAY_MS = 5000
 
 /** Capture a JPEG frame from the live video element. */
-const captureFrame = (video, maxWidth = 320) =>
+const captureFrame = (video, maxWidth = 320, quality = 0.70) =>
   new Promise((resolve, reject) => {
     const scale = Math.min(1, maxWidth / video.videoWidth)
     const canvas = document.createElement('canvas')
@@ -21,7 +21,7 @@ const captureFrame = (video, maxWidth = 320) =>
     canvas.toBlob(
       (blob) => (blob ? resolve(blob) : reject(new Error('Frame capture failed'))),
       'image/jpeg',
-      0.70,
+      quality,
     )
   })
 
@@ -201,7 +201,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
       if (inFlight) { timer = setTimeout(poll, LIVENESS_POLL_MS); return }
       inFlight = true
       try {
-        const frame = await captureFrame(video, 480)
+        const frame = await captureFrame(video, 320, 0.65)
         const fd = new FormData()
         fd.append('kiosk_id', normalizedKioskId)
         if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
@@ -230,7 +230,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
     if (!videoRef.current || !cameraReady) return
     setPhase('scanning')
     try {
-      const frame = await captureFrame(videoRef.current, 640)
+      const frame = await captureFrame(videoRef.current, 480, 0.75)
       const fd = new FormData()
       fd.append('kiosk_id', normalizedKioskId)
       if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)

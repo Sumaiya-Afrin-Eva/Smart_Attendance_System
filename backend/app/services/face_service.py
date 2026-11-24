@@ -103,7 +103,15 @@ class FaceService:
         if blink and movement:
             return True
 
-        return bool(blink and (now - started_at) >= FaceService.LIVENESS_READY_SECONDS)
+        if blink and (now - started_at) >= FaceService.LIVENESS_READY_SECONDS:
+            return True
+
+        # When natural 3D head movement is tracked across frames for >= 0.8s,
+        # confirm live human presence without forcing an uncomfortable wait.
+        if movement and (now - started_at) >= 0.8:
+            return True
+
+        return False
 
     def _get_app(self) -> FaceAnalysis:
         """Lazy load the InsightFace model on first use."""
