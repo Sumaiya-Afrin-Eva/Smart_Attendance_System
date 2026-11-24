@@ -186,8 +186,17 @@ export default function FaceLab({ kioskId = 'CSE' }) {
           timer = setTimeout(poll, LIVENESS_POLL_MS)
         }
         // liveness=true → auto-scan kicks in via the effect below
-      } catch {
-        if (!cancelled) timer = setTimeout(poll, 1000)
+      } catch (err) {
+        if (!cancelled && key === livenessKeyRef.current) {
+          const status = err?.response?.status
+          if (status === 502 || status === 504 || err?.code === 'ERR_NETWORK' || !err?.response) {
+            setLiveness((prev) => ({
+              ...prev,
+              message: 'Server unreachable (502 / Offline). Check backend or tunnel URL.',
+            }))
+          }
+          timer = setTimeout(poll, 1000)
+        }
       } finally {
         inFlight = false
       }
