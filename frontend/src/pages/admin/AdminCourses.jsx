@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom'
 import {
   BookOpen,
   CalendarRange,
-  Check,
   Filter,
   GraduationCap,
   MapPin,
@@ -36,7 +35,6 @@ export default function AdminCourses() {
   const [meta, setMeta] = useState({ departments: [], semesters: [] })
   const [courses, setCourses] = useState([])
   const [teachers, setTeachers] = useState([])
-  const [students, setStudents] = useState([])
   const [search, setSearch] = useState('')
   const [form, setForm] = useState({ ...emptyCourseForm, department: scopedDept || 'CSE' })
   const [studentFilter, setStudentFilter] = useState({ department: scopedDept || 'CSE', semester: '3-2', section: '', q: '' })
@@ -68,8 +66,6 @@ export default function AdminCourses() {
     })
   }, [courses, search])
 
-  const selectedCourse = courses.find((course) => String(course.id) === String(selectedCourseId)) || null
-
   useEffect(() => {
     async function loadMetaAndCourses() {
       try {
@@ -81,9 +77,6 @@ export default function AdminCourses() {
         setMeta(metaData)
         setCourses(courseData)
         setTeachers(teacherData || [])
-        if (courseData.length) {
-          setSelectedCourseId(String(courseData[0].id))
-        }
       } catch (error) {
         setNotice(errorMessage(error, 'Failed to load course data.'))
       } finally {
@@ -92,28 +85,6 @@ export default function AdminCourses() {
     }
     loadMetaAndCourses()
   }, [])
-
-  useEffect(() => {
-    async function loadStudents() {
-      try {
-        const { data } = await api.get('/admin/students', {
-          params: {
-            department: studentFilter.department || undefined,
-            semester: studentFilter.semester || undefined,
-            session: selectedCourse?.session || undefined,
-            section: studentFilter.section || undefined,
-            q: studentFilter.q || undefined,
-          },
-        })
-        const registered = data.filter((student) => student.user_id)
-        setStudents(registered)
-        setSelectedStudentIds((current) => current.filter((id) => registered.some((student) => String(student.user_id) === String(id))))
-      } catch (error) {
-        setNotice(errorMessage(error, 'Failed to load student list.'))
-      }
-    }
-    loadStudents()
-  }, [studentFilter, selectedCourseId, selectedCourse?.session])
 
   useEffect(() => {
     if (notice) {
@@ -138,7 +109,6 @@ export default function AdminCourses() {
       setCourses((current) => [data, ...current])
       setRecentlyAddedCourses((prev) => [data, ...prev])
       setForm(emptyCourseForm)
-      setSelectedCourseId(String(data.id))
       setNotice(`Course ${data.code} saved to the database.`)
     } catch (error) {
       setNotice(errorMessage(error, 'Course could not be saved.'))
@@ -174,23 +144,6 @@ export default function AdminCourses() {
     }
   }
 
-  const handleEnrollStudents = async () => {
-    if (!selectedCourseId || selectedStudentIds.length === 0) return
-    setNotice('')
-    try {
-      const course = courses.find((item) => String(item.id) === String(selectedCourseId))
-      const { data } = await api.post('/admin/student-enrollments', {
-        course_id: Number(selectedCourseId),
-        semester: course?.semester || studentFilter.semester,
-        student_ids: selectedStudentIds.map((id) => Number(id)),
-      })
-      setNotice(`${data.saved} students enrolled in ${course?.code ?? 'this course'}.`)
-      setSelectedStudentIds([])
-    } catch (error) {
-      setNotice(errorMessage(error, 'Student enrollment failed.'))
-    }
-  }
-
   const handleToggleCourseStatus = async (courseId, currentStatus) => {
     setNotice('')
     try {
@@ -209,9 +162,6 @@ export default function AdminCourses() {
     try {
       await api.delete(`/admin/courses/${id}`)
       setCourses((current) => current.filter((course) => String(course.id) !== String(id)))
-      if (String(selectedCourseId) === String(id)) {
-        setSelectedCourseId('')
-      }
       setNotice(`Course ${code} permanently deleted.`)
     } catch (error) {
       setNotice(errorMessage(error, 'Course deletion failed.'))
@@ -224,19 +174,10 @@ export default function AdminCourses() {
     try {
       await api.delete(`/admin/courses/all`)
       setCourses([])
-      setSelectedCourseId('')
       setNotice(`All courses permanently deleted.`)
     } catch (error) {
       setNotice(errorMessage(error, 'Course deletion failed.'))
     }
-  }
-
-  const toggleStudent = (studentId) => {
-    setSelectedStudentIds((current) =>
-      current.includes(studentId)
-        ? current.filter((id) => id !== studentId)
-        : [...current, studentId],
-    )
   }
 
   const toneClass = {
@@ -400,6 +341,7 @@ export default function AdminCourses() {
       )}
 
       {/* Course Directory / Course List */}
+
       <section className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-1 items-center gap-2 rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 text-stone-600">

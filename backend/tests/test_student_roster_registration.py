@@ -332,6 +332,10 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
     admin_headers = headers_for("admin@kuet.ac.bd")
     official_photo = b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"official-student-one"
     roster_id = create_roster(client, admin_headers, official_photo)
+    now = datetime.now()
+    other_class_time = now + timedelta(hours=12)
+    if other_class_time.date() != now.date():
+        other_class_time = now - timedelta(hours=12)
 
     with SessionLocal() as db:
         student = db.scalar(select(User).where(User.email == "student1@stud.kuet.ac.bd"))
@@ -386,6 +390,30 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
             CourseRosterAssignment(course_id=course.id, roster_id=absent_roster.id),
             Enrollment(student_id=student.id, course_id=course.id, semester="3-1"),
             Enrollment(student_id=absent_student.id, course_id=course.id, semester="3-1"),
+            ClassRoutine(
+                department="CSE",
+                semester="3-1",
+                section="A",
+                day=now.strftime("%A"),
+                start_time=(now - timedelta(minutes=15)).strftime("%I:%M %p"),
+                end_time=(now + timedelta(minutes=45)).strftime("%I:%M %p"),
+                course_code="CSE 3200",
+                course_title="System Development Project",
+                course_type="Lab",
+                session="2021-2022",
+            ),
+            ClassRoutine(
+                department="CSE",
+                semester="3-1",
+                section="A",
+                day=now.strftime("%A"),
+                start_time=(other_class_time - timedelta(minutes=5)).strftime("%I:%M %p"),
+                end_time=(other_class_time + timedelta(minutes=45)).strftime("%I:%M %p"),
+                course_code="CSE 3200",
+                course_title="System Development Project",
+                course_type="Lab",
+                session="2021-2022",
+            ),
         ])
         course_id = course.id
         db.commit()
@@ -454,8 +482,8 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
         files={"image": ("camera.jpg", b"kiosk-student-one", "image/jpeg")},
     )
     assert marked.status_code == 200, marked.text
-    assert marked.json()["matched"] is True
-    assert marked.json()["attendance"]["status"] == "late"
+    assert marked.json()["matched"] is True, marked.text
+    assert marked.json()["attendance"]["status"] == "present"
     assert marked.json()["attendance"]["already_marked"] is False
 
     TestFaceService.proof_available = True
@@ -474,13 +502,14 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
         headers={"Authorization": f"Bearer {student_token}"},
     )
     assert present_dashboard.status_code == 200, present_dashboard.text
-    assert present_dashboard.json()["today"] == [{
-        "session_id": kiosk_session_id,
-        "course_code": "CSE 3200",
-        "course_title": "System Development Project",
-        "start_at": present_dashboard.json()["today"][0]["start_at"],
-        "status": "late",
-    }]
+    present_today = present_dashboard.json()["today"]
+    assert len(present_today) == 2
+    present_class = next(item for item in present_today if item["session_id"] == kiosk_session_id)
+    absent_class = next(item for item in present_today if item["session_id"] is None)
+    assert present_class["course_code"] == "CSE 3200"
+    assert present_class["course_title"] == "System Development Project"
+    assert present_class["status"] == "present"
+    assert absent_class["status"] == "absent"
 
     absent_dashboard = client.get(
         "/api/students/me/dashboard",
@@ -488,6 +517,79 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
     )
     assert absent_dashboard.status_code == 200, absent_dashboard.text
     assert absent_dashboard.json()["today"][0]["status"] == "absent"
+
+
+def test_student_dashboard_includes_routine_class_without_a_created_session():
+    reset_db()
+    client = TestClient(app)
+    now = datetime.now()
+
+    with SessionLocal() as db:
+        student = db.scalar(select(User).where(User.email == "student1@stud.kuet.ac.bd"))
+        roster = StudentRoster(
+            full_name="Student One",
+            roll="2107001",
+            email=student.email,
+            department="CSE",
+            session="2021-2022",
+            is_active=True,
+        )
+        db.add(roster)
+        db.flush()
+        student.profile = StudentProfile(
+            user_id=student.id,
+            roster_id=roster.id,
+            roll=roster.roll,
+            full_name=roster.full_name,
+            department=roster.department,
+            series="2021",
+            session=roster.session,
+            section="A",
+            current_semester="3-1",
+        )
+        course = Course(
+            code="CSE 3101",
+            title="Database Systems",
+            department="CSE",
+            semester="3-1",
+            session="2021-2022",
+            section="A",
+        )
+        db.add(course)
+        db.flush()
+        db.add_all([
+            CourseRosterAssignment(course_id=course.id, roster_id=roster.id),
+            Enrollment(student_id=student.id, course_id=course.id, semester="3-1"),
+            ClassRoutine(
+                department="CSE",
+                semester="3-1",
+                section="A",
+                day=now.strftime("%A"),
+                start_time="08:00 AM",
+                end_time="08:50 AM",
+                course_code="CSE 3101",
+                course_title="Database Systems",
+                session="2021-2022",
+            ),
+        ])
+        db.commit()
+        student_token = create_token(student)
+
+    response = client.get(
+        "/api/students/me/dashboard",
+        headers={"Authorization": f"Bearer {student_token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    today = response.json()["today"]
+    assert len(today) == 1
+    assert today[0]["routine_id"]
+    assert today[0]["session_id"] is None
+    assert today[0]["course_code"] == "CSE 3101"
+    assert today[0]["course_title"] == "Database Systems"
+    assert today[0]["start_time"] == "08:00 AM"
+    assert today[0]["end_time"] == "08:50 AM"
+    assert today[0]["status"] == "absent"
 
 
 def test_kiosk_department_filter_limits_students_to_that_department():
@@ -527,6 +629,12 @@ def test_kiosk_department_filter_limits_students_to_that_department():
 
         assert [candidate[0].roll for candidate in cse_candidates] == ["2201001"]
         assert [candidate[0].roll for candidate in eee_candidates] == ["2202001"]
+
+
+def test_generic_kiosk_label_does_not_apply_department_filter():
+    assert face_module._resolve_kiosk_department("kiosk-main") is None
+    assert face_module._resolve_kiosk_department("kiosk-CSE") == "CSE"
+    assert face_module._resolve_kiosk_department("EEE-kiosk") == "EEE"
 
 
 def test_kiosk_marks_attendance_to_the_active_routine_teacher_only(monkeypatch):
@@ -641,7 +749,7 @@ def test_kiosk_marks_attendance_to_the_active_routine_teacher_only(monkeypatch):
     )
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["matched"] is True
+    assert payload["matched"] is True, response.text
     assert payload["student"]["roll"] == "2107001"
 
     with SessionLocal() as db:

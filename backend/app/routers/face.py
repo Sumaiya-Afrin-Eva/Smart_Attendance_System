@@ -174,15 +174,17 @@ class KioskQrScanRequest(BaseModel):
 
 
 def _resolve_kiosk_department(kiosk_id: str | None) -> str | None:
-    """Resolve a kiosk label like CSE, EEE, ME to a department code."""
+    """Resolve department kiosks while leaving generic kiosk labels unscoped."""
     if kiosk_id is None:
         return None
     compact = re.sub(r"[^A-Za-z0-9]", "", str(kiosk_id).strip()).upper()
     if not compact:
         return None
+    if compact.startswith("KIOSK"):
+        compact = compact[5:]
     if compact.endswith("KIOSK"):
         compact = compact[:-5]
-    return compact if compact else None
+    return compact if compact and compact not in {"MAIN", "DEFAULT"} else None
 
 
 def _eligible_students(db: Session, course_id: int | None = None, department: str | None = None):

@@ -457,6 +457,25 @@ def _status_of(session: ClassSession, records: dict) -> str:
     return record.status if record else "absent"
 
 
+def _routine_time_minutes(value: str | None) -> int | None:
+    if not value:
+        return None
+    normalized = str(value).strip().replace(".", ":")
+    for time_format in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p"):
+        try:
+            parsed = datetime.strptime(normalized, time_format)
+            return parsed.hour * 60 + parsed.minute
+        except ValueError:
+            continue
+    return None
+
+
+def _routine_contains_minute(start: int, end: int, minute: int) -> bool:
+    if start <= end:
+        return start <= minute <= end
+    return minute >= start or minute <= end
+
+
 def _parse_time_str(time_str: str | None) -> time | None:
     if not time_str:
         return None
@@ -589,17 +608,92 @@ def dashboard(semester: str | None = None, user: User = Depends(student_only), d
         for s in reversed(sessions[-6:])
     ]
 
-    today = [
-        {
-            "session_id": s.id,
-            "course_code": s.course.code,
-            "course_title": s.course.title,
-            "start_at": s.start_at,
-            "status": _status_of(s, records),
-        }
-        for s in sessions
-        if s.start_at.date() == datetime.now().date()
-    ]
+    now = datetime.now()
+    today_start = datetime.combine(now.date(), time.min)
+    today_end = today_start + timedelta(days=1)
+    course_codes = {course.code.strip().casefold() for course in courses.values()}
+    routines = db.scalars(
+        select(ClassRoutine).where(
+            ClassRoutine.department == profile.department,
+            ClassRoutine.semester == semester,
+            ClassRoutine.day == now.strftime("%A"),
+        )
+    ).all() if course_codes else []
+    today_routines = []
+    for routine in routines:
+        if routine.course_code.strip().casefold() not in course_codes:
+            continue
+        routine_section = (routine.section or "").strip().upper()
+        student_section = (profile.section or "").strip().upper()
+        if student_section and routine_section not in {student_section, "BOTH"}:
+            continue
+
+        course = next(
+            (
+                course for course in courses.values()
+                if course.code.strip().casefold() == routine.course_code.strip().casefold()
+                and (course.section or "").strip().upper() in {routine_section, "BOTH"}
+                and (
+                    not student_section
+                    or (course.section or "").strip().upper() in {student_section, "BOTH"}
+                )
+            ),
+            None,
+        )
+        if course is not None:
+            today_routines.append((routine, course))
+
+    today_course_ids = {course.id for _, course in today_routines}
+    today_sessions = db.scalars(
+        select(ClassSession).where(
+            ClassSession.course_id.in_(today_course_ids),
+            ClassSession.start_at >= today_start,
+            ClassSession.start_at < today_end,
+            ClassSession.status != "cancelled",
+        ).order_by(ClassSession.start_at)
+    ).all() if today_course_ids else []
+    today_session_ids = [session.id for session in today_sessions]
+    today_records = db.scalars(
+        select(Attendance).where(
+            Attendance.student_id == user.id,
+            Attendance.session_id.in_(today_session_ids),
+        )
+    ).all() if today_session_ids else []
+    record_status_by_session = {record.session_id: record.status for record in today_records}
+    sessions_by_course = {}
+    for session in today_sessions:
+        sessions_by_course.setdefault(session.course_id, []).append(session)
+
+    today = []
+    for routine, course in sorted(today_routines, key=lambda row: (row[0].start_time or "", row[1].code)):
+        start_minutes = _routine_time_minutes(routine.start_time)
+        end_minutes = _routine_time_minutes(routine.end_time)
+        course_sessions = sessions_by_course.get(course.id, [])
+        if start_minutes is not None and end_minutes is not None:
+            matching_sessions = [
+                session for session in course_sessions
+                if _routine_contains_minute(
+                    start_minutes,
+                    end_minutes,
+                    session.start_at.hour * 60 + session.start_at.minute,
+                )
+            ]
+        else:
+            matching_sessions = course_sessions if len(course_sessions) == 1 else []
+        matched_session = matching_sessions[0] if matching_sessions else None
+        attended = any(
+            record_status_by_session.get(session.id) in {"present", "late"}
+            for session in matching_sessions
+        )
+        today.append({
+            "routine_id": routine.id,
+            "session_id": matched_session.id if matched_session else None,
+            "course_code": course.code,
+            "course_title": course.title,
+            "start_time": routine.start_time,
+            "end_time": routine.end_time,
+            "status": "present" if attended else "absent",
+        })
 
     upcoming = [
         {
