@@ -4,7 +4,10 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const targetBackend = env.VITE_BACKEND_TARGET || env.VITE_API_URL?.replace(/\/api\/?$/, '') || 'http://127.0.0.1:8000'
+  const rawTarget = process.env.VITE_BACKEND_TARGET || env.VITE_BACKEND_TARGET || env.VITE_API_URL?.replace(/\/api\/?$/, '') || 'http://127.0.0.1:8000'
+  const targetBackend = rawTarget.trim().replace(/\/+$/, '')
+
+  console.log(`\n  📡 [Vite Proxy] Active Backend Target: ${targetBackend}\n`)
 
   return {
     plugins: [react(), tailwindcss()],
@@ -17,13 +20,13 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: targetBackend,
           changeOrigin: true,
-          secure: targetBackend.startsWith('https://'),
+          secure: false,
           ws: true,
         },
         '/picture': {
           target: targetBackend,
           changeOrigin: true,
-          secure: targetBackend.startsWith('https://'),
+          secure: false,
         },
       },
     },
