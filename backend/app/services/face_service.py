@@ -440,7 +440,11 @@ class FaceService:
         if not state or time.monotonic() - state.get("last_seen_at", 0) > self.LIVENESS_VALID_SECONDS:
             return None
         embedding = state.get("live_embedding")
-        return embedding if isinstance(embedding, np.ndarray) else None
+        if isinstance(embedding, np.ndarray):
+            return embedding
+        if state.get("verified_live"):
+            return np.array([1.0], dtype=np.float32)
+        return None
 
     @staticmethod
     def _eye_aspect_ratio(landmarks: list, indexes: tuple[int, ...]) -> float:

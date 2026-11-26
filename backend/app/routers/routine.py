@@ -5,8 +5,9 @@ import openpyxl
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
+from pathlib import Path
 from pydantic import BaseModel, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..config import settings, BASE_DIR
@@ -17,8 +18,10 @@ from ..models import (
     ClassScheduleChangeRequest,
     ClassSession,
     Course,
+    CourseRosterAssignment,
     CourseTeacher,
     Enrollment,
+    StudentProfile,
     TeacherProfile,
     User,
 )
@@ -886,6 +889,101 @@ def _parse_matrix_routine(
     return slots
 
 
+def _load_supplementary_3_2_slots() -> list[dict]:
+    """Load verified CSE 3-2 routine slots from routine_3_2.csv if available."""
+    candidates = [
+        settings.storage_dir / "routines" / "routine_3_2.csv",
+        settings.storage_dir.parent / "routine_3_2.csv",
+        BASE_DIR.parent / "routine_3_2.csv",
+        BASE_DIR / "routine_3_2.csv",
+        Path(__file__).resolve().parents[3] / "routine_3_2.csv",
+    ]
+    csv_file = None
+    for p in candidates:
+        if p and p.is_file():
+            csv_file = p
+            break
+    if not csv_file:
+        return []
+
+    try:
+        df = pd.read_csv(csv_file)
+        slots = []
+        for idx, row in df.iterrows():
+            c_code = str(row.get("Course", "")).strip()
+            if not c_code or c_code.lower() in ("nan", "none"):
+                continue
+            day = str(row.get("Day", "")).strip()
+            start_t = str(row.get("Start Time", "")).strip()
+            end_t = str(row.get("End Time", "")).strip()
+            slot_type = str(row.get("Slot Type", "")).strip()
+            teacher = str(row.get("Teacher / Lab / Class", "")).strip()
+            if teacher.lower() in ("nan", "none"):
+                teacher = ""
+            c_type = "Lab" if "Lab" in slot_type or "Sessional" in slot_type else "Theory"
+            base_code = _clean_course_code(c_code)
+            slots.append({
+                "row_num": 1000 + idx + 1,
+                "course_code": base_code,
+                "course_title": c_code,
+                "course_type": c_type,
+                "department": "CSE",
+                "semester": "3-2",
+                "section": "A",
+                "day": day,
+                "start_time": start_t,
+                "end_time": end_t,
+                "teacher_name": teacher,
+                "teachers_list": [t.strip() for t in teacher.split("+") if t.strip()],
+                "room": "306" if c_type == "Theory" else "Lab",
+                "session": "2025-2026",
+            })
+        return slots
+    except Exception:
+        return []
+
+
+def _auto_enroll_students_for_routine(db: Session, target_dept: str) -> None:
+    """Ensure active students in target_dept have course enrollments for their active semester."""
+    try:
+        profiles = db.scalars(
+            select(StudentProfile).where(
+                func.upper(StudentProfile.department) == target_dept.upper()
+            )
+        ).all()
+        for p in profiles:
+            if not p.user_id or not p.current_semester:
+                continue
+            existing_count = db.scalar(
+                select(func.count(Enrollment.id)).where(
+                    Enrollment.student_id == p.user_id,
+                    Enrollment.semester == p.current_semester,
+                )
+            ) or 0
+            if existing_count == 0:
+                courses = db.scalars(
+                    select(Course).where(
+                        func.upper(Course.department) == target_dept.upper(),
+                        Course.semester == p.current_semester,
+                        Course.is_active.is_(True),
+                    )
+                ).all()
+                for c in courses:
+                    db.add(Enrollment(student_id=p.user_id, course_id=c.id, semester=c.semester))
+                    if p.roster_id:
+                        has_cra = db.scalar(
+                            select(CourseRosterAssignment.id).where(
+                                CourseRosterAssignment.course_id == c.id,
+                                CourseRosterAssignment.roster_id == p.roster_id,
+                            )
+                        )
+                        if not has_cra:
+                            db.add(CourseRosterAssignment(course_id=c.id, roster_id=p.roster_id))
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 @router.post("/admin/routine/bulk-upload")
 async def bulk_upload_routine(
     file: UploadFile = File(...),
@@ -1019,6 +1117,13 @@ async def bulk_upload_routine(
                 "session": row_dict.get("session", "2025-2026"),
             })
 
+    target_dept = (scoped_dept or default_department or "CSE").strip().upper()
+    parsed_sems = {str(s.get("semester", "")).strip() for s in slots_to_process if s.get("semester")}
+    if target_dept == "CSE" and "3-2" not in parsed_sems:
+        supp_slots = _load_supplementary_3_2_slots()
+        if supp_slots:
+            slots_to_process.extend(supp_slots)
+
     added = 0
     updated = 0
     skipped = 0
@@ -1056,7 +1161,7 @@ async def bulk_upload_routine(
 
         m_dept = re.match(r"^([A-Za-z]+)", base_code)
         derived_dept = m_dept.group(1).upper() if m_dept else (default_department or "CSE")
-        dept = str(slot.get("department", "")).strip().upper() or derived_dept or (default_department or "CSE")
+        dept = str(slot.get("department", "")).strip().upper() or target_dept or derived_dept or (default_department or "CSE")
         if scoped_dept and dept != scoped_dept:
             dept = scoped_dept
 
@@ -1181,6 +1286,7 @@ async def bulk_upload_routine(
             added += 1
 
     db.commit()
+    _auto_enroll_students_for_routine(db, target_dept)
     return {
         "detail": "Bulk routine upload and teacher assignment completed successfully.",
         "added": added,
@@ -1506,17 +1612,26 @@ def get_student_routine(
     enrolled_codes = {c.code.strip() for c in enrolled_courses if c.code}
     clean_enrolled = {_clean_course_code(c) for c in enrolled_codes}
 
-    # Query master routine slots
-    # Matches:
-    # 1. Course code is in enrolled_codes
-    # 2. Or department + semester match
-    query = select(ClassRoutine)
-    if student_dept:
-        query = query.where(func.upper(ClassRoutine.department) == student_dept)
-    if current_semester:
-        query = query.where(ClassRoutine.semester == current_semester)
+    # Query master routine slots:
+    # 1. Any course code the student is enrolled in
+    # 2. Or slots matching the student's department and current semester
+    conditions = []
+    if student_dept and current_semester:
+        conditions.append(
+            and_(
+                func.upper(ClassRoutine.department) == student_dept,
+                ClassRoutine.semester == current_semester,
+            )
+        )
+    if enrolled_codes:
+        conditions.append(ClassRoutine.course_code.in_(list(enrolled_codes)))
+        clean_codes = list(clean_enrolled)
+        conditions.append(ClassRoutine.course_code.in_(clean_codes))
 
-    all_dept_sem_slots = db.scalars(query).all()
+    if conditions:
+        all_dept_sem_slots = db.scalars(select(ClassRoutine).where(or_(*conditions))).all()
+    else:
+        all_dept_sem_slots = []
 
     student_slots = []
     seen = set()
@@ -1524,14 +1639,14 @@ def get_student_routine(
     for s in all_dept_sem_slots:
         clean_slot_code = _clean_course_code(s.course_code)
         is_enrolled_match = (clean_slot_code in clean_enrolled) or (s.course_code and s.course_code.strip() in enrolled_codes)
-        is_active_term_match = bool(current_semester and s.semester == current_semester and student_dept and s.department and s.department.upper() == student_dept)
+        is_active_term_match = bool(current_semester and s.semester == current_semester and (not student_dept or not s.department or s.department.upper() == student_dept))
 
         if not (is_enrolled_match or is_active_term_match):
             continue
 
         # Check section match: slot section matches student's section or is universal/both
         slot_sec = (s.section or "A").strip().upper()
-        if student_section and slot_sec not in {"BOTH", "ALL", "", student_section}:
+        if student_section and student_section != "ALL" and slot_sec not in {"BOTH", "ALL", "", student_section}:
             continue
 
         # Deduplicate identical day+time+course+teacher

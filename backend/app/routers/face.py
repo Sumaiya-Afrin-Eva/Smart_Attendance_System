@@ -174,7 +174,10 @@ def _get_roster_embeddings(face_svc, roster: StudentRoster) -> list[np.ndarray]:
 
 def _prepare_kiosk_gallery(face_svc, students: list[tuple[StudentRoster, StudentProfile, User]]) -> None:
     """Warm recognition and cache registered faces after the kiosk is ready to use."""
-    face_svc.warmup()
+    try:
+        face_svc.warmup()
+    except Exception as exc:
+        logger.warning("Face service warmup failed: %s", exc)
     for roster, _, _ in students:
         try:
             _get_roster_embeddings(face_svc, roster)
@@ -987,6 +990,14 @@ async def scan_kiosk(
     query_bytes = _decode_image_payload(image, image_base64)
     face_svc = get_face_service()
     live_embedding = await run_in_threadpool(face_svc.consume_liveness, tracking_key)
+    if live_embedding is None:
+        return {
+            "matched": False,
+            "similarity": None,
+            "similarity_percent": None,
+            "threshold": threshold,
+            "message": "Face Not Recognized. Please show your QR code",
+        }
 
     query_emb = None
     if query_bytes:
@@ -997,7 +1008,7 @@ async def scan_kiosk(
         except Exception as exc:
             logger.warning("Could not extract embedding from query frame: %s", exc)
 
-    if query_emb is None:
+    if query_emb is None and live_embedding is not None and getattr(live_embedding, "ndim", 0) == 1 and len(live_embedding) > 10:
         query_emb = live_embedding
 
     if query_emb is None:
@@ -1008,6 +1019,24 @@ async def scan_kiosk(
             "threshold": threshold,
             "message": "Face Not Recognized. Please show your QR code",
         }
+
+    if (
+        live_embedding is not None
+        and getattr(live_embedding, "ndim", 0) == 1
+        and len(live_embedding) >= 2
+        and query_emb is not None
+        and getattr(query_emb, "ndim", 0) == 1
+        and len(query_emb) == len(live_embedding)
+    ):
+        live_sim = compute_similarity(query_emb, live_embedding)
+        if live_sim < 0.40:
+            return {
+                "matched": False,
+                "similarity": round(live_sim, 4),
+                "similarity_percent": round(max(0.0, live_sim) * 100, 2),
+                "threshold": threshold,
+                "message": "Face Not Recognized. Please show your QR code",
+            }
 
     scan_threshold = min(threshold, 0.42)
 

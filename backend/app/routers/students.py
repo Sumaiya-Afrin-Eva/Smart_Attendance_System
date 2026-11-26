@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import jwt
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile, status
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -21,6 +21,7 @@ from ..models import (
     Attendance, ClassRoutine, ClassSession, ConsumedAttendanceQr, Course, CourseRosterAssignment, Enrollment, FaceSample, StudentProfile,
     StudentRoster, StudentSemesterFaceEnrollment, User,
 )
+from .routine import _clean_course_code
 from ..schemas import ProfileIn
 from ..security import require_role
 from ..services import FACE_ENROLLMENT_VERSION, course_out, onboarding_status
@@ -616,28 +617,37 @@ def dashboard(semester: str | None = None, user: User = Depends(student_only), d
     course_codes = {course.code.strip().casefold() for course in courses.values()}
     routines = db.scalars(
         select(ClassRoutine).where(
-            ClassRoutine.department == profile.department,
+            or_(
+                ClassRoutine.department == profile.department,
+                ClassRoutine.course_code.in_([c.code for c in courses.values() if c.code]),
+            ),
             ClassRoutine.semester == semester,
             ClassRoutine.day == now.strftime("%A"),
         )
     ).all() if course_codes else []
     today_routines = []
     for routine in routines:
-        if routine.course_code.strip().casefold() not in course_codes:
+        clean_code = _clean_course_code(routine.course_code).strip().casefold()
+        raw_code = routine.course_code.strip().casefold()
+        if clean_code not in course_codes and raw_code not in course_codes:
             continue
         routine_section = (routine.section or "").strip().upper()
         student_section = (profile.section or "").strip().upper()
-        if student_section and routine_section not in {student_section, "BOTH"}:
+        if student_section and student_section != "ALL" and routine_section not in {student_section, "BOTH", "ALL", ""}:
             continue
 
         course = next(
             (
                 course for course in courses.values()
-                if course.code.strip().casefold() == routine.course_code.strip().casefold()
-                and (course.section or "").strip().upper() in {routine_section, "BOTH"}
+                if course.code.strip().casefold() in {clean_code, raw_code}
+                and (
+                    not routine_section
+                    or routine_section in {"BOTH", "ALL", ""}
+                    or (course.section or "").strip().upper() in {routine_section, "BOTH", "ALL", ""}
+                )
                 and (
                     not student_section
-                    or (course.section or "").strip().upper() in {student_section, "BOTH"}
+                    or (course.section or "").strip().upper() in {student_section, "BOTH", "ALL", ""}
                 )
             ),
             None,
