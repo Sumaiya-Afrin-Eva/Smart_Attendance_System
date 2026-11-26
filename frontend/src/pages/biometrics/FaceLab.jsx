@@ -5,6 +5,7 @@ import api from '../../lib/api'
 const LIVENESS_POLL_MS = 180
 // After a final decision (matched or not), wait this long before resetting to scan again
 const RESET_DELAY_MS = 3000
+const QR_RESET_DELAY_MS = 5000
 
 /** Capture a JPEG frame from the live video element. */
 const captureFrame = (video, maxWidth = 320) =>
@@ -65,6 +66,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
   const [currentTime, setCurrentTime] = useState(new Date())
   const [cameraReady, setCameraReady] = useState(false)
   const [cameraError, setCameraError] = useState(null)
+  const [qrSecondsLeft, setQrSecondsLeft] = useState(5)
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -73,6 +75,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
   const qrLockRef = useRef(false)
   const autoScanRef = useRef(false)
   const resetTimerRef = useRef(null)
+  const qrIntervalRef = useRef(null)
 
   // ── Digital clock ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -138,13 +141,15 @@ export default function FaceLab({ kioskId = 'CSE' }) {
     return () => {
       stopCamera()
       clearTimeout(resetTimerRef.current)
+      clearInterval(qrIntervalRef.current)
       if ('speechSynthesis' in window) window.speechSynthesis.cancel()
     }
   }, [startCamera, stopCamera])
 
   // ── Reset to liveness after a decision ────────────────────────────────────
-  const scheduleReset = useCallback(() => {
+  const scheduleReset = useCallback((delay = RESET_DELAY_MS) => {
     clearTimeout(resetTimerRef.current)
+    clearInterval(qrIntervalRef.current)
     resetTimerRef.current = setTimeout(() => {
       setBanner(null)
       lastQrRef.current = null
@@ -152,8 +157,9 @@ export default function FaceLab({ kioskId = 'CSE' }) {
       autoScanRef.current = false
       setPhase('liveness')
       setLiveness({ human: false, liveness: false, message: '' })
+      setQrSecondsLeft(5)
       livenessKeyRef.current += 1
-    }, RESET_DELAY_MS)
+    }, delay)
   }, [])
 
   // ── Liveness polling: checks if a human is in front of camera ──────────────
@@ -232,18 +238,30 @@ export default function FaceLab({ kioskId = 'CSE' }) {
           }, ...prev.slice(0, 4)])
         }
         setPhase('success')
-        scheduleReset()
+        scheduleReset(RESET_DELAY_MS)
       } else {
         setBanner({ text: 'Face Not Recognized. Please show your QR code', ok: false })
         speak('Face Not Recognized. Please show your QR code')
         setPhase('qr')
         autoScanRef.current = false
+        setQrSecondsLeft(5)
+        clearInterval(qrIntervalRef.current)
+        qrIntervalRef.current = setInterval(() => {
+          setQrSecondsLeft((s) => Math.max(0, s - 1))
+        }, 1000)
+        scheduleReset(QR_RESET_DELAY_MS)
       }
     } catch {
       setBanner({ text: 'Face Not Recognized. Please show your QR code', ok: false })
       speak('Face Not Recognized. Please show your QR code')
       setPhase('qr')
       autoScanRef.current = false
+      setQrSecondsLeft(5)
+      clearInterval(qrIntervalRef.current)
+      qrIntervalRef.current = setInterval(() => {
+        setQrSecondsLeft((s) => Math.max(0, s - 1))
+      }, 1000)
+      scheduleReset(QR_RESET_DELAY_MS)
     }
   }, [activeClass, cameraReady, scheduleReset])
 
@@ -257,6 +275,8 @@ export default function FaceLab({ kioskId = 'CSE' }) {
   const handleQrToken = useCallback(async (token) => {
     if (qrLockRef.current) return
     qrLockRef.current = true
+    clearTimeout(resetTimerRef.current)
+    clearInterval(qrIntervalRef.current)
     setPhase('qr-scan')
     try {
       const payload = { token, kiosk_id: normalizedKioskId }
@@ -274,14 +294,14 @@ export default function FaceLab({ kioskId = 'CSE' }) {
         }, ...prev.slice(0, 4)])
       }
       setPhase('qr-ok')
-      scheduleReset()
+      scheduleReset(RESET_DELAY_MS)
     } catch {
       setBanner({ text: 'QR verification failed. Try again.', ok: false })
       speak('QR verification failed. Please try again.')
       setPhase('qr-fail')
-      scheduleReset()
+      scheduleReset(RESET_DELAY_MS)
     }
-  }, [activeClass, scheduleReset])
+  }, [activeClass, normalizedKioskId, scheduleReset])
 
   useEffect(() => {
     if (phase !== 'qr' || !cameraReady) return undefined
@@ -405,7 +425,12 @@ export default function FaceLab({ kioskId = 'CSE' }) {
             <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-white/80 animate-bounce" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h6v6H3zM3 15h6v6H3zM15 3h6v6h-6zM15 15h2v2h-2zM19 15h2v2h-2zM17 17h2v2h-2zM19 19h2v2h-2zM15 19h2v2h-2z" />
             </svg>
-            <span className="text-white/70 text-lg font-medium tracking-wide">Show your QR code to the camera</span>
+            <span className="text-white/85 text-lg font-medium tracking-wide">Show your QR code to the camera</span>
+            {phase === 'qr' && (
+              <span className="text-amber-300 font-semibold text-xs tracking-wider uppercase bg-black/50 px-3.5 py-1.5 rounded-full border border-amber-300/40 backdrop-blur-sm shadow-lg">
+                Auto-refreshing in {qrSecondsLeft}s
+              </span>
+            )}
           </div>
         </div>
       )}
