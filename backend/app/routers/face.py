@@ -726,11 +726,7 @@ def open_kiosk(
             )
 
         course = courses[0]
-        students = (
-            _eligible_students(db, department=kiosk_department)
-            if kiosk_department
-            else _eligible_students(db, course.id)
-        )
+        students = _eligible_students(db, course.id, department=kiosk_department)
         if not students:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -850,11 +846,7 @@ def open_kiosk(
         else:
             _, selected_routine, course = min(active_candidates, key=lambda item: item[0])
 
-        students = (
-            _eligible_students(db, department=kiosk_department)
-            if kiosk_department
-            else _eligible_students(db, course.id)
-        )
+        students = _eligible_students(db, course.id, department=kiosk_department)
         teacher_id = _resolve_teacher_for_routine(db, selected_routine, course) if selected_routine is not None else course.teacher_id
 
     face_svc = get_face_service()
@@ -973,11 +965,7 @@ async def scan_kiosk(
     if course is None:
         course = db.scalar(select(Course).where(Course.is_active.is_(True)).order_by(Course.id))
 
-    candidates = (
-        _eligible_students(db, department=kiosk_department)
-        if kiosk_department
-        else (_eligible_students(db, course.id) if course is not None else _eligible_students(db))
-    )
+    candidates = _eligible_students(db, course.id, department=kiosk_department) if course is not None else _eligible_students(db, department=kiosk_department)
     student_scores: list[tuple[float, StudentProfile, User]] = []
     for roster, profile, matched_user in candidates:
         try:

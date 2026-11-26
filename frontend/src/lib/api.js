@@ -55,6 +55,9 @@ export function errorMessage(error, fallback = 'Something went wrong. Please try
     const first = detail[0]
     return first?.msg ? `${first.loc?.slice(-1)[0] || 'Field'}: ${first.msg}` : fallback
   }
+  if (error.response.status === 502 || error.response.status === 504) {
+    return 'Cannot reach backend server. Please check your Windows tunnel URL or ensure backend is running.'
+  }
   return fallback
 }
 
