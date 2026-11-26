@@ -196,11 +196,19 @@ def test_teacher_history_includes_absent_roster_students_and_course_percentages(
             Enrollment(student_id=student.id, course_id=course.id, semester=course.semester)
             for student in students
         ])
+        latest_start = datetime.now() - timedelta(days=1)
         latest_session = ClassSession(
             course_id=course.id,
             teacher_id=teacher.id,
-            start_at=datetime.now() - timedelta(days=1),
-            end_at=datetime.now() - timedelta(days=1) + timedelta(minutes=50),
+            start_at=latest_start,
+            end_at=latest_start + timedelta(minutes=50),
+            students=2,
+        )
+        duplicate_latest_session = ClassSession(
+            course_id=course.id,
+            teacher_id=None,
+            start_at=latest_start,
+            end_at=latest_start + timedelta(minutes=50),
             students=2,
         )
         previous_session = ClassSession(
@@ -210,7 +218,7 @@ def test_teacher_history_includes_absent_roster_students_and_course_percentages(
             end_at=datetime.now() - timedelta(days=2) + timedelta(minutes=50),
             students=2,
         )
-        db.add_all([latest_session, previous_session])
+        db.add_all([latest_session, duplicate_latest_session, previous_session])
         db.commit()
         db.add_all([
             Attendance(session_id=latest_session.id, student_id=students[0].id, status="present", method="face"),

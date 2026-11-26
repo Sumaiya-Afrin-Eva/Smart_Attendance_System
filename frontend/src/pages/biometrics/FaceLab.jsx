@@ -217,8 +217,8 @@ export default function FaceLab({ kioskId = 'CSE' }) {
       fd.append('kiosk_id', normalizedKioskId)
       if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
       fd.append('image', frame, 'kiosk-frame.jpg')
-      fd.append('threshold', 0.55)
-      const { data } = await api.post('/face/kiosk/scan', fd, { timeout: 15000, skipNetworkRetry: true })
+      fd.append('threshold', 0.48)
+      const { data } = await api.post('/face/kiosk/scan', fd, { timeout: 60000, skipNetworkRetry: true })
 
       if (data?.matched) {
         setBanner({ text: 'Face Recognized', ok: true })
