@@ -236,7 +236,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
       if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
       fd.append('image', frame, 'kiosk-frame.jpg')
       fd.append('threshold', 0.48)
-      const { data } = await api.post('/face/kiosk/scan', fd, { timeout: 15000, skipNetworkRetry: true })
+      const { data } = await api.post('/face/kiosk/scan', fd, { timeout: 60000, skipNetworkRetry: true })
 
       if (data?.matched) {
         const studentName = data.student?.name ? ` — ${data.student.name}` : ''

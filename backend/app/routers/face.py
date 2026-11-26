@@ -11,8 +11,9 @@ import base64
 import json
 import logging
 import re
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Optional
 from uuid import uuid4
 
@@ -56,6 +57,14 @@ ATTENDANCE_QR_ISSUER = "smart-attendance"
 ATTENDANCE_QR_AUDIENCE = "attendance-kiosk"
 KIOSK_QR_FALLBACK_AUDIENCE = "attendance-kiosk-qr-fallback"
 KIOSK_QR_FALLBACK_VALID_SECONDS = 30
+_kiosk_session_lock = Lock()
+
+
+def _kiosk_tracking_key(kiosk_id: str | None, session_id: int | None = None) -> str:
+    label = (kiosk_id or "").strip().lower()
+    if label:
+        return f"kiosk:{label}"
+    return f"kiosk:{session_id}" if session_id else "kiosk:main"
 
 
 def _registered_face_inputs(roster: StudentRoster) -> list[bytes | str]:
@@ -388,55 +397,84 @@ def _resolve_active_class_for_student(db: Session, student: User, now: datetime)
     return selected_course, teacher_id, selected_routine
 
 
-def _get_or_create_session_for_routine(db: Session, course: Course, teacher_id: int | None, now: datetime, student_count: int = 1, routine: ClassRoutine | None = None) -> ClassSession:
+def _routine_start_at(routine: ClassRoutine | None, now: datetime) -> datetime | None:
+    if routine is None or not routine.start_time:
+        return None
+    for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p"):
+        try:
+            dt = datetime.strptime(str(routine.start_time).strip().replace(".", ":"), fmt)
+            return datetime.combine(now.date(), dt.time())
+        except ValueError:
+            pass
+    return None
+
+
+def _find_existing_session_for_routine(
+    db: Session,
+    course: Course,
+    teacher_id: int | None,
+    now: datetime,
+    routine: ClassRoutine | None,
+) -> ClassSession | None:
     day_start = datetime.combine(now.date(), datetime.min.time())
     next_day = day_start + timedelta(days=1)
-    existing = db.scalar(
+    sessions = db.scalars(
         select(ClassSession)
         .where(
             ClassSession.course_id == course.id,
-            ClassSession.teacher_id == teacher_id,
             ClassSession.start_at >= day_start,
             ClassSession.start_at < next_day,
             ClassSession.status != "cancelled",
         )
-        .order_by(ClassSession.start_at.desc())
-    )
-    if existing is not None:
-        return existing
-
-    session_start_at = now
-    matched_routine = routine
-    if matched_routine is None:
-        today_name = now.strftime("%A").strip().lower()
-        matched_routine = db.scalar(
-            select(ClassRoutine).where(
-                func.upper(func.trim(ClassRoutine.course_code)) == func.upper(func.trim(course.code)),
-                func.lower(func.trim(ClassRoutine.day)) == today_name,
-            )
+        .order_by(ClassSession.start_at, ClassSession.id)
+    ).all()
+    routine_start_at = _routine_start_at(routine, now)
+    if routine_start_at is not None:
+        return next(
+            (
+                session
+                for session in sessions
+                if session.start_at.strftime("%H:%M") == routine_start_at.strftime("%H:%M")
+            ),
+            None,
         )
-    if matched_routine and matched_routine.start_time:
-        for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p"):
-            try:
-                dt = datetime.strptime(str(matched_routine.start_time).strip().replace(".", ":"), fmt)
-                session_start_at = datetime.combine(now.date(), dt.time())
-                break
-            except ValueError:
-                pass
-
-    session = ClassSession(
-        course_id=course.id,
-        teacher_id=teacher_id,
-        start_at=session_start_at,
-        end_at=now,
-        room=matched_routine.room if matched_routine else None,
-        students=student_count,
-        status="completed",
+    return next(
+        (session for session in sessions if session.teacher_id == teacher_id),
+        sessions[0] if sessions else None,
     )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-    return session
+
+
+def _get_or_create_session_for_routine(db: Session, course: Course, teacher_id: int | None, now: datetime, student_count: int = 1, routine: ClassRoutine | None = None) -> ClassSession:
+    with _kiosk_session_lock:
+        matched_routine = routine
+        if matched_routine is None:
+            today_name = now.strftime("%A").strip().lower()
+            matched_routine = db.scalar(
+                select(ClassRoutine).where(
+                    func.upper(func.trim(ClassRoutine.course_code)) == func.upper(func.trim(course.code)),
+                    func.lower(func.trim(ClassRoutine.day)) == today_name,
+                )
+            )
+
+        existing = _find_existing_session_for_routine(db, course, teacher_id, now, matched_routine)
+        if existing is not None:
+            return existing
+
+        session_start_at = _routine_start_at(matched_routine, now) or now
+
+        session = ClassSession(
+            course_id=course.id,
+            teacher_id=teacher_id,
+            start_at=session_start_at,
+            end_at=now,
+            room=matched_routine.room if matched_routine else None,
+            students=student_count,
+            status="completed",
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        return session
 
 
 def _qr_error(detail: str = "This attendance QR is invalid or has expired.") -> HTTPException:
@@ -567,9 +605,11 @@ def scan_kiosk_qr(body: KioskQrScanRequest, db: Session = Depends(get_db)):
         raise HTTPException(status.HTTP_409_CONFLICT, "This attendance QR has already been used.")
 
     # Resolve the exact teacher and course for this student by time + routine
-    resolved_course, resolved_teacher_id, _ = _resolve_active_class_for_student(db, student, datetime.now())
+    resolved_course, resolved_teacher_id, resolved_routine = _resolve_active_class_for_student(db, student, datetime.now())
     if resolved_course is not None:
-        class_session = _get_or_create_session_for_routine(db, resolved_course, resolved_teacher_id, datetime.now(), student_count=1)
+        class_session = _get_or_create_session_for_routine(
+            db, resolved_course, resolved_teacher_id, datetime.now(), student_count=1, routine=resolved_routine
+        )
         course = resolved_course
     elif class_session is None:
         course = db.scalar(
@@ -822,41 +862,14 @@ def open_kiosk(
         background_tasks.add_task(_prepare_kiosk_gallery, face_svc, students)
 
     now = datetime.now()
-    day_start = datetime.combine(now.date(), time.min)
-    next_day = day_start + timedelta(days=1)
-    class_session = db.scalar(
-        select(ClassSession)
-        .where(
-            ClassSession.course_id == course.id,
-            ClassSession.teacher_id == teacher_id,
-            ClassSession.start_at >= day_start,
-            ClassSession.start_at < next_day,
-            ClassSession.status != "cancelled",
+    if payload.refresh_only:
+        class_session = _find_existing_session_for_routine(
+            db, course, teacher_id, now, selected_routine
         )
-        .order_by(ClassSession.start_at)
-    )
-    if class_session is None and not payload.refresh_only:
-        session_start_at = now
-        if selected_routine and selected_routine.start_time:
-            for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p"):
-                try:
-                    dt = datetime.strptime(str(selected_routine.start_time).strip().replace(".", ":"), fmt)
-                    session_start_at = datetime.combine(now.date(), dt.time())
-                    break
-                except ValueError:
-                    pass
-
-        class_session = ClassSession(
-            course_id=course.id,
-            teacher_id=teacher_id,
-            start_at=session_start_at,
-            end_at=now,
-            room=selected_routine.room if selected_routine else None,
-            students=len(students),
-            status="completed",
+    else:
+        class_session = _get_or_create_session_for_routine(
+            db, course, teacher_id, now, student_count=len(students), routine=selected_routine
         )
-        db.add(class_session)
-    elif class_session is not None and not payload.refresh_only:
         class_session.status = "completed"
         class_session.end_at = max(class_session.start_at, now)
         class_session.students = len(students)
@@ -895,7 +908,7 @@ async def check_kiosk_liveness(
 
     frame = _decode_image_payload(image, image_base64)
     face_svc = get_face_service()
-    tracking_key = f"kiosk:{session_id}" if session_id else f"kiosk:{kiosk_id}"
+    tracking_key = _kiosk_tracking_key(kiosk_id, session_id)
     try:
         return await run_in_threadpool(face_svc.check_liveness, frame, tracking_key)
     except RuntimeError as exc:
@@ -916,7 +929,7 @@ async def scan_kiosk(
     """Match a kiosk camera frame against registered students, then resolve
     the student's active routine, course, and specific teacher at the current time.
     """
-    tracking_key = f"kiosk:{session_id}" if session_id else f"kiosk:{kiosk_id}"
+    tracking_key = _kiosk_tracking_key(kiosk_id, session_id)
     query_bytes = _decode_image_payload(image, image_base64)
     face_svc = get_face_service()
     live_embedding = await run_in_threadpool(face_svc.consume_liveness, tracking_key)
@@ -997,11 +1010,13 @@ async def scan_kiosk(
             "message": "Face Not Recognized. Please show your QR code",
         }
 
-    resolved_course, resolved_teacher_id, _ = _resolve_active_class_for_student(db, matched_user, datetime.now())
+    resolved_course, resolved_teacher_id, resolved_routine = _resolve_active_class_for_student(db, matched_user, datetime.now())
     class_session = None
     course = None
     if resolved_course is not None:
-        class_session = _get_or_create_session_for_routine(db, resolved_course, resolved_teacher_id, datetime.now(), student_count=1)
+        class_session = _get_or_create_session_for_routine(
+            db, resolved_course, resolved_teacher_id, datetime.now(), student_count=1, routine=resolved_routine
+        )
         course = resolved_course
     else:
         # Fallback: if student has no routine right now, try student's current semester course or kiosk default session

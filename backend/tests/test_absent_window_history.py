@@ -11,6 +11,40 @@ from app.database import Base, SessionLocal, engine
 from app.main import ensure_seed_settings
 from app.models import Course, CourseRosterAssignment, Enrollment, StudentProfile, StudentRoster, User, ClassSession, ClassRoutine
 from app.routers import face, students
+from app.routers.face import _get_or_create_session_for_routine
+
+
+def test_face_scans_reuse_the_same_routine_session_when_teacher_resolution_changes():
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    now = datetime(2026, 11, 24, 9, 15, 0)
+    with SessionLocal() as db:
+        teacher = User(email="routine-teacher@kuet.ac.bd", name="Routine Teacher", role="teacher")
+        course = Course(code="CSE 2101", title="Test Course", department="CSE", semester="2-1")
+        routine = ClassRoutine(
+            department="CSE",
+            semester="2-1",
+            day=now.strftime("%A"),
+            start_time="09:00 AM",
+            end_time="10:00 AM",
+            course_code="CSE 2101",
+            course_title="Test Course",
+            teacher_name="Routine Teacher",
+            room="Room 101",
+        )
+        db.add_all([teacher, course, routine])
+        db.commit()
+        db.refresh(teacher)
+        db.refresh(course)
+
+        first_session = _get_or_create_session_for_routine(db, course, None, now, routine=routine)
+        second_session = _get_or_create_session_for_routine(db, course, teacher.id, now, routine=routine)
+
+        assert second_session.id == first_session.id
+        assert db.query(ClassSession).count() == 1
+
+
 def test_student_attendance_history_includes_absence_window_for_absent_sessions():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)

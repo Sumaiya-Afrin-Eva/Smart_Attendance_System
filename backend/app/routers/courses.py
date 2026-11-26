@@ -185,6 +185,19 @@ def _course_roster_students(db: Session, course: Course) -> list[dict]:
     return students
 
 
+def _class_session_groups(sessions: list[ClassSession]) -> list[list[ClassSession]]:
+    groups = {}
+    for class_session in sessions:
+        key = (
+            class_session.course_id,
+            class_session.start_at.date(),
+            class_session.start_at.hour,
+            class_session.start_at.minute,
+        )
+        groups.setdefault(key, []).append(class_session)
+    return list(groups.values())
+
+
 @router.get("/meta")
 def meta(db: Session = Depends(get_db)):
     settings_rows = db.scalars(select(AdminSetting).where(AdminSetting.key.in_(["instName", "deptName", "instLogo"]))).all()
@@ -606,17 +619,23 @@ def teacher_attendance_history(
         (ClassSession.teacher_id == user.id) | (ClassSession.teacher_id.is_(None)),
     )
     sessions = db.scalars(query.order_by(ClassSession.start_at.desc())).all()
+    session_groups = _class_session_groups(sessions)
 
     sessions_by_id = {class_session.id: class_session for class_session in sessions}
     course_session_counts = {}
-    held_session_ids = set()
     now = datetime.now()
-    for class_session in sessions:
-        if class_session.start_at <= now and (class_session.status or "").lower() != "cancelled":
-            held_session_ids.add(class_session.id)
-            course_session_counts[class_session.course_id] = (
-                course_session_counts.get(class_session.course_id, 0) + 1
-            )
+    held_session_groups = [
+        [
+            class_session
+            for class_session in group
+            if class_session.start_at <= now and (class_session.status or "").lower() != "cancelled"
+        ]
+        for group in session_groups
+    ]
+    held_session_groups = [group for group in held_session_groups if group]
+    for group in held_session_groups:
+        course_id = group[0].course_id
+        course_session_counts[course_id] = course_session_counts.get(course_id, 0) + 1
 
     all_attendances = db.scalars(
         select(Attendance).where(Attendance.session_id.in_(sessions_by_id))
@@ -625,22 +644,31 @@ def teacher_attendance_history(
     student_present_counts = {}
     for attendance in all_attendances:
         attendances_by_session.setdefault(attendance.session_id, []).append(attendance)
-        if attendance.status in {"present", "late"} and attendance.session_id in held_session_ids:
-            class_session = sessions_by_id[attendance.session_id]
-            course_student_counts = student_present_counts.setdefault(class_session.course_id, {})
-            course_student_counts[attendance.student_id] = (
-                course_student_counts.get(attendance.student_id, 0) + 1
-            )
+    for group in held_session_groups:
+        session_ids = {class_session.id for class_session in group}
+        present_student_ids = {
+            attendance.student_id
+            for attendance in all_attendances
+            if attendance.session_id in session_ids and attendance.status in {"present", "late"}
+        }
+        course_student_counts = student_present_counts.setdefault(group[0].course_id, {})
+        for student_id in present_student_ids:
+            course_student_counts[student_id] = course_student_counts.get(student_id, 0) + 1
 
     history = []
-    for s in sessions:
+    for group in session_groups:
+        s = group[0]
         c = course_map[s.course_id]
         if session and session != "All Sessions" and c.session != session:
             continue
 
         attendees = [dict(student) for student in _course_roster_students(db, c)]
         attendances = sorted(
-            attendances_by_session.get(s.id, []),
+            [
+                attendance
+                for class_session in group
+                for attendance in attendances_by_session.get(class_session.id, [])
+            ],
             key=lambda attendance: attendance.marked_at or datetime.min,
         )
         attendance_by_student = {}
@@ -747,10 +775,15 @@ def teacher_course_attendance_sheets(
     now = datetime.now()
     sessions_by_course = {}
     held_session_ids = set()
-    for class_session in sessions:
-        if class_session.start_at <= now and (class_session.status or "").lower() != "cancelled":
-            sessions_by_course.setdefault(class_session.course_id, []).append(class_session)
-            held_session_ids.add(class_session.id)
+    for group in _class_session_groups(sessions):
+        held_group = [
+            class_session
+            for class_session in group
+            if class_session.start_at <= now and (class_session.status or "").lower() != "cancelled"
+        ]
+        if held_group:
+            sessions_by_course.setdefault(held_group[0].course_id, []).append(held_group)
+            held_session_ids.update(class_session.id for class_session in held_group)
 
     attendances = db.scalars(
         select(Attendance).where(Attendance.session_id.in_(held_session_ids))
@@ -766,11 +799,11 @@ def teacher_course_attendance_sheets(
         displayed_sessions = held_sessions[-15:]
         class_slots = [
             {
-                "sessionId": class_session.id,
-                "date": class_session.start_at.strftime("%d.%m.%y"),
-                "time": class_session.start_at.strftime("%I:%M %p"),
+                "sessionId": class_session_group[0].id,
+                "date": class_session_group[0].start_at.strftime("%d.%m.%y"),
+                "time": class_session_group[0].start_at.strftime("%I:%M %p"),
             }
-            for class_session in displayed_sessions
+            for class_session_group in displayed_sessions
         ]
         class_slots.extend([None] * (15 - len(class_slots)))
 
@@ -781,17 +814,23 @@ def teacher_course_attendance_sheets(
             student_id = student["studentId"]
             attended_count = sum(
                 1
-                for class_session in held_sessions
-                if student_id in present_by_session.get(class_session.id, set())
+                for class_session_group in held_sessions
+                if any(
+                    student_id in present_by_session.get(class_session.id, set())
+                    for class_session in class_session_group
+                )
             )
             present_total += attended_count
             attendance = [
                 (
                     "Present"
-                    if student_id in present_by_session.get(class_session.id, set())
+                    if any(
+                        student_id in present_by_session.get(class_session.id, set())
+                        for class_session in class_session_group
+                    )
                     else "Absent"
                 )
-                for class_session in displayed_sessions
+                for class_session_group in displayed_sessions
             ]
             attendance.extend([None] * (15 - len(attendance)))
             student_rows.append({
@@ -807,12 +846,16 @@ def teacher_course_attendance_sheets(
 
         total_possible_attendance = len(students) * len(held_sessions)
         attendance_trend = []
-        for class_number, class_session in enumerate(held_sessions, start=1):
+        for class_number, class_session_group in enumerate(held_sessions, start=1):
             present_count = sum(
                 1
                 for student in students
-                if student["studentId"] in present_by_session.get(class_session.id, set())
+                if any(
+                    student["studentId"] in present_by_session.get(class_session.id, set())
+                    for class_session in class_session_group
+                )
             )
+            class_session = class_session_group[0]
             attendance_trend.append({
                 "classNumber": class_number,
                 "date": class_session.start_at.strftime("%d.%m.%y"),

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import {
-  BookOpen, CalendarCheck, ChevronRight, Sparkles,
+  BookOpen, CalendarCheck, ChevronRight, Download, Sparkles,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
@@ -9,6 +9,8 @@ import { errorMessage } from '../../lib/api'
 import { formatPercent } from '../../lib/format'
 import { Badge, Card, EmptyState, ErrorBox, Spinner } from '../../components/ui'
 import SemesterSelect from '../../components/student/SemesterSelect'
+
+const ANDROID_APK_URL = import.meta.env.VITE_ANDROID_APK_URL || '/downloads/smart-attendance.apk'
 
 const DEPT_NAMES = {
   CSE: 'Computer Science & Engineering',
@@ -67,7 +69,16 @@ export default function StudentDashboard() {
             </h2>
           </div>
 
-          <div className="flex flex-col items-end gap-3.5">
+          <div className="flex flex-col items-end gap-3">
+            <a
+              href={ANDROID_APK_URL}
+              download="SmartAttendance.apk"
+              className="inline-flex items-center gap-2 rounded-xl border border-emerald-300/30 bg-white/12 px-3.5 py-2 text-xs font-semibold text-emerald-50 shadow-2xs backdrop-blur-sm transition hover:bg-white/20 hover:text-white"
+              title="Download Smart Attendance Android App"
+            >
+              <Download size={14} className="text-emerald-200" />
+              <span>Download App</span>
+            </a>
             <SemesterSelect value={semester} onChange={setSemester} />
           </div>
         </div>
