@@ -106,13 +106,12 @@ class FaceService:
         if blink and (now - started_at) >= FaceService.LIVENESS_READY_SECONDS:
             return True
 
-        # When natural 3D head movement is tracked across frames for >= 0.7s,
-        # confirm live human presence without forcing an uncomfortable wait.
-        if movement and (now - started_at) >= 0.7:
+        # Natural 3D head motion observed across frames for >= 0.25s
+        if movement and (now - started_at) >= 0.25:
             return True
 
-        # Natural human presence tracked across multiple frames for >= 1.2s
-        if (now - started_at) >= 1.2 and state.get("count", 0) >= 3:
+        # Live human face tracked across multiple frames for >= 0.6s
+        if (now - started_at) >= 0.6 and state.get("count", 0) >= 2:
             return True
 
         return False
@@ -371,15 +370,11 @@ class FaceService:
                     state["live_embedding"] = self.extract_embedding(frame)
                     liveness = state["live_embedding"] is not None
                 if liveness:
-                    message = "Live human verified. You can scan now."
-                elif not state["blink"] and not state["movement"]:
-                    message = "Face detected. Blink once and slowly move your head."
-                elif not state["blink"]:
-                    message = "Head movement detected. Now blink once."
-                elif not state["movement"]:
-                    message = "Blink detected. Slowly turn or move your head."
+                    message = "Live human verified. Scanning face..."
+                elif state["blink"] or state["movement"]:
+                    message = "Face verified. Keep looking at the camera..."
                 else:
-                    message = "Blink and movement detected. Keep your face visible."
+                    message = "Looking at camera. Verifying..."
                 return {
                     "human": True,
                     "blink_detected": state["blink"],
