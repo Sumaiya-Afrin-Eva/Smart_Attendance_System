@@ -2,13 +2,13 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import api from '../../lib/api'
 
 // How often the liveness check polls (ms)
-const LIVENESS_POLL_MS = 180
+const LIVENESS_POLL_MS = 220
 // After a final decision (matched or not), wait this long before resetting to scan again
 const RESET_DELAY_MS = 3000
 const QR_RESET_DELAY_MS = 5000
 
 /** Capture a JPEG frame from the live video element. */
-const captureFrame = (video, maxWidth = 320) =>
+const captureFrame = (video, maxWidth = 320, quality = 0.70) =>
   new Promise((resolve, reject) => {
     const scale = Math.min(1, maxWidth / video.videoWidth)
     const canvas = document.createElement('canvas')
@@ -20,7 +20,7 @@ const captureFrame = (video, maxWidth = 320) =>
     canvas.toBlob(
       (blob) => (blob ? resolve(blob) : reject(new Error('Frame capture failed'))),
       'image/jpeg',
-      0.70,
+      quality,
     )
   })
 
@@ -76,6 +76,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
   const autoScanRef = useRef(false)
   const resetTimerRef = useRef(null)
   const qrIntervalRef = useRef(null)
+  const consecutiveErrorsRef = useRef(0)
 
   // ── Digital clock ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -180,13 +181,14 @@ export default function FaceLab({ kioskId = 'CSE' }) {
       if (inFlight) { timer = setTimeout(poll, LIVENESS_POLL_MS); return }
       inFlight = true
       try {
-        const frame = await captureFrame(video, 480)
+        const frame = await captureFrame(video, 260, 0.55)
         const fd = new FormData()
         fd.append('kiosk_id', normalizedKioskId)
         if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
         fd.append('image', frame, 'live.jpg')
         const { data } = await api.post('/face/kiosk/liveness', fd, { timeout: 5000, skipNetworkRetry: true })
         if (cancelled || key !== livenessKeyRef.current) return
+        consecutiveErrorsRef.current = 0
         setLiveness(data)
         if (!data?.liveness) {
           timer = setTimeout(poll, LIVENESS_POLL_MS)
@@ -194,14 +196,15 @@ export default function FaceLab({ kioskId = 'CSE' }) {
         // liveness=true → auto-scan kicks in via the effect below
       } catch (err) {
         if (!cancelled && key === livenessKeyRef.current) {
+          consecutiveErrorsRef.current += 1
           const status = err?.response?.status
-          if (status === 502 || status === 504 || err?.code === 'ERR_NETWORK' || !err?.response) {
+          if (consecutiveErrorsRef.current >= 3 && (status === 502 || status === 504 || err?.code === 'ERR_NETWORK' || !err?.response)) {
             setLiveness((prev) => ({
               ...prev,
               message: 'Server unreachable (502 / Offline). Check backend or tunnel URL.',
             }))
           }
-          timer = setTimeout(poll, 1000)
+          timer = setTimeout(poll, 600)
         }
       } finally {
         inFlight = false
@@ -218,12 +221,12 @@ export default function FaceLab({ kioskId = 'CSE' }) {
     if (!videoRef.current || !cameraReady) return
     setPhase('scanning')
     try {
-      const frame = await captureFrame(videoRef.current, 320)
+      const frame = await captureFrame(videoRef.current, 320, 0.75)
       const fd = new FormData()
       fd.append('kiosk_id', normalizedKioskId)
       if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
       fd.append('image', frame, 'kiosk-frame.jpg')
-      fd.append('threshold', 0.48)
+      fd.append('threshold', 0.42)
       const { data } = await api.post('/face/kiosk/scan', fd, { timeout: 60000, skipNetworkRetry: true })
 
       if (data?.matched) {

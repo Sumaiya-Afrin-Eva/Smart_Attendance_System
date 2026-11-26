@@ -366,10 +366,8 @@ class FaceService:
                 state["count"] = state.get("count", 0) + 1
 
                 liveness = self.should_mark_liveness_ready(state, now)
-                if liveness and state.get("live_embedding") is None:
-                    state["live_embedding"] = self.extract_embedding(frame)
-                    liveness = state["live_embedding"] is not None
                 if liveness:
+                    state["verified_live"] = True
                     message = "Live human verified. Scanning face..."
                 elif state["blink"] or state["movement"]:
                     message = "Face verified. Keep looking at the camera..."
@@ -406,9 +404,8 @@ class FaceService:
         state["count"] = state.get("count", 0) + 1
         state["last_seen_at"] = now
         liveness = (now - state["started_at"] >= self.LIVENESS_READY_SECONDS) or (state["count"] >= 3)
-        if liveness and state.get("live_embedding") is None:
-            state["live_embedding"] = self.extract_embedding(frame)
-            liveness = state["live_embedding"] is not None
+        if liveness:
+            state["verified_live"] = True
 
         return {
             "human": True,
