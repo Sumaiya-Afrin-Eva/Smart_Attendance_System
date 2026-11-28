@@ -25,6 +25,7 @@ from ..schemas import ProfileIn
 from ..security import require_role
 from ..services import FACE_ENROLLMENT_VERSION, course_out, onboarding_status
 from ..services.face_service import get_face_service
+from ..schedule_utils import approved_schedule_changes, effective_routine_times
 
 router = APIRouter(prefix="/api/students/me", tags=["student"])
 student_only = require_role("student")
@@ -611,6 +612,7 @@ def dashboard(semester: str | None = None, user: User = Depends(student_only), d
     now = datetime.now()
     today_start = datetime.combine(now.date(), time.min)
     today_end = today_start + timedelta(days=1)
+    schedule_changes = approved_schedule_changes(db, now.date())
     course_codes = {course.code.strip().casefold() for course in courses.values()}
     routines = db.scalars(
         select(ClassRoutine).where(
@@ -641,9 +643,10 @@ def dashboard(semester: str | None = None, user: User = Depends(student_only), d
             None,
         )
         if course is not None:
-            today_routines.append((routine, course))
+            start_time, end_time = effective_routine_times(routine, schedule_changes)
+            today_routines.append((course, start_time, end_time))
 
-    today_course_ids = {course.id for _, course in today_routines}
+    today_course_ids = {course.id for course, _, _ in today_routines}
     today_sessions = db.scalars(
         select(ClassSession).where(
             ClassSession.course_id.in_(today_course_ids),
@@ -665,9 +668,12 @@ def dashboard(semester: str | None = None, user: User = Depends(student_only), d
         sessions_by_course.setdefault(session.course_id, []).append(session)
 
     today = []
-    for routine, course in sorted(today_routines, key=lambda row: (row[0].start_time or "", row[1].code)):
-        start_minutes = _routine_time_minutes(routine.start_time)
-        end_minutes = _routine_time_minutes(routine.end_time)
+    for course, start_time, end_time in sorted(
+        today_routines,
+        key=lambda row: (row[1] or "", row[0].code),
+    ):
+        start_minutes = _routine_time_minutes(start_time)
+        end_minutes = _routine_time_minutes(end_time)
         course_sessions = sessions_by_course.get(course.id, [])
         if start_minutes is not None and end_minutes is not None:
             matching_sessions = [
@@ -690,8 +696,8 @@ def dashboard(semester: str | None = None, user: User = Depends(student_only), d
             "session_id": matched_session.id if matched_session else None,
             "course_code": course.code,
             "course_title": course.title,
-            "start_time": routine.start_time,
-            "end_time": routine.end_time,
+            "start_time": start_time,
+            "end_time": end_time,
             "status": "present" if attended else "absent",
         })
 

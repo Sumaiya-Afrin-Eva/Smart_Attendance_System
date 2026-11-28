@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import api from '../../lib/api'
+import api, { errorMessage } from '../../lib/api'
 
 // How often the liveness check polls (ms)
 const LIVENESS_POLL_MS = 220
@@ -152,6 +152,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
     clearTimeout(resetTimerRef.current)
     clearInterval(qrIntervalRef.current)
     resetTimerRef.current = setTimeout(() => {
+      clearInterval(qrIntervalRef.current)
       setBanner(null)
       lastQrRef.current = null
       qrLockRef.current = false
@@ -170,6 +171,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
     let cancelled = false
     let inFlight = false
     let timer
+    consecutiveErrorsRef.current = 0
 
     const poll = async () => {
       if (cancelled || key !== livenessKeyRef.current) return
@@ -194,16 +196,15 @@ export default function FaceLab({ kioskId = 'CSE' }) {
           timer = setTimeout(poll, LIVENESS_POLL_MS)
         }
         // liveness=true → auto-scan kicks in via the effect below
-      } catch (err) {
+      } catch (error) {
         if (!cancelled && key === livenessKeyRef.current) {
           consecutiveErrorsRef.current += 1
-          const status = err?.response?.status
-          if (consecutiveErrorsRef.current >= 3 && (status === 502 || status === 504 || err?.code === 'ERR_NETWORK' || !err?.response)) {
-            setLiveness((prev) => ({
-              ...prev,
-              message: 'Server unreachable (502 / Offline). Check backend or tunnel URL.',
-            }))
-          }
+          const status = error?.response?.status
+          const isServerUnavailable = status === 502 || status === 504 || error?.code === 'ERR_NETWORK' || !error?.response
+          const message = consecutiveErrorsRef.current >= 3 && isServerUnavailable
+            ? 'Server unreachable (502 / Offline). Check backend or tunnel URL.'
+            : `Liveness check failed. Retrying: ${errorMessage(error, 'Please keep your face visible.')}`
+          setLiveness({ human: false, liveness: false, message })
           timer = setTimeout(poll, 600)
         }
       } finally {
@@ -266,7 +267,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
       }, 1000)
       scheduleReset(QR_RESET_DELAY_MS)
     }
-  }, [activeClass, cameraReady, scheduleReset])
+  }, [activeClass, cameraReady, normalizedKioskId, scheduleReset])
 
   useEffect(() => {
     if (phase !== 'liveness' || !liveness.liveness || autoScanRef.current) return
