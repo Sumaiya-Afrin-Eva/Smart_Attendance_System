@@ -231,15 +231,28 @@ export default function FaceLab({ kioskId = 'CSE' }) {
       const { data } = await api.post('/face/kiosk/scan', fd, { timeout: 60000, skipNetworkRetry: true })
 
       if (data?.matched) {
-        setBanner({ text: 'Face Recognized', ok: true })
-        speak('Face Recognized')
-        if (data.student) {
-          setRecentLogs((prev) => [{
-            name: data.student.name,
-            roll: data.student.roll,
-            alreadyMarked: data.attendance?.already_marked,
+        const recognizedList = Array.isArray(data?.students) && data.students.length > 0
+          ? data.students
+          : (data?.student ? [data.student] : [])
+
+        const count = recognizedList.length
+        if (count > 1) {
+          const names = recognizedList.map((s) => s.name || s.roll).join(', ')
+          setBanner({ text: `Recognized (${count}): ${names}`, ok: true })
+          speak(`${count} Faces Recognized`)
+        } else {
+          setBanner({ text: data?.message || 'Face Recognized', ok: true })
+          speak('Face Recognized')
+        }
+
+        if (recognizedList.length > 0) {
+          const newEntries = recognizedList.map((s) => ({
+            name: s.name,
+            roll: s.roll,
+            alreadyMarked: s.already_marked ?? data.attendance?.already_marked,
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-          }, ...prev.slice(0, 4)])
+          }))
+          setRecentLogs((prev) => [...newEntries, ...prev].slice(0, 6))
         }
         setPhase('success')
         scheduleReset(RESET_DELAY_MS)

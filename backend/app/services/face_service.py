@@ -173,6 +173,35 @@ class FaceService:
 
         raise TypeError(f"Unsupported image type: {type(image)}. Expected str, Path, bytes, or np.ndarray.")
 
+    def extract_all_embeddings(self, image: Union[str, Path, bytes, np.ndarray]) -> list[np.ndarray]:
+        """Extract 512-dimensional normalized face embeddings for all detected faces in an image.
+
+        Faces are sorted from largest to smallest by bounding box area.
+        Returns an empty list if no faces are detected.
+        """
+        faces = self.detect_faces(image)
+        if not faces:
+            return []
+
+        sorted_faces = sorted(
+            faces,
+            key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]) if hasattr(f, "bbox") else 0,
+            reverse=True,
+        )
+
+        embeddings: list[np.ndarray] = []
+        for face in sorted_faces:
+            embedding = getattr(face, "normed_embedding", None)
+            if embedding is None and hasattr(face, "embedding"):
+                raw = face.embedding
+                norm = np.linalg.norm(raw)
+                embedding = raw / norm if norm > 0 else raw
+
+            if embedding is not None:
+                embeddings.append(np.array(embedding, dtype=np.float32))
+
+        return embeddings
+
     def extract_embedding(self, image: Union[str, Path, bytes, np.ndarray]) -> np.ndarray | None:
         """Extract a single 512-dimensional normalized face embedding vector from an image.
 
@@ -285,22 +314,22 @@ class FaceService:
                     if self._mesh is None:
                         self._mesh = _mp.solutions.face_mesh.FaceMesh(
                             static_image_mode=False,
-                            max_num_faces=2,
+                            max_num_faces=4,
                             refine_landmarks=False,
                             min_detection_confidence=0.55,
                             min_tracking_confidence=0.5,
                         )
                     result = self._mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                if not result.multi_face_landmarks or len(result.multi_face_landmarks) != 1:
+                if not result.multi_face_landmarks:
                     faces = self.detect_faces(frame)
-                    if len(faces) != 1:
+                    if not faces:
                         self._liveness.pop(session_key, None)
                         return {
                             "human": False,
                             "blink_detected": False,
                             "movement_detected": False,
                             "liveness": False,
-                            "message": "Exactly one clear face must be visible. Uncover the camera, center your face, and face a well-lit area.",
+                            "message": "Look at the camera to verify attendance.",
                         }
 
                     now = time.monotonic()

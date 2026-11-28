@@ -433,6 +433,11 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
                 return np.array([0.0, 1.0], dtype=np.float32)
             return np.array([-1.0, 0.0], dtype=np.float32)
 
+        def extract_all_embeddings(self, image):
+            if image == b"kiosk-multiple-students":
+                return [np.array([1.0, 0.0], dtype=np.float32), np.array([0.0, 1.0], dtype=np.float32)]
+            return [self.extract_embedding(image)]
+
         def consume_liveness(self, session_key):
             if not type(self).proof_available:
                 return None
@@ -517,6 +522,130 @@ def test_kiosk_open_and_face_scan_record_attendance_for_course_enrollees(monkeyp
     )
     assert absent_dashboard.status_code == 200, absent_dashboard.text
     assert absent_dashboard.json()["today"][0]["status"] == "absent"
+
+
+def test_kiosk_multi_student_face_scan_marks_all_recognized_students(monkeypatch):
+    reset_db()
+    client = TestClient(app)
+    admin_headers = headers_for("admin@kuet.ac.bd")
+    official_photo_1 = b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"official-student-one"
+    roster_id_1 = create_roster(client, admin_headers, official_photo_1)
+    now = datetime.now()
+
+    with SessionLocal() as db:
+        student_1 = db.scalar(select(User).where(User.email == "student1@stud.kuet.ac.bd"))
+        student_1.profile = StudentProfile(
+            user_id=student_1.id,
+            roster_id=roster_id_1,
+            roll="2107001",
+            full_name="Student One",
+            department="CSE",
+            series="2021",
+            session="2021-2022",
+            current_semester="3-1",
+        )
+        student_2 = User(email="student2@stud.kuet.ac.bd", name="Student Two", role="student")
+        db.add(student_2)
+        db.flush()
+        roster_2 = StudentRoster(
+            full_name="Student Two",
+            roll="2107002",
+            email=student_2.email,
+            department="CSE",
+            session="2021-2022",
+            photo_data=b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"official-student-two",
+            photo_mime_type="image/jpeg",
+            is_active=True,
+        )
+        db.add(roster_2)
+        db.flush()
+        student_2.profile = StudentProfile(
+            user_id=student_2.id,
+            roster_id=roster_2.id,
+            roll=roster_2.roll,
+            full_name=roster_2.full_name,
+            department=roster_2.department,
+            series="2021",
+            session=roster_2.session,
+            current_semester="3-1",
+        )
+        course = Course(
+            code="CSE 3200",
+            title="System Development Project",
+            department="CSE",
+            semester="3-1",
+            session="2021-2022",
+            course_type="Lab",
+            credit=1.5,
+        )
+        db.add(course)
+        db.flush()
+        db.add_all([
+            CourseRosterAssignment(course_id=course.id, roster_id=roster_id_1),
+            CourseRosterAssignment(course_id=course.id, roster_id=roster_2.id),
+            Enrollment(student_id=student_1.id, course_id=course.id, semester="3-1"),
+            Enrollment(student_id=student_2.id, course_id=course.id, semester="3-1"),
+            ClassRoutine(
+                department="CSE",
+                semester="3-1",
+                section="A",
+                day=now.strftime("%A"),
+                start_time=(now - timedelta(minutes=15)).strftime("%I:%M %p"),
+                end_time=(now + timedelta(minutes=45)).strftime("%I:%M %p"),
+                course_code="CSE 3200",
+                course_title="System Development Project",
+                course_type="Lab",
+                session="2021-2022",
+            ),
+        ])
+        db.commit()
+        student_1_token = create_token(student_1)
+        student_2_token = create_token(student_2)
+
+    class MultiFaceService:
+        def extract_embedding(self, image):
+            if image in {official_photo_1, b"kiosk-student-one"}:
+                return np.array([1.0, 0.0], dtype=np.float32)
+            if image == b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"official-student-two":
+                return np.array([0.0, 1.0], dtype=np.float32)
+            return np.array([-1.0, 0.0], dtype=np.float32)
+
+        def extract_all_embeddings(self, image):
+            if image == b"kiosk-multi-students":
+                return [np.array([1.0, 0.0], dtype=np.float32), np.array([0.0, 1.0], dtype=np.float32)]
+            return [self.extract_embedding(image)]
+
+        def consume_liveness(self, session_key):
+            return np.array([1.0, 0.0], dtype=np.float32)
+
+    monkeypatch.setattr("app.routers.face.get_face_service", MultiFaceService)
+
+    opened = client.post("/api/face/kiosk/open", json={"course_code": "CSE 3200"})
+    assert opened.status_code == 200, opened.text
+    kiosk_session_id = opened.json()["session_id"]
+
+    scan_resp = client.post(
+        "/api/face/kiosk/scan",
+        data={"session_id": str(kiosk_session_id)},
+        files={"image": ("camera.jpg", b"kiosk-multi-students", "image/jpeg")},
+    )
+    assert scan_resp.status_code == 200, scan_resp.text
+    payload = scan_resp.json()
+    assert payload["matched"] is True
+    assert len(payload["students"]) == 2
+    rolls = {s["roll"] for s in payload["students"]}
+    assert rolls == {"2107001", "2107002"}
+    assert len(payload["attendances"]) == 2
+
+    with SessionLocal() as db:
+        assert db.query(Attendance).filter_by(session_id=kiosk_session_id).count() == 2
+
+    dash1 = client.get("/api/students/me/dashboard", headers={"Authorization": f"Bearer {student_1_token}"})
+    dash2 = client.get("/api/students/me/dashboard", headers={"Authorization": f"Bearer {student_2_token}"})
+    assert dash1.status_code == 200
+    assert dash2.status_code == 200
+    assert dash1.json()["today"][0]["status"] == "present"
+    assert dash2.json()["today"][0]["status"] == "present"
 
 
 def test_student_dashboard_includes_routine_class_without_a_created_session():

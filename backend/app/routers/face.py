@@ -999,19 +999,32 @@ async def scan_kiosk(
             "message": "Face Not Recognized. Please show your QR code",
         }
 
-    query_emb = None
+    query_embs: list[np.ndarray] = []
     if query_bytes:
         try:
-            query_emb = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
+            if hasattr(face_svc, "extract_all_embeddings"):
+                query_embs = await run_in_threadpool(face_svc.extract_all_embeddings, query_bytes)
+            else:
+                emb = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
+                if emb is not None:
+                    query_embs = [emb]
         except RuntimeError as exc:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
         except Exception as exc:
-            logger.warning("Could not extract embedding from query frame: %s", exc)
+            logger.warning("Could not extract embeddings from query frame: %s", exc)
 
-    if query_emb is None and live_embedding is not None and getattr(live_embedding, "ndim", 0) == 1 and len(live_embedding) > 10:
-        query_emb = live_embedding
+    if not query_embs and query_bytes:
+        try:
+            single = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
+            if single is not None:
+                query_embs = [single]
+        except Exception:
+            pass
 
-    if query_emb is None:
+    if not query_embs and live_embedding is not None and getattr(live_embedding, "ndim", 0) == 1 and len(live_embedding) > 10:
+        query_embs = [live_embedding]
+
+    if not query_embs:
         return {
             "matched": False,
             "similarity": None,
@@ -1024,16 +1037,17 @@ async def scan_kiosk(
         live_embedding is not None
         and getattr(live_embedding, "ndim", 0) == 1
         and len(live_embedding) >= 2
-        and query_emb is not None
-        and getattr(query_emb, "ndim", 0) == 1
-        and len(query_emb) == len(live_embedding)
     ):
-        live_sim = compute_similarity(query_emb, live_embedding)
-        if live_sim < 0.40:
+        matched_live = any(
+            compute_similarity(q, live_embedding) >= 0.40
+            for q in query_embs
+            if getattr(q, "ndim", 0) == 1 and len(q) == len(live_embedding)
+        )
+        if not matched_live:
             return {
                 "matched": False,
-                "similarity": round(live_sim, 4),
-                "similarity_percent": round(max(0.0, live_sim) * 100, 2),
+                "similarity": None,
+                "similarity_percent": None,
                 "threshold": threshold,
                 "message": "Face Not Recognized. Please show your QR code",
             }
@@ -1054,18 +1068,19 @@ async def scan_kiosk(
         if kiosk_department
         else (_eligible_students(db, course.id) if course is not None else _eligible_students(db))
     )
-    student_scores: list[tuple[float, StudentProfile, User]] = []
+
+    candidate_embs: list[tuple[StudentRoster, StudentProfile, User, list[np.ndarray]]] = []
     for roster, profile, matched_user in candidates:
         try:
             stored_embs = _get_roster_embeddings(face_svc, roster)
-            for stored_emb in stored_embs:
-                student_scores.append((compute_similarity(query_emb, stored_emb), profile, matched_user))
+            if stored_embs:
+                candidate_embs.append((roster, profile, matched_user, stored_embs))
         except Exception as exc:
             if isinstance(exc, RuntimeError):
                 raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
             logger.warning("Failed processing photo for roster roll %s: %s", roster.roll, exc)
 
-    if not student_scores:
+    if not candidate_embs:
         return {
             "matched": False,
             "similarity": None,
@@ -1074,96 +1089,167 @@ async def scan_kiosk(
             "message": "Face Not Recognized. Please show your QR code",
         }
 
-    similarity, profile, matched_user = max(student_scores, key=lambda item: item[0])
-    logger.info("Kiosk scan best match: roll=%s similarity=%.4f threshold=%.4f", profile.roll, similarity, scan_threshold)
-    if similarity < scan_threshold:
+    # Match each detected face in the frame against registered candidate gallery
+    matched_students: dict[int, dict] = {}
+    for q_emb in query_embs:
+        best_sim = -1.0
+        best_cand = None
+        for roster, profile, matched_user, stored_embs in candidate_embs:
+            for stored_emb in stored_embs:
+                sim = compute_similarity(q_emb, stored_emb)
+                if sim > best_sim:
+                    best_sim = sim
+                    best_cand = (profile, matched_user)
+
+        if best_cand is not None and best_sim >= scan_threshold:
+            profile, matched_user = best_cand
+            if matched_user.id not in matched_students or best_sim > matched_students[matched_user.id]["similarity"]:
+                matched_students[matched_user.id] = {
+                    "user": matched_user,
+                    "profile": profile,
+                    "similarity": best_sim,
+                }
+
+    if not matched_students:
         return {
             "matched": False,
-            "similarity": round(similarity, 4),
-            "similarity_percent": round(max(0.0, similarity) * 100, 2),
+            "similarity": None,
+            "similarity_percent": None,
             "threshold": scan_threshold,
             "message": "Face Not Recognized. Please show your QR code",
         }
 
-    resolved_course, resolved_teacher_id, resolved_routine = _resolve_active_class_for_student(db, matched_user, datetime.now())
-    class_session = None
-    course = None
-    if resolved_course is not None:
-        class_session = _get_or_create_session_for_routine(
-            db, resolved_course, resolved_teacher_id, datetime.now(), student_count=1, routine=resolved_routine
-        )
-        course = resolved_course
-    else:
-        # Fallback: if student has no routine right now, try student's current semester course or kiosk default session
-        course = db.scalar(
-            select(Course)
-            .where(
-                Course.department == profile.department,
-                Course.semester == profile.current_semester,
-                Course.is_active.is_(True),
-            )
-            .order_by(Course.id)
-        )
-        if course is None:
-            course = db.scalar(select(Course).where(Course.is_active.is_(True)).order_by(Course.id))
-        if course:
-            resolved_teacher_id = course.teacher_id
-            class_session = _get_or_create_session_for_routine(db, course, resolved_teacher_id, datetime.now(), student_count=1)
+    now_dt = datetime.now()
+    students_output = []
+    attendances_output = []
+    primary_course = None
+    primary_teacher_id = None
+    primary_record = None
+    any_new_marked = False
 
-    record = None
-    already_marked = False
-    if class_session:
-        record = db.scalar(
-            select(Attendance).where(
-                Attendance.session_id == class_session.id,
-                Attendance.student_id == matched_user.id,
+    for item in matched_students.values():
+        profile: StudentProfile = item["profile"]
+        matched_user: User = item["user"]
+        similarity: float = item["similarity"]
+
+        resolved_course, resolved_teacher_id, resolved_routine = _resolve_active_class_for_student(db, matched_user, now_dt)
+        class_session = None
+        current_course = None
+        if resolved_course is not None:
+            class_session = _get_or_create_session_for_routine(
+                db, resolved_course, resolved_teacher_id, now_dt, student_count=1, routine=resolved_routine
             )
-        )
-        already_marked = record is not None
-        if record is None:
-            marked_at = datetime.now()
-            record = Attendance(
-                session_id=class_session.id,
-                student_id=matched_user.id,
-                status=_attendance_status_for_session(class_session, marked_at),
-                marked_at=marked_at,
-                method="face",
-                confidence=similarity,
-            )
-            db.add(record)
-            try:
-                db.commit()
-                db.refresh(record)
-            except IntegrityError:
-                db.rollback()
-                record = db.scalar(
-                    select(Attendance).where(
-                        Attendance.session_id == class_session.id,
-                        Attendance.student_id == matched_user.id,
-                    )
+            current_course = resolved_course
+        else:
+            current_course = db.scalar(
+                select(Course)
+                .where(
+                    Course.department == profile.department,
+                    Course.semester == profile.current_semester,
+                    Course.is_active.is_(True),
                 )
-                already_marked = True
+                .order_by(Course.id)
+            )
+            if current_course is None:
+                current_course = db.scalar(select(Course).where(Course.is_active.is_(True)).order_by(Course.id))
+            if current_course:
+                resolved_teacher_id = current_course.teacher_id
+                class_session = _get_or_create_session_for_routine(db, current_course, resolved_teacher_id, now_dt, student_count=1)
 
-    return {
-        "matched": True,
-        "similarity": round(similarity, 4),
-        "similarity_percent": round(max(0.0, similarity) * 100, 2),
-        "threshold": threshold,
-        "student": {
+        if primary_course is None and current_course is not None:
+            primary_course = current_course
+            primary_teacher_id = resolved_teacher_id
+
+        record = None
+        already_marked = False
+        if class_session:
+            record = db.scalar(
+                select(Attendance).where(
+                    Attendance.session_id == class_session.id,
+                    Attendance.student_id == matched_user.id,
+                )
+            )
+            already_marked = record is not None
+            if record is None:
+                marked_at = datetime.now()
+                record = Attendance(
+                    session_id=class_session.id,
+                    student_id=matched_user.id,
+                    status=_attendance_status_for_session(class_session, marked_at),
+                    marked_at=marked_at,
+                    method="face",
+                    confidence=similarity,
+                )
+                db.add(record)
+                try:
+                    db.commit()
+                    db.refresh(record)
+                    any_new_marked = True
+                except IntegrityError:
+                    db.rollback()
+                    record = db.scalar(
+                        select(Attendance).where(
+                            Attendance.session_id == class_session.id,
+                            Attendance.student_id == matched_user.id,
+                        )
+                    )
+                    already_marked = True
+
+        if primary_record is None:
+            primary_record = record
+
+        student_info = {
             "id": matched_user.id,
             "name": profile.full_name,
             "roll": profile.roll,
             "department": profile.department,
             "current_semester": profile.current_semester,
-        },
-        "attendance": {
-            "status": record.status if record else "present",
-            "marked_at": record.marked_at.isoformat() if record else datetime.now().isoformat(),
+            "similarity": round(similarity, 4),
+            "similarity_percent": round(max(0.0, similarity) * 100, 2),
             "already_marked": already_marked,
+        }
+        students_output.append(student_info)
+
+        attendance_info = {
+            "student_id": matched_user.id,
+            "roll": profile.roll,
+            "status": record.status if record else "present",
+            "marked_at": record.marked_at.isoformat() if record else now_dt.isoformat(),
+            "already_marked": already_marked,
+        }
+        attendances_output.append(attendance_info)
+
+    primary_student = students_output[0]
+    total_count = len(students_output)
+
+    if total_count > 1:
+        names_str = ", ".join(s["name"] for s in students_output)
+        msg = f"Attendance recorded for {total_count} students: {names_str}" if any_new_marked else f"{total_count} faces recognized (attendance already marked)."
+    else:
+        msg = "Attendance was already marked for this class." if primary_student["already_marked"] else "Face Recognized"
+
+    return {
+        "matched": True,
+        "similarity": primary_student["similarity"],
+        "similarity_percent": primary_student["similarity_percent"],
+        "threshold": threshold,
+        "student": {
+            "id": primary_student["id"],
+            "name": primary_student["name"],
+            "roll": primary_student["roll"],
+            "department": primary_student["department"],
+            "current_semester": primary_student["current_semester"],
         },
-        "course": {"code": course.code, "title": course.title} if course else None,
-        "teacher_id": resolved_teacher_id,
-        "message": "Attendance was already marked for this class." if already_marked else "Face Recognized",
+        "students": students_output,
+        "attendance": {
+            "status": primary_record.status if primary_record else "present",
+            "marked_at": primary_record.marked_at.isoformat() if primary_record else now_dt.isoformat(),
+            "already_marked": primary_student["already_marked"],
+        },
+        "attendances": attendances_output,
+        "course": {"code": primary_course.code, "title": primary_course.title} if primary_course else None,
+        "teacher_id": primary_teacher_id,
+        "message": msg,
     }
 
 
