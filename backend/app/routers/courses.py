@@ -622,13 +622,19 @@ def teacher_attendance_history(
     session_groups = _class_session_groups(sessions)
 
     sessions_by_id = {class_session.id: class_session for class_session in sessions}
+    all_attendances = db.scalars(
+        select(Attendance).where(Attendance.session_id.in_(sessions_by_id))
+    ).all() if sessions_by_id else []
+    attended_session_ids = {attendance.session_id for attendance in all_attendances}
+
     course_session_counts = {}
     now = datetime.now()
     held_session_groups = [
         [
             class_session
             for class_session in group
-            if class_session.start_at <= now and (class_session.status or "").lower() != "cancelled"
+            if (class_session.status or "").lower() != "cancelled"
+            and (class_session.start_at <= now or class_session.id in attended_session_ids)
         ]
         for group in session_groups
     ]
@@ -637,9 +643,6 @@ def teacher_attendance_history(
         course_id = group[0].course_id
         course_session_counts[course_id] = course_session_counts.get(course_id, 0) + 1
 
-    all_attendances = db.scalars(
-        select(Attendance).where(Attendance.session_id.in_(sessions_by_id))
-    ).all() if sessions_by_id else []
     attendances_by_session = {}
     student_present_counts = {}
     for attendance in all_attendances:
@@ -772,6 +775,12 @@ def teacher_course_attendance_sheets(
         .order_by(ClassSession.start_at)
     ).all()
 
+    all_session_ids = {class_session.id for class_session in sessions}
+    attendances = db.scalars(
+        select(Attendance).where(Attendance.session_id.in_(all_session_ids))
+    ).all() if all_session_ids else []
+    attended_session_ids = {attendance.session_id for attendance in attendances}
+
     now = datetime.now()
     sessions_by_course = {}
     held_session_ids = set()
@@ -779,18 +788,16 @@ def teacher_course_attendance_sheets(
         held_group = [
             class_session
             for class_session in group
-            if class_session.start_at <= now and (class_session.status or "").lower() != "cancelled"
+            if (class_session.status or "").lower() != "cancelled"
+            and (class_session.start_at <= now or class_session.id in attended_session_ids)
         ]
         if held_group:
             sessions_by_course.setdefault(held_group[0].course_id, []).append(held_group)
             held_session_ids.update(class_session.id for class_session in held_group)
 
-    attendances = db.scalars(
-        select(Attendance).where(Attendance.session_id.in_(held_session_ids))
-    ).all() if held_session_ids else []
     present_by_session = {}
     for attendance in attendances:
-        if attendance.status in {"present", "late"}:
+        if attendance.session_id in held_session_ids and attendance.status in {"present", "late"}:
             present_by_session.setdefault(attendance.session_id, set()).add(attendance.student_id)
 
     sheets = []

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { BrowserQRCodeReader } from '@zxing/browser'
-import api from '../../lib/api'
+import api, { errorMessage } from '../../lib/api'
 
 // How often the liveness check polls (ms)
 const LIVENESS_POLL_MS = 180
@@ -220,8 +220,15 @@ export default function FaceLab({ kioskId = 'CSE' }) {
           timer = setTimeout(poll, LIVENESS_POLL_MS)
         }
         // liveness=true → auto-scan kicks in via the effect below
-      } catch {
-        if (!cancelled) timer = setTimeout(poll, 1000)
+      } catch (error) {
+        if (!cancelled) {
+          setLiveness({
+            human: false,
+            liveness: false,
+            message: `Liveness check failed. Retrying: ${errorMessage(error, 'Please keep your face visible.')}`,
+          })
+          timer = setTimeout(poll, 1000)
+        }
       } finally {
         inFlight = false
       }

@@ -340,19 +340,26 @@ def clear_routine_slots(
     db: Session = Depends(get_db),
     current_user: User = Depends(system_admin_only),
 ):
-    stmt = delete(ClassRoutine)
+    id_query = select(ClassRoutine.id)
     # Enforce dept scoping: admins can only clear their own dept
     scoped_dept = _dept_for_role(current_user)
     if scoped_dept:
-        stmt = stmt.where(ClassRoutine.department == scoped_dept)
+        id_query = id_query.where(ClassRoutine.department == scoped_dept)
     elif department and department != "All":
-        stmt = stmt.where(ClassRoutine.department == department)
+        id_query = id_query.where(ClassRoutine.department == department)
     if semester and semester != "All":
-        stmt = stmt.where(ClassRoutine.semester == semester)
+        id_query = id_query.where(ClassRoutine.semester == semester)
     if section and section != "All":
-        stmt = stmt.where(ClassRoutine.section == section)
+        id_query = id_query.where(ClassRoutine.section == section)
 
-    db.execute(stmt)
+    routine_ids = list(db.scalars(id_query).all())
+    if routine_ids:
+        db.execute(
+            delete(ClassScheduleChangeRequest).where(
+                ClassScheduleChangeRequest.routine_id.in_(routine_ids)
+            )
+        )
+        db.execute(delete(ClassRoutine).where(ClassRoutine.id.in_(routine_ids)))
     db.commit()
     return {"detail": "Selected routine slots cleared."}
 
@@ -370,6 +377,11 @@ def delete_routine_slot(
     scoped_dept = _dept_for_role(current_user)
     if scoped_dept and slot.department != scoped_dept:
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"You can only manage routines for the {scoped_dept} department.")
+    db.execute(
+        delete(ClassScheduleChangeRequest).where(
+            ClassScheduleChangeRequest.routine_id == routine_id
+        )
+    )
     db.delete(slot)
     db.commit()
     return {"detail": "Routine slot deleted successfully."}
@@ -1454,12 +1466,16 @@ def decide_schedule_change_request(
                     ClassSession.start_at >= day_start,
                     ClassSession.start_at < next_day,
                     ClassSession.status != "cancelled",
-                    (ClassSession.teacher_id == request.teacher_id) | (ClassSession.teacher_id.is_(None)),
                 )
             ).all()
+            original_start = time_to_minutes(routine.start_time)
             for sess in sessions:
+                session_start = sess.start_at.hour * 60 + sess.start_at.minute
+                if session_start not in {start_min, original_start}:
+                    continue
                 sess.start_at = new_start
                 sess.end_at = max(new_end, new_start)
+                sess.teacher_id = request.teacher_id
 
     db.commit()
     db.refresh(request)

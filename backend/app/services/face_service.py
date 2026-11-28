@@ -315,16 +315,22 @@ class FaceService:
                     })
                     state["count"] = state.get("count", 0) + 1
                     state["last_seen_at"] = now
-                    liveness = (now - state["started_at"] >= self.LIVENESS_READY_SECONDS) or (state["count"] >= 2)
-                    if liveness and state.get("live_embedding") is None:
+                    liveness_ready = (now - state["started_at"] >= self.LIVENESS_READY_SECONDS) or (state["count"] >= 2)
+                    if liveness_ready and state.get("live_embedding") is None:
                         state["live_embedding"] = self.extract_embedding(frame)
-                        liveness = state["live_embedding"] is not None
+                    liveness = liveness_ready and state.get("live_embedding") is not None
+                    if liveness:
+                        message = "Live human verified. You can scan now."
+                    elif liveness_ready:
+                        message = "Face detected, but it could not be read clearly. Improve lighting and center your face."
+                    else:
+                        message = "Face detected. Keep looking at the camera..."
                     return {
                         "human": True,
                         "blink_detected": True,
                         "movement_detected": True,
                         "liveness": liveness,
-                        "message": "Live human verified. You can scan now." if liveness else "Face detected. Keep still for verification...",
+                        "message": message,
                     }
 
                 landmarks = result.multi_face_landmarks[0].landmark
@@ -368,16 +374,20 @@ class FaceService:
                 state["last_seen_at"] = now
                 state["count"] = state.get("count", 0) + 1
 
-                liveness = self.should_mark_liveness_ready(state, now)
-                if liveness and state.get("live_embedding") is None:
+                liveness_ready = self.should_mark_liveness_ready(state, now)
+                if liveness_ready and state.get("live_embedding") is None:
                     state["live_embedding"] = self.extract_embedding(frame)
-                    liveness = state["live_embedding"] is not None
+                liveness = liveness_ready and state.get("live_embedding") is not None
                 if liveness:
                     message = "Live human verified. Scanning face..."
-                elif state["blink"] or state["movement"]:
-                    message = "Face verified. Keep looking at the camera..."
+                elif liveness_ready:
+                    message = "Face detected, but it could not be read clearly. Improve lighting and center your face."
+                elif state["blink"]:
+                    message = "Blink detected. Keep looking at the camera..."
+                elif state["movement"]:
+                    message = "Head movement detected. Keep looking at the camera..."
                 else:
-                    message = "Looking at camera. Verifying..."
+                    message = "Face detected. Blink once or move your head slightly."
                 return {
                     "human": True,
                     "blink_detected": state["blink"],
@@ -411,17 +421,23 @@ class FaceService:
         })
         state["count"] = state.get("count", 0) + 1
         state["last_seen_at"] = now
-        liveness = (now - state["started_at"] >= self.LIVENESS_READY_SECONDS) or (state["count"] >= 3)
-        if liveness and state.get("live_embedding") is None:
+        liveness_ready = (now - state["started_at"] >= self.LIVENESS_READY_SECONDS) or (state["count"] >= 3)
+        if liveness_ready and state.get("live_embedding") is None:
             state["live_embedding"] = self.extract_embedding(frame)
-            liveness = state["live_embedding"] is not None
+        liveness = liveness_ready and state.get("live_embedding") is not None
+        if liveness:
+            message = "Live human verified. You can scan now."
+        elif liveness_ready:
+            message = "Face detected, but it could not be read clearly. Improve lighting and center your face."
+        else:
+            message = "Face detected. Keep looking at the camera..."
 
         return {
             "human": True,
             "blink_detected": True,
             "movement_detected": True,
             "liveness": liveness,
-            "message": "Live human verified. You can scan now." if liveness else "Face detected. Keep still for verification...",
+            "message": message,
         }
 
     def consume_liveness(self, session_key: str) -> np.ndarray | None:

@@ -31,6 +31,7 @@ from ..schedule_utils import approved_schedule_changes, effective_routine_times
 from ..models import (
     Attendance,
     ClassRoutine,
+    ClassScheduleChangeRequest,
     ClassSession,
     ConsumedAttendanceQr,
     ConsumedKioskQrFallback,
@@ -397,12 +398,23 @@ def _resolve_active_class_for_student(db: Session, student: User, now: datetime)
     return selected_course, teacher_id, selected_routine
 
 
-def _routine_start_at(routine: ClassRoutine | None, now: datetime) -> datetime | None:
-    if routine is None or not routine.start_time:
+def _routine_start_at(
+    routine: ClassRoutine | None,
+    now: datetime,
+    schedule_changes: dict[int, ClassScheduleChangeRequest] | None = None,
+) -> datetime | None:
+    if routine is None:
+        return None
+    start_time = (
+        effective_routine_times(routine, schedule_changes)[0]
+        if schedule_changes is not None
+        else routine.start_time
+    )
+    if not start_time:
         return None
     for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p"):
         try:
-            dt = datetime.strptime(str(routine.start_time).strip().replace(".", ":"), fmt)
+            dt = datetime.strptime(str(start_time).strip().replace(".", ":"), fmt)
             return datetime.combine(now.date(), dt.time())
         except ValueError:
             pass
@@ -415,6 +427,7 @@ def _find_existing_session_for_routine(
     teacher_id: int | None,
     now: datetime,
     routine: ClassRoutine | None,
+    schedule_changes: dict[int, ClassScheduleChangeRequest] | None = None,
 ) -> ClassSession | None:
     day_start = datetime.combine(now.date(), datetime.min.time())
     next_day = day_start + timedelta(days=1)
@@ -428,7 +441,9 @@ def _find_existing_session_for_routine(
         )
         .order_by(ClassSession.start_at, ClassSession.id)
     ).all()
-    routine_start_at = _routine_start_at(routine, now)
+    if schedule_changes is None:
+        schedule_changes = approved_schedule_changes(db, now.date())
+    routine_start_at = _routine_start_at(routine, now, schedule_changes)
     if routine_start_at is not None:
         return next(
             (
@@ -444,7 +459,15 @@ def _find_existing_session_for_routine(
     )
 
 
-def _get_or_create_session_for_routine(db: Session, course: Course, teacher_id: int | None, now: datetime, student_count: int = 1, routine: ClassRoutine | None = None) -> ClassSession:
+def _get_or_create_session_for_routine(
+    db: Session,
+    course: Course,
+    teacher_id: int | None,
+    now: datetime,
+    student_count: int = 1,
+    routine: ClassRoutine | None = None,
+    schedule_changes: dict[int, ClassScheduleChangeRequest] | None = None,
+) -> ClassSession:
     with _kiosk_session_lock:
         matched_routine = routine
         if matched_routine is None:
@@ -456,11 +479,15 @@ def _get_or_create_session_for_routine(db: Session, course: Course, teacher_id: 
                 )
             )
 
-        existing = _find_existing_session_for_routine(db, course, teacher_id, now, matched_routine)
+        if schedule_changes is None:
+            schedule_changes = approved_schedule_changes(db, now.date())
+        existing = _find_existing_session_for_routine(
+            db, course, teacher_id, now, matched_routine, schedule_changes
+        )
         if existing is not None:
             return existing
 
-        session_start_at = _routine_start_at(matched_routine, now) or now
+        session_start_at = _routine_start_at(matched_routine, now, schedule_changes) or now
 
         session = ClassSession(
             course_id=course.id,
@@ -864,11 +891,17 @@ def open_kiosk(
     now = datetime.now()
     if payload.refresh_only:
         class_session = _find_existing_session_for_routine(
-            db, course, teacher_id, now, selected_routine
+            db, course, teacher_id, now, selected_routine, schedule_changes
         )
     else:
         class_session = _get_or_create_session_for_routine(
-            db, course, teacher_id, now, student_count=len(students), routine=selected_routine
+            db,
+            course,
+            teacher_id,
+            now,
+            student_count=len(students),
+            routine=selected_routine,
+            schedule_changes=schedule_changes,
         )
         class_session.status = "completed"
         class_session.end_at = max(class_session.start_at, now)
