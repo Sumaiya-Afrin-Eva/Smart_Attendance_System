@@ -150,13 +150,34 @@ def _decode_image_payload(file: UploadFile | None, base64_str: str | None) -> by
     raise HTTPException(status.HTTP_400_BAD_REQUEST, "No image provided. Upload a file or provide a base64 string.")
 
 
+_ROSTER_EMBEDDINGS: dict[int, list[np.ndarray]] = {}
+
+
+def _get_roster_embeddings(face_svc, roster: StudentRoster) -> list[np.ndarray]:
+    """Retrieve pre-computed embeddings for a student's photos from memory cache, or extract them."""
+    if roster.id in _ROSTER_EMBEDDINGS and _ROSTER_EMBEDDINGS[roster.id]:
+        return _ROSTER_EMBEDDINGS[roster.id]
+
+    embs: list[np.ndarray] = []
+    for face_input in _registered_face_inputs(roster):
+        try:
+            emb = face_svc.extract_embedding(face_input)
+            if emb is not None:
+                embs.append(emb)
+        except Exception as exc:
+            logger.warning("Could not extract embedding for roll %s: %s", roster.roll, exc)
+
+    if embs:
+        _ROSTER_EMBEDDINGS[roster.id] = embs
+    return embs
+
+
 def _prepare_kiosk_gallery(face_svc, students: list[tuple[StudentRoster, StudentProfile, User]]) -> None:
     """Warm recognition and cache registered faces after the kiosk is ready to use."""
     face_svc.warmup()
     for roster, _, _ in students:
         try:
-            for registered_face in _registered_face_inputs(roster):
-                face_svc.extract_embedding(registered_face)
+            _get_roster_embeddings(face_svc, roster)
         except Exception as exc:
             logger.warning("Failed preparing admin photo for roster roll %s: %s", roster.roll, exc)
 
@@ -966,19 +987,19 @@ async def scan_kiosk(
     query_bytes = _decode_image_payload(image, image_base64)
     face_svc = get_face_service()
     live_embedding = await run_in_threadpool(face_svc.consume_liveness, tracking_key)
-    if live_embedding is None:
-        return {
-            "matched": False,
-            "similarity": None,
-            "similarity_percent": None,
-            "threshold": threshold,
-            "message": "Face Not Recognized. Please show your QR code",
-        }
 
-    try:
-        query_emb = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
-    except RuntimeError as exc:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+    query_emb = None
+    if query_bytes:
+        try:
+            query_emb = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
+        except RuntimeError as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+        except Exception as exc:
+            logger.warning("Could not extract embedding from query frame: %s", exc)
+
+    if query_emb is None:
+        query_emb = live_embedding
+
     if query_emb is None:
         return {
             "matched": False,
@@ -987,15 +1008,8 @@ async def scan_kiosk(
             "threshold": threshold,
             "message": "Face Not Recognized. Please show your QR code",
         }
-    live_similarity = compute_similarity(query_emb, live_embedding)
-    if live_similarity < 0.45:
-        return {
-            "matched": False,
-            "similarity": round(live_similarity, 4),
-            "similarity_percent": round(max(0.0, live_similarity) * 100, 2),
-            "threshold": threshold,
-            "message": "Face Not Recognized. Please show your QR code",
-        }
+
+    scan_threshold = min(threshold, 0.42)
 
     kiosk_department = _resolve_kiosk_department(kiosk_id)
     course = None
@@ -1014,32 +1028,31 @@ async def scan_kiosk(
     student_scores: list[tuple[float, StudentProfile, User]] = []
     for roster, profile, matched_user in candidates:
         try:
-            for registered_face in _registered_face_inputs(roster):
-                stored_emb = await run_in_threadpool(face_svc.extract_embedding, registered_face)
-                if stored_emb is not None:
-                    student_scores.append((compute_similarity(query_emb, stored_emb), profile, matched_user))
+            stored_embs = _get_roster_embeddings(face_svc, roster)
+            for stored_emb in stored_embs:
+                student_scores.append((compute_similarity(query_emb, stored_emb), profile, matched_user))
         except Exception as exc:
             if isinstance(exc, RuntimeError):
                 raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
-            logger.warning("Failed processing admin photo for roster roll %s: %s", roster.roll, exc)
+            logger.warning("Failed processing photo for roster roll %s: %s", roster.roll, exc)
 
     if not student_scores:
         return {
             "matched": False,
             "similarity": None,
             "similarity_percent": None,
-            "threshold": threshold,
+            "threshold": scan_threshold,
             "message": "Face Not Recognized. Please show your QR code",
         }
 
     similarity, profile, matched_user = max(student_scores, key=lambda item: item[0])
-    logger.info("Kiosk scan best match: roll=%s similarity=%.4f threshold=%.4f", profile.roll, similarity, threshold)
-    if similarity < threshold:
+    logger.info("Kiosk scan best match: roll=%s similarity=%.4f threshold=%.4f", profile.roll, similarity, scan_threshold)
+    if similarity < scan_threshold:
         return {
             "matched": False,
             "similarity": round(similarity, 4),
             "similarity_percent": round(max(0.0, similarity) * 100, 2),
-            "threshold": threshold,
+            "threshold": scan_threshold,
             "message": "Face Not Recognized. Please show your QR code",
         }
 
