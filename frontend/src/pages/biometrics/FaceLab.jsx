@@ -222,7 +222,7 @@ export default function FaceLab({ kioskId = 'CSE' }) {
     if (!videoRef.current || !cameraReady) return
     setPhase('scanning')
     try {
-      const frame = await captureFrame(videoRef.current, 320, 0.75)
+      const frame = await captureFrame(videoRef.current, 640, 0.85)
       const fd = new FormData()
       fd.append('kiosk_id', normalizedKioskId)
       if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)

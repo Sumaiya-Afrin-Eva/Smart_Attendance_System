@@ -173,6 +173,34 @@ export default function FaceEnrollment() {
       const formData = new FormData()
       samples.forEach((sample) => formData.append('photos', sample))
       await api.post('/students/me/face-samples', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+
+      // Dual-storage: ensure photos are also stored in local Mac folder so Mac kiosk works offline/locally
+      try {
+        const toBase64 = (file) => new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result)
+          reader.onerror = reject
+          reader.readAsDataURL(file)
+        })
+
+        const base64List = await Promise.all(samples.map(toBase64))
+        await fetch('/_local_sync/save-face-samples', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            department: profile?.department || 'CSE',
+            roll: profile?.roll,
+            full_name: profile?.full_name,
+            images: base64List.map((dataUrl, idx) => ({
+              step: captureSteps[idx]?.name || `step_${idx}`,
+              data: dataUrl,
+            })),
+          }),
+        })
+      } catch (syncErr) {
+        console.warn('Local Mac photo sync note:', syncErr)
+      }
+
       await refresh()
       navigate('/student', { replace: true })
     } catch (error) {

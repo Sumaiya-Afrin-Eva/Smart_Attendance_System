@@ -503,7 +503,7 @@ class FaceService:
         elif not state.get("closed") and ear > baseline * 0.85:
             state["open_ear"] = baseline * 0.94 + ear * 0.06
 
-    def extract_all_embeddings(self, image: Union[str, Path, bytes, np.ndarray]) -> list[dict]:
+    def extract_all_faces(self, image: Union[str, Path, bytes, np.ndarray]) -> list[dict]:
         """Extract embeddings and bounding boxes for all faces found in the image."""
         faces = self.detect_faces(image)
         results = []

@@ -1003,11 +1003,15 @@ async def scan_kiosk(
     if query_bytes:
         try:
             if hasattr(face_svc, "extract_all_embeddings"):
-                query_embs = await run_in_threadpool(face_svc.extract_all_embeddings, query_bytes)
+                raw_list = await run_in_threadpool(face_svc.extract_all_embeddings, query_bytes)
+                for item in raw_list:
+                    emb = item.get("embedding") if isinstance(item, dict) else item
+                    if emb is not None and getattr(emb, "ndim", 0) == 1 and len(emb) >= 2:
+                        query_embs.append(np.asarray(emb, dtype=np.float32))
             else:
                 emb = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
                 if emb is not None:
-                    query_embs = [emb]
+                    query_embs = [np.asarray(emb, dtype=np.float32)]
         except RuntimeError as exc:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
         except Exception as exc:
@@ -1017,12 +1021,12 @@ async def scan_kiosk(
         try:
             single = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
             if single is not None:
-                query_embs = [single]
+                query_embs = [np.asarray(single, dtype=np.float32)]
         except Exception:
             pass
 
     if not query_embs and live_embedding is not None and getattr(live_embedding, "ndim", 0) == 1 and len(live_embedding) > 10:
-        query_embs = [live_embedding]
+        query_embs = [np.asarray(live_embedding, dtype=np.float32)]
 
     if not query_embs:
         return {
@@ -1039,7 +1043,7 @@ async def scan_kiosk(
         and len(live_embedding) >= 2
     ):
         matched_live = any(
-            compute_similarity(q, live_embedding) >= 0.40
+            compute_similarity(q, live_embedding) >= 0.35
             for q in query_embs
             if getattr(q, "ndim", 0) == 1 and len(q) == len(live_embedding)
         )
