@@ -98,8 +98,14 @@ def _get_teacher_assigned_courses(db: Session, user: User) -> list[Course]:
         courses_by_id[c.id] = c
 
     # Routine schedule matching using robust teacher matcher
+    teacher_prof = db.scalar(select(TeacherProfile).where(TeacherProfile.user_id == user.id))
+    teacher_dept = (teacher_prof.department if teacher_prof else "").strip().upper()
+
     assigned_codes = {c.code.strip().upper() for c in courses_by_id.values() if c.code}
-    routines = db.scalars(select(ClassRoutine)).all()
+    query = select(ClassRoutine)
+    if teacher_dept:
+        query = query.where(ClassRoutine.department == teacher_dept)
+    routines = db.scalars(query).all()
     routine_codes = set()
     for r in routines:
         if r.course_code and teacher_matches_routine_slot(user, r, assigned_codes):
@@ -456,8 +462,14 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
 @router.get("/teacher/courses")
 def teacher_courses(db: Session = Depends(get_db), user: User = Depends(teacher_only)):
     courses = _get_teacher_assigned_courses(db, user)
+    teacher_prof = db.scalar(select(TeacherProfile).where(TeacherProfile.user_id == user.id))
+    teacher_dept = (teacher_prof.department if teacher_prof else "").strip().upper()
+
     assigned_codes = {c.code.strip().upper() for c in courses if c.code}
-    routines = db.scalars(select(ClassRoutine)).all()
+    query = select(ClassRoutine)
+    if teacher_dept:
+        query = query.where(ClassRoutine.department == teacher_dept)
+    routines = db.scalars(query).all()
 
     res = []
     for c in courses:

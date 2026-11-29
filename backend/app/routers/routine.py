@@ -873,10 +873,7 @@ def _parse_matrix_routine(
                 if any(s["day"] == day and s["start_time"] == st and s["course_code"] == code_base for s in slots):
                     continue
 
-                m_dept_in_line = re.search(r"\(([A-Za-z]+)\)", line)
-                target_dept = m_dept_in_line.group(1).upper() if m_dept_in_line else dept_code
-                if scoped_dept and target_dept != scoped_dept:
-                    target_dept = scoped_dept
+                target_dept = dept_target
                 sem = f"{num_code[0]}-{num_code[1]}" if num_code[0] in "1234" and num_code[1] in "12" else "1-1"
                 c_type = "Lab" if int(num_code) % 2 == 0 else "Theory"
 

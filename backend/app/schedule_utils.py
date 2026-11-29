@@ -4,7 +4,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import ClassRoutine, ClassScheduleChangeRequest, Course, CourseTeacher, User
+from .models import ClassRoutine, ClassScheduleChangeRequest, Course, CourseTeacher, TeacherProfile, User
 
 
 def time_to_minutes(value: str | None) -> int | None:
@@ -181,6 +181,9 @@ def teacher_matches_routine_slot(
 
 
 def teacher_routine_slots(db: Session, user: User) -> list[ClassRoutine]:
+    teacher_prof = db.scalar(select(TeacherProfile).where(TeacherProfile.user_id == user.id))
+    teacher_dept = (teacher_prof.department if teacher_prof else "").strip().upper()
+
     ct_courses = db.scalars(
         select(Course.code).join(CourseTeacher, CourseTeacher.course_id == Course.id).where(
             CourseTeacher.teacher_id == user.id
@@ -189,7 +192,10 @@ def teacher_routine_slots(db: Session, user: User) -> list[ClassRoutine]:
     direct_courses = db.scalars(select(Course.code).where(Course.teacher_id == user.id)).all()
     assigned_codes = {c.strip().upper() for c in (set(ct_courses) | set(direct_courses)) if c}
 
-    slots = db.scalars(select(ClassRoutine)).all()
+    query = select(ClassRoutine)
+    if teacher_dept:
+        query = query.where(ClassRoutine.department == teacher_dept)
+    slots = db.scalars(query).all()
     seen_keys: set[tuple] = set()
     teacher_slots: list[ClassRoutine] = []
 
