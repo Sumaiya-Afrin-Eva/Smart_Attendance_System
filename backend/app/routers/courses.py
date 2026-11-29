@@ -70,12 +70,22 @@ def _admin_course_out(course: Course) -> dict:
     data["teacher_id"] = course.teacher_id
     assignments = []
     if hasattr(course, "teacher_assignments") and course.teacher_assignments:
+        teacher_map = {}
         for a in course.teacher_assignments:
-            assignments.append({
-                "teacherId": str(a.teacher_id),
-                "section": a.section or "Both",
-                "role": a.role or "Instructor"
-            })
+            t_id = str(a.teacher_id)
+            sec = a.section or "Both"
+            role = a.role or "Instructor"
+            if t_id not in teacher_map:
+                teacher_map[t_id] = {
+                    "teacherId": t_id,
+                    "section": sec,
+                    "role": role,
+                }
+            else:
+                existing_sec = teacher_map[t_id]["section"]
+                if existing_sec != sec:
+                    teacher_map[t_id]["section"] = "Both"
+        assignments = list(teacher_map.values())
     data["assignments"] = assignments
     return data
 

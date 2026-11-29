@@ -315,21 +315,30 @@ def sync_course_teachers_from_routine() -> None:
 
     try:
         with SessionLocal() as db:
-            seen = set()
+            seen = {}
             for ct in db.scalars(select(CourseTeacher)).all():
-                seen.add((ct.course_id, ct.teacher_id, ct.section))
+                key = (ct.course_id, ct.teacher_id)
+                if key not in seen:
+                    seen[key] = ct
+                else:
+                    if seen[key].section != ct.section and seen[key].section != "Both":
+                        seen[key].section = "Both"
+                    db.delete(ct)
 
             # 1. Existing Course.teacher_id
             for c in db.scalars(select(Course).where(Course.teacher_id.isnot(None))).all():
-                key = (c.id, c.teacher_id, c.section or "Both")
+                key = (c.id, c.teacher_id)
                 if key not in seen:
-                    db.add(CourseTeacher(
+                    new_ct = CourseTeacher(
                         course_id=c.id,
                         teacher_id=c.teacher_id,
                         section=c.section or "Both",
                         role="Primary Instructor"
-                    ))
-                    seen.add(key)
+                    )
+                    db.add(new_ct)
+                    seen[key] = new_ct
+                elif c.section and seen[key].section != c.section and seen[key].section != "Both":
+                    seen[key].section = "Both"
 
             # 2. Existing ClassRoutine slots
             for r in db.scalars(select(ClassRoutine)).all():
@@ -361,15 +370,18 @@ def sync_course_teachers_from_routine() -> None:
                     matched_c.teacher_id = teacher_user.id
 
                 sec = r.section or "Both"
-                key = (matched_c.id, teacher_user.id, sec)
+                key = (matched_c.id, teacher_user.id)
                 if key not in seen:
-                    db.add(CourseTeacher(
+                    new_ct = CourseTeacher(
                         course_id=matched_c.id,
                         teacher_id=teacher_user.id,
                         section=sec,
                         role="Instructor"
-                    ))
-                    seen.add(key)
+                    )
+                    db.add(new_ct)
+                    seen[key] = new_ct
+                elif seen[key].section != sec and seen[key].section != "Both":
+                    seen[key].section = "Both"
 
             db.commit()
     except Exception as e:

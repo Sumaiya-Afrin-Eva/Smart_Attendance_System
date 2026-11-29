@@ -1,8 +1,13 @@
 import { useEffect, useState, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Check, Plus, Search, ChevronDown, X } from 'lucide-react'
+import { Check, Plus, Search, ChevronDown, X, RotateCcw } from 'lucide-react'
 import api, { errorMessage, getScopedDept } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+
+const DEFAULT_ASSIGNMENTS = [
+  { teacherId: '', section: 'Both' },
+  { teacherId: '', section: 'Both' }
+]
 
 function fuzzyMatch(str, pattern) {
   const s = str.toLowerCase()
@@ -95,11 +100,9 @@ export default function AdminTeacherAssignment() {
   const [courses, setCourses] = useState([])
   const [teachers, setTeachers] = useState([])
   const [selectedCourseId, setSelectedCourseId] = useState(searchParams.get('courseId') || '')
-  const [assignments, setAssignments] = useState([
-    { teacherId: '', section: 'Both' },
-    { teacherId: '', section: 'Both' }
-  ])
+  const [assignments, setAssignments] = useState(DEFAULT_ASSIGNMENTS)
   const [savedAssignment, setSavedAssignment] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState('')
   const [loading, setLoading] = useState(true)
   const { user } = useAuth()
@@ -116,36 +119,63 @@ export default function AdminTeacherAssignment() {
 
   const filteredCourses = courses.filter(c => c.semester === `${year}-${term}` && c.department === department)
 
-  // When year, term, department, or session changes, auto-select first available course if the current one isn't valid
+  // Populate assignments when selectedCourseId changes or when courses load with an initial courseId
   useEffect(() => {
-    if (filteredCourses.length > 0) {
-      const initialCourseId = searchParams.get('courseId')
-      let targetCourse = filteredCourses.find(c => String(c.id) === selectedCourseId)
-      
-      // If we don't have a valid selected course, try the initialCourseId or default to the first one
-      if (!targetCourse) {
-        targetCourse = filteredCourses.find(c => String(c.id) === initialCourseId) || filteredCourses[0]
-        setSelectedCourseId(String(targetCourse.id))
-        if (targetCourse.assignments && targetCourse.assignments.length > 0) {
-          setAssignments(targetCourse.assignments.map(a => ({
-            teacherId: String(a.teacherId || ''),
-            section: a.section || 'Both'
-          })))
-        } else {
-          setAssignments([
-            { teacherId: targetCourse.teacher_id ? String(targetCourse.teacher_id) : '', section: 'Both' },
-            { teacherId: '', section: 'Both' }
-          ])
+    if (!selectedCourseId) {
+      setAssignments(DEFAULT_ASSIGNMENTS)
+      return
+    }
+
+    const course = courses.find(c => String(c.id) === String(selectedCourseId))
+    if (!course) {
+      setSelectedCourseId('')
+      setAssignments(DEFAULT_ASSIGNMENTS)
+      return
+    }
+
+    // Auto-align year/term/department to match the selected course if arrived via link/query params
+    if (course.semester) {
+      const [y, t] = course.semester.split('-')
+      if (y && t && (y !== year || t !== term)) {
+        setYear(y)
+        setTerm(t)
+      }
+    }
+    if (course.department && course.department !== department) {
+      setDepartment(course.department)
+    }
+
+    if (course.assignments && course.assignments.length > 0) {
+      // Consolidate duplicate teacher assignments (e.g. section A + section B -> Both)
+      const teacherMap = {}
+      for (const a of course.assignments) {
+        const tId = String(a.teacherId || '')
+        if (!tId) continue
+        const sec = a.section || 'Both'
+        if (!teacherMap[tId]) {
+          teacherMap[tId] = { teacherId: tId, section: sec }
+        } else if (teacherMap[tId].section !== sec) {
+          teacherMap[tId].section = 'Both'
         }
       }
-    } else {
-      setSelectedCourseId('')
+      const uniqueAssignments = Object.values(teacherMap)
+      if (uniqueAssignments.length > 0) {
+        while (uniqueAssignments.length < 2) {
+          uniqueAssignments.push({ teacherId: '', section: 'Both' })
+        }
+        setAssignments(uniqueAssignments)
+      } else {
+        setAssignments(DEFAULT_ASSIGNMENTS)
+      }
+    } else if (course.teacher_id) {
       setAssignments([
-        { teacherId: '', section: 'Both' },
+        { teacherId: String(course.teacher_id), section: course.section || 'Both' },
         { teacherId: '', section: 'Both' }
       ])
+    } else {
+      setAssignments(DEFAULT_ASSIGNMENTS)
     }
-  }, [year, term, department, session, courses])
+  }, [selectedCourseId, courses])
 
   useEffect(() => {
     async function loadData() {
@@ -166,9 +196,43 @@ export default function AdminTeacherAssignment() {
     loadData()
   }, [])
 
+  const handleYearChange = (newYear) => {
+    setYear(newYear)
+    const targetFiltered = courses.filter(c => c.semester === `${newYear}-${term}` && c.department === department)
+    if (!targetFiltered.some(c => String(c.id) === String(selectedCourseId))) {
+      setSelectedCourseId('')
+      setAssignments(DEFAULT_ASSIGNMENTS)
+    }
+  }
+
+  const handleTermChange = (newTerm) => {
+    setTerm(newTerm)
+    const targetFiltered = courses.filter(c => c.semester === `${year}-${newTerm}` && c.department === department)
+    if (!targetFiltered.some(c => String(c.id) === String(selectedCourseId))) {
+      setSelectedCourseId('')
+      setAssignments(DEFAULT_ASSIGNMENTS)
+    }
+  }
+
+  const handleDeptChange = (newDept) => {
+    setDepartment(newDept)
+    const targetFiltered = courses.filter(c => c.semester === `${year}-${term}` && c.department === newDept)
+    if (!targetFiltered.some(c => String(c.id) === String(selectedCourseId))) {
+      setSelectedCourseId('')
+      setAssignments(DEFAULT_ASSIGNMENTS)
+    }
+  }
+
+  const handleResetToDefault = () => {
+    setSelectedCourseId('')
+    setAssignments(DEFAULT_ASSIGNMENTS)
+    setNotice('')
+  }
+
   const handleTeacherAssignment = async () => {
     if (!selectedCourseId) return
     setNotice('')
+    setSaving(true)
     try {
       const validAssignments = assignments
         .filter(a => a.teacherId)
@@ -185,11 +249,15 @@ export default function AdminTeacherAssignment() {
       setCourses((current) => current.map((course) => String(course.id) === String(data.id) ? data : course))
       
       setSavedAssignment(true)
+      setNotice('Teacher assignment saved successfully.')
       setTimeout(() => {
         setSavedAssignment(false)
-      }, 2000)
+        setNotice('')
+      }, 3000)
     } catch (error) {
       setNotice(errorMessage(error, 'Teacher assignment failed.'))
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -226,7 +294,7 @@ export default function AdminTeacherAssignment() {
                 <div className="flex gap-2">
                   {[1, 2, 3, 4].map(y => (
                     <label key={y} className="flex items-center justify-center gap-1.5 rounded-xl border border-stone-200 bg-stone-50 px-4 py-2 cursor-pointer hover:bg-stone-100 transition-colors">
-                      <input type="radio" name="year" value={y} checked={String(year) === String(y)} onChange={(e) => setYear(e.target.value)} className="text-emerald-600 focus:ring-emerald-500" />
+                      <input type="radio" name="year" value={y} checked={String(year) === String(y)} onChange={(e) => handleYearChange(e.target.value)} className="text-emerald-600 focus:ring-emerald-500" />
                       <span className="text-sm font-medium text-stone-700">{y}</span>
                     </label>
                   ))}
@@ -238,7 +306,7 @@ export default function AdminTeacherAssignment() {
                 <div className="flex gap-2">
                   {[1, 2].map(t => (
                     <label key={t} className="flex items-center justify-center gap-1.5 rounded-xl border border-stone-200 bg-stone-50 px-4 py-2 cursor-pointer hover:bg-stone-100 transition-colors">
-                      <input type="radio" name="term" value={t} checked={String(term) === String(t)} onChange={(e) => setTerm(e.target.value)} className="text-emerald-600 focus:ring-emerald-500" />
+                      <input type="radio" name="term" value={t} checked={String(term) === String(t)} onChange={(e) => handleTermChange(e.target.value)} className="text-emerald-600 focus:ring-emerald-500" />
                       <span className="text-sm font-medium text-stone-700">{t}</span>
                     </label>
                   ))}
@@ -260,7 +328,7 @@ export default function AdminTeacherAssignment() {
                   {scopedDept}
                 </div>
               ) : (
-                <select value={department} onChange={(e) => setDepartment(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
+                <select value={department} onChange={(e) => handleDeptChange(e.target.value)} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400">
                   {departments.map((dept) => <option key={dept} value={dept}>{dept}</option>)}
                 </select>
               )}
@@ -268,23 +336,18 @@ export default function AdminTeacherAssignment() {
 
             <label className="space-y-1.5 block">
               <span className="text-xs font-semibold uppercase tracking-[0.2em] text-stone-500">Course</span>
-              <select value={selectedCourseId} onChange={(event) => {
-                const value = event.target.value
-                setSelectedCourseId(value)
-                const course = courses.find((item) => String(item.id) === String(value))
-                if (course?.assignments && course.assignments.length > 0) {
-                  setAssignments(course.assignments.map(a => ({
-                    teacherId: String(a.teacherId || ''),
-                    section: a.section || 'Both'
-                  })))
-                } else {
-                  setAssignments([
-                    { teacherId: course?.teacher_id ? String(course.teacher_id) : '', section: 'Both' },
-                    { teacherId: '', section: 'Both' }
-                  ])
-                }
-              }} className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400 disabled:opacity-60" disabled={filteredCourses.length === 0}>
-                {filteredCourses.length === 0 ? <option value="">No courses for {year}-{term}</option> : filteredCourses.map((course) => <option key={course.id} value={course.id}>{course.code} - {course.title}</option>)}
+              <select 
+                value={selectedCourseId} 
+                onChange={(event) => setSelectedCourseId(event.target.value)} 
+                className="w-full rounded-xl border border-stone-200 bg-stone-50 px-3 py-2.5 outline-none focus:border-emerald-400 disabled:opacity-60" 
+                disabled={filteredCourses.length === 0}
+              >
+                <option value="">{filteredCourses.length === 0 ? `No courses for ${year}-${term}` : 'Select a course'}</option>
+                {filteredCourses.map((course) => (
+                  <option key={course.id} value={course.id}>
+                    {course.code} - {course.title}
+                  </option>
+                ))}
               </select>
               </label>
             </div>
@@ -293,6 +356,11 @@ export default function AdminTeacherAssignment() {
             <div className="space-y-4">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="font-display text-2xl font-bold text-stone-900">Teacher Information</h3>
+                {!selectedCourseId && (
+                  <span className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800 ring-1 ring-amber-200">
+                    Default UI (No course selected)
+                  </span>
+                )}
               </div>
               <div className="rounded-2xl border border-stone-200 bg-white p-5 shadow-2xs space-y-6">
                 <label className="space-y-1.5 block max-w-[200px]">
@@ -368,9 +436,34 @@ export default function AdminTeacherAssignment() {
               ))}
             </div>
 
-            <button onClick={handleTeacherAssignment} className={`mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-200 ${savedAssignment ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-stone-900 hover:bg-stone-700'}`}>
-              <Check size={16} /> {savedAssignment ? 'Saved!' : 'Save teacher assignment'}
+            <div className="mt-4 flex flex-col sm:flex-row items-center gap-3">
+              <button
+                type="button"
+                onClick={handleResetToDefault}
+                className="inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-xl border border-stone-200 bg-stone-100 px-5 py-2.5 text-sm font-semibold text-stone-700 hover:bg-stone-200 transition-colors cursor-pointer"
+                title="Reset form to default unassigned view"
+              >
+                <RotateCcw size={16} /> Reset
               </button>
+              <button
+                type="button"
+                onClick={handleTeacherAssignment}
+                disabled={!selectedCourseId || saving}
+                className={`inline-flex w-full sm:flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-colors duration-200 ${
+                  !selectedCourseId
+                    ? 'bg-stone-300 text-stone-500 cursor-not-allowed'
+                    : savedAssignment
+                    ? 'bg-emerald-600 hover:bg-emerald-700 cursor-pointer'
+                    : 'bg-stone-900 hover:bg-stone-700 cursor-pointer'
+                }`}
+                title={!selectedCourseId ? 'Select a course first to save assignments' : undefined}
+              >
+                <Check size={16} /> {savedAssignment ? 'Saved!' : saving ? 'Saving...' : 'Save teacher assignment'}
+              </button>
+            </div>
+            {!selectedCourseId && (
+              <p className="text-xs text-stone-400 text-center sm:text-left">Please select a course above to assign teachers and save.</p>
+            )}
               </div>
             </div>
           </div>

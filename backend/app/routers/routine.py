@@ -274,8 +274,7 @@ def create_routine_slot(
                 c_obj.teacher_id = t_user.id
             ct = db.scalar(select(CourseTeacher).where(
                 CourseTeacher.course_id == c_obj.id,
-                CourseTeacher.teacher_id == t_user.id,
-                CourseTeacher.section == (sec or "Both")
+                CourseTeacher.teacher_id == t_user.id
             ))
             if not ct:
                 db.add(CourseTeacher(
@@ -284,6 +283,9 @@ def create_routine_slot(
                     section=sec or "Both",
                     role="Instructor"
                 ))
+                db.commit()
+            elif sec and ct.section != sec and ct.section != "Both":
+                ct.section = "Both"
                 db.commit()
 
     return _routine_out(routine)
@@ -1238,24 +1240,23 @@ async def bulk_upload_routine(
             db.flush()
 
         for u in teacher_users:
-            ct_key = (matched_c.id, u.id, sec)
-            if ct_key not in seen_course_teachers:
-                ct = db.scalar(
-                    select(CourseTeacher).where(
-                        CourseTeacher.course_id == matched_c.id,
-                        CourseTeacher.teacher_id == u.id,
-                        CourseTeacher.section == sec
-                    )
+            ct = db.scalar(
+                select(CourseTeacher).where(
+                    CourseTeacher.course_id == matched_c.id,
+                    CourseTeacher.teacher_id == u.id
                 )
-                if not ct:
-                    db.add(CourseTeacher(
-                        course_id=matched_c.id,
-                        teacher_id=u.id,
-                        section=sec,
-                        role="Instructor"
-                    ))
-                    db.flush()
-                seen_course_teachers.add(ct_key)
+            )
+            if not ct:
+                db.add(CourseTeacher(
+                    course_id=matched_c.id,
+                    teacher_id=u.id,
+                    section=sec,
+                    role="Instructor"
+                ))
+                db.flush()
+            elif sec and ct.section != sec and ct.section != "Both":
+                ct.section = "Both"
+                db.flush()
 
         existing_query = select(ClassRoutine).where(
             ClassRoutine.day == day,
