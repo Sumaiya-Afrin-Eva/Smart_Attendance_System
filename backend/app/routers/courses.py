@@ -33,7 +33,13 @@ from pydantic import BaseModel
 class CourseStatusUpdateIn(BaseModel):
     status: str
 from ..security import get_current_user, hash_password, require_role
-from ..schedule_utils import approved_schedule_changes, effective_routine_times, teacher_routine_slots, time_to_minutes
+from ..schedule_utils import (
+    approved_schedule_changes,
+    effective_routine_times,
+    teacher_matches_routine_slot,
+    teacher_routine_slots,
+    time_to_minutes,
+)
 from ..services import course_out
 
 router = APIRouter(prefix="/api", tags=["courses"])
@@ -91,21 +97,12 @@ def _get_teacher_assigned_courses(db: Session, user: User) -> list[Course]:
     for c in ct_courses:
         courses_by_id[c.id] = c
 
-    # Routine schedule matching
-    user_name_lower = (user.name or "").lower().strip()
-    clean_user = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", user_name_lower, flags=re.I).strip()
-
+    # Routine schedule matching using robust teacher matcher
+    assigned_codes = {c.code.strip().upper() for c in courses_by_id.values() if c.code}
     routines = db.scalars(select(ClassRoutine)).all()
     routine_codes = set()
     for r in routines:
-        slot_t = (r.teacher_name or "").lower().strip()
-        clean_slot = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", slot_t, flags=re.I).strip()
-        matched = False
-        if slot_t and user_name_lower and (slot_t == user_name_lower or clean_user == clean_slot):
-            matched = True
-        elif clean_user and len(clean_user) > 4 and (clean_user in clean_slot or clean_slot in clean_user):
-            matched = True
-        if matched and r.course_code:
+        if r.course_code and teacher_matches_routine_slot(user, r, assigned_codes):
             routine_codes.add(r.course_code.strip())
 
     if routine_codes:
@@ -459,9 +456,7 @@ def teacher_dashboard_stats(db: Session = Depends(get_db), user: User = Depends(
 @router.get("/teacher/courses")
 def teacher_courses(db: Session = Depends(get_db), user: User = Depends(teacher_only)):
     courses = _get_teacher_assigned_courses(db, user)
-
-    user_name_lower = (user.name or "").lower().strip()
-    clean_user = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", user_name_lower, flags=re.I).strip()
+    assigned_codes = {c.code.strip().upper() for c in courses if c.code}
     routines = db.scalars(select(ClassRoutine)).all()
 
     res = []
@@ -470,9 +465,13 @@ def teacher_courses(db: Session = Depends(get_db), user: User = Depends(teacher_
         slots = []
         for r in routines:
             if r.course_code == c.code:
-                slot_t = (r.teacher_name or "").lower().strip()
-                clean_slot = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", slot_t, flags=re.I).strip()
-                if (slot_t == user_name_lower or clean_user == clean_slot) or (clean_user and len(clean_user) > 4 and clean_user in clean_slot) or not r.teacher_name:
+                if teacher_matches_routine_slot(user, r, assigned_codes):
+                    slots.append(r)
+
+        # Fallback if no specific teacher slot matched: if teacher is assigned to course
+        if not slots:
+            for r in routines:
+                if r.course_code == c.code and (not r.teacher_name or (c.section and r.section == c.section)):
                     slots.append(r)
 
         day_str = ", ".join(dict.fromkeys(r.day for r in slots if r.day)) if slots else "TBA"

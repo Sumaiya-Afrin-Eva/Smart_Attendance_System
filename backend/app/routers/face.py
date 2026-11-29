@@ -313,12 +313,12 @@ def _time_distance_to_window(start_time: str | None, end_time: str | None, curre
 
 
 def _attendance_status_for_session(class_session: ClassSession, marked_at: datetime | None = None) -> str:
-    """Both late and present count as attended; late covers the first 5 minutes after a class starts."""
+    """Both late and present count as attended; scanning more than 10 minutes after class start is marked as late."""
     if marked_at is None:
         marked_at = datetime.now()
     if class_session.start_at is None:
         return "present"
-    if class_session.start_at <= marked_at <= class_session.start_at + timedelta(minutes=5):
+    if marked_at > class_session.start_at + timedelta(minutes=10):
         return "late"
     return "present"
 

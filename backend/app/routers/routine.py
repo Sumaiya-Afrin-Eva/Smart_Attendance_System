@@ -27,8 +27,11 @@ from ..models import (
 )
 from ..schedule_utils import (
     approved_schedule_changes,
+    clean_teacher_title,
     effective_routine_times,
+    get_teacher_initials,
     normalize_schedule_time,
+    teacher_matches_routine_slot,
     teacher_routine_slots,
     time_to_minutes,
 )
@@ -449,53 +452,66 @@ def _derive_course_type(code: str) -> str:
 
 
 def _find_teacher_user(teacher_name: str, db: Session) -> User | None:
-    if not teacher_name or teacher_name.lower() in ("nan", "none", "tba"):
+    if not teacher_name or str(teacher_name).lower() in ("nan", "none", "tba", ""):
         return None
-    name_clean = teacher_name.strip()
+    name_clean = str(teacher_name).strip()
     norm_variants = [name_clean]
     if "ashar" in name_clean.lower():
         norm_variants.append(re.sub(r"ashar", "azhar", name_clean, flags=re.IGNORECASE))
     if "azhar" in name_clean.lower():
         norm_variants.append(re.sub(r"azhar", "ashar", name_clean, flags=re.IGNORECASE))
 
+    teachers = db.scalars(
+        select(User).where(User.role.in_(["teacher", "faculty", "system_admin", "admin"]))
+    ).all()
+
     for target_name in norm_variants:
-        t = db.scalar(
-            select(User).where(
-                User.role.in_(["teacher", "faculty", "system_admin", "admin"]),
-                func.lower(User.name) == target_name.lower()
-            )
-        )
-        if t:
-            return t
+        target_clean = target_name.strip()
+        target_upper = target_clean.upper()
+        target_clean_no_title = clean_teacher_title(target_clean).lower()
+
+        # 1. Exact name match (with or without title)
+        for t in teachers:
+            if (t.name or "").strip().lower() == target_clean.lower():
+                return t
+            if clean_teacher_title(t.name or "").lower() == target_clean_no_title:
+                return t
+
+        # Teacher profile name match
         prof = db.scalar(
             select(TeacherProfile).where(
-                func.lower(TeacherProfile.name) == target_name.lower()
+                func.lower(TeacherProfile.name) == target_clean.lower()
             )
         )
         if prof and prof.user_id:
             t = db.get(User, prof.user_id)
             if t:
                 return t
-        clean_no_title = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", target_name, flags=re.IGNORECASE).strip()
-        if clean_no_title:
-            t = db.scalar(
-                select(User).where(
-                    User.role.in_(["teacher", "faculty", "system_admin", "admin"]),
-                    User.name.ilike(f"%{clean_no_title}%")
-                )
-            )
-            if t:
-                return t
-        parts = [p for p in target_name.replace(".", " ").split() if len(p) > 2 and p.lower() not in ("dr", "mr", "ms", "prof")]
-        for part in parts:
-            matches = db.scalars(
-                select(User).where(
-                    User.role.in_(["teacher", "faculty", "system_admin", "admin"]),
-                    User.name.ilike(f"%{part}%")
-                )
-            ).all()
-            if len(matches) == 1:
-                return matches[0]
+
+        # 2. Initials match (if target is 2-5 uppercase letters, e.g. MAN, SMAH, MMAH)
+        if re.fullmatch(r"[A-Za-z]{2,5}", target_clean):
+            for t in teachers:
+                if target_upper in get_teacher_initials(t.name or ""):
+                    return t
+
+        # 3. Scored distinctive token match
+        tokens = [
+            w for w in re.split(r"[\s\.]+", target_clean_no_title)
+            if len(w) >= 3 and w not in ("dr", "mr", "ms", "prof", "md", "most", "mst")
+        ]
+        if tokens:
+            scored = []
+            for t in teachers:
+                t_clean = clean_teacher_title(t.name or "").lower()
+                t_words = set(re.split(r"[\s\.]+", t_clean))
+                score = sum(1 for tok in tokens if tok in t_words)
+                if score > 0:
+                    scored.append((score, t))
+            if scored:
+                scored.sort(key=lambda x: -x[0])
+                if len(scored) == 1 or scored[0][0] > scored[1][0]:
+                    return scored[0][1]
+
     return None
 
 
@@ -1119,7 +1135,7 @@ async def bulk_upload_routine(
 
     target_dept = (scoped_dept or default_department or "CSE").strip().upper()
     parsed_sems = {str(s.get("semester", "")).strip() for s in slots_to_process if s.get("semester")}
-    if target_dept == "CSE" and "3-2" not in parsed_sems:
+    if is_matrix and target_dept == "CSE" and "3-2" not in parsed_sems:
         supp_slots = _load_supplementary_3_2_slots()
         if supp_slots:
             slots_to_process.extend(supp_slots)
@@ -1180,7 +1196,7 @@ async def bulk_upload_routine(
         if raw_teacher.lower() in ("nan", "none"):
             raw_teacher = ""
         if not teachers_list and raw_teacher:
-            teachers_list = [t.strip() for t in raw_teacher.split("+") if t.strip()]
+            teachers_list = [t.strip() for t in re.split(r"[\+/,&;\n]|\band\b", raw_teacher, flags=re.I) if t.strip()]
 
         teacher_users = []
         for t_name in teachers_list:
@@ -1201,7 +1217,7 @@ async def bulk_upload_routine(
         if matched_c:
             if not c_title or c_title.lower() in ("nan", "none"):
                 c_title = matched_c.title
-            if primary_teacher and not matched_c.teacher_id:
+            if primary_teacher and (not matched_c.teacher_id or matched_c.teacher_id != primary_teacher.id):
                 matched_c.teacher_id = primary_teacher.id
             if sem and matched_c.semester != sem:
                 matched_c.semester = sem
@@ -1303,43 +1319,8 @@ def get_teacher_routine(
     user: User = Depends(require_role("teacher", "admin", "system_admin", "eee_system_admin", "eee_admin", "super_admin")),
 ):
     """Retrieve the logged-in teacher's personalized weekly routine schedule."""
-    ct_courses = db.scalars(
-        select(Course.code).join(CourseTeacher, CourseTeacher.course_id == Course.id).where(
-            CourseTeacher.teacher_id == user.id
-        )
-    ).all()
-    direct_courses = db.scalars(select(Course.code).where(Course.teacher_id == user.id)).all()
-    assigned_codes = set(ct_courses) | set(direct_courses)
-
-    slots = db.scalars(select(ClassRoutine)).all()
-    teacher_slots = []
-
-    user_name_lower = (user.name or "").lower().strip()
-    clean_user = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", user_name_lower, flags=re.I).strip()
-
-    for s in slots:
-        slot_t_name = (s.teacher_name or "").lower().strip()
-        clean_slot_t = re.sub(r"^(Dr\.|Mr\.|Ms\.|Mrs\.|Prof\.)\s*", "", slot_t_name, flags=re.I).strip()
-
-        name_match = False
-        if slot_t_name and user_name_lower:
-            if slot_t_name == user_name_lower or (clean_user and clean_user == clean_slot_t):
-                name_match = True
-            elif clean_user and len(clean_user) > 4 and (clean_user in clean_slot_t or clean_slot_t in clean_user):
-                name_match = True
-
-        course_match = s.course_code in assigned_codes
-
-        if name_match:
-            teacher_slots.append(s)
-        elif not slot_t_name and course_match:
-            teacher_slots.append(s)
-
-    sorted_slots = sorted(
-        teacher_slots,
-        key=lambda r: (DAY_ORDER.get(r.day, 99), r.start_time or "")
-    )
-    return [_routine_out(r) for r in sorted_slots]
+    slots = teacher_routine_slots(db, user)
+    return [_routine_out(r) for r in slots]
 
 
 def _teacher_routine_slots(db: Session, user: User) -> list[ClassRoutine]:

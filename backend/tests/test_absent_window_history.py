@@ -113,7 +113,7 @@ def test_student_attendance_history_includes_absence_window_for_absent_sessions(
         assert row["absence_window"]["end_at"] == session.end_at.isoformat()
 
 
-def test_face_scan_within_first_five_minutes_is_marked_as_late():
+def test_face_scan_after_ten_minutes_is_marked_as_late():
     start = datetime(2026, 11, 17, 9, 0, 0)
     session = ClassSession(
         id=1,
@@ -126,11 +126,11 @@ def test_face_scan_within_first_five_minutes_is_marked_as_late():
         status="completed",
     )
 
-    late_at = start + timedelta(minutes=3)
     present_at = start + timedelta(minutes=8)
+    late_at = start + timedelta(minutes=15)
 
-    assert face._attendance_status_for_session(session, late_at) == "late"
     assert face._attendance_status_for_session(session, present_at) == "present"
+    assert face._attendance_status_for_session(session, late_at) == "late"
 
 
 def test_student_attendance_history_uses_routine_start_time_for_absence_window():

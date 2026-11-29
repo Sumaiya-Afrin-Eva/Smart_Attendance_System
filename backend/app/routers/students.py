@@ -781,6 +781,6 @@ def attendance_history(
             "status": record.status if record else "absent",
             "marked_at": record.marked_at if record else None,
             "method": record.method if record else None,
-            "absence_window": _absence_window_for_session(s, db=db) if record is None else None,
+            "absence_window": _absence_window_for_session(s, db=db) if (record is None or record.status == "absent") else None,
         })
     return {"semester": semester, "rows": rows}
