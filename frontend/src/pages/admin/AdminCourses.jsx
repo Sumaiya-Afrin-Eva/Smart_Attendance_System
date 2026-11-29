@@ -108,7 +108,7 @@ function UnassignDropdown({ course, onUnassign, onClose, className = '' }) {
               className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-bold text-rose-700 hover:bg-rose-100/80 transition-colors cursor-pointer"
             >
               <Users size={14} className="shrink-0 text-rose-600" />
-              <span>Unassign both teachers</span>
+              <span>Unassign all teachers</span>
             </button>
           </>
         )}
