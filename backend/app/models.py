@@ -222,6 +222,7 @@ class Course(Base):
     teacher_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     status: Mapped[str] = mapped_column(String(20), default="Active") # "Active" or "Inactive"
 
+    teacher: Mapped["User | None"] = relationship(foreign_keys=[teacher_id])
     teacher_assignments: Mapped[list["CourseTeacher"]] = relationship(
         back_populates="course", cascade="all, delete-orphan"
     )

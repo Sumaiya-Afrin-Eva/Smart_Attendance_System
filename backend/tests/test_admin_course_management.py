@@ -657,3 +657,43 @@ def test_student_admin_can_read_student_records_but_not_system_data():
 
     settings = client.get('/api/admin/settings', headers={'Authorization': f'Bearer {token}'})
     assert settings.status_code == 403, settings.text
+
+
+def test_admin_course_shows_teacher_name_and_can_unassign():
+    reset_db()
+    client = TestClient(app)
+    token = get_admin_token()
+
+    with SessionLocal() as db:
+        teacher = db.scalar(select(User).where(User.email == 'teacher1@kuet.ac.bd'))
+        course = Course(
+            code='CSE 2201',
+            title='Algorithm Analysis and Design',
+            department='CSE',
+            semester='2-2',
+            course_type='Theory',
+            credit=3.0,
+            teacher_id=teacher.id
+        )
+        db.add(course)
+        db.commit()
+        db.refresh(course)
+        c_id = course.id
+
+    # 1. Course list shows teacher_name
+    res = client.get('/api/admin/courses', headers={'Authorization': f'Bearer {token}'})
+    assert res.status_code == 200
+    listed = next(c for c in res.json() if c['id'] == c_id)
+    assert listed['teacher_name'] == 'Teacher One'
+
+    # 2. Unassign teacher
+    unassign_res = client.patch(f'/api/admin/courses/{c_id}/unassign', headers={'Authorization': f'Bearer {token}'})
+    assert unassign_res.status_code == 200
+    assert 'teacher_name' not in unassign_res.json()
+    assert unassign_res.json()['teacher_id'] is None
+
+    # 3. Verify in course list that teacher_name is no longer present
+    res2 = client.get('/api/admin/courses', headers={'Authorization': f'Bearer {token}'})
+    assert res2.status_code == 200
+    listed2 = next(c for c in res2.json() if c['id'] == c_id)
+    assert 'teacher_name' not in listed2

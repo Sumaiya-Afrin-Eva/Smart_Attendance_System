@@ -69,24 +69,37 @@ def _admin_course_out(course: Course) -> dict:
     data = course_out(course)
     data["teacher_id"] = course.teacher_id
     assignments = []
+    teacher_names = []
     if hasattr(course, "teacher_assignments") and course.teacher_assignments:
         teacher_map = {}
         for a in course.teacher_assignments:
             t_id = str(a.teacher_id)
             sec = a.section or "Both"
             role = a.role or "Instructor"
+            t_name = a.teacher.name if getattr(a, "teacher", None) else None
+            if t_name and t_name not in teacher_names:
+                teacher_names.append(t_name)
             if t_id not in teacher_map:
                 teacher_map[t_id] = {
                     "teacherId": t_id,
                     "section": sec,
                     "role": role,
+                    "teacherName": t_name,
                 }
             else:
                 existing_sec = teacher_map[t_id]["section"]
                 if existing_sec != sec:
                     teacher_map[t_id]["section"] = "Both"
         assignments = list(teacher_map.values())
+
+    if not teacher_names and getattr(course, "teacher", None) and course.teacher.name:
+        teacher_names.append(course.teacher.name)
+
     data["assignments"] = assignments
+    if teacher_names:
+        data["teacher_name"] = ", ".join(teacher_names)
+    else:
+        data.pop("teacher_name", None)
     return data
 
 
@@ -1664,10 +1677,31 @@ def assign_course_teacher(
                 ))
         else:
             course.teacher_id = None
+            db.query(CourseTeacher).filter(CourseTeacher.course_id == course.id).delete()
 
     if body.get("section"):
         course.section = body.get("section")
 
+    db.commit()
+    db.refresh(course)
+    return _admin_course_out(course)
+
+
+@router.post("/admin/courses/{course_id}/unassign")
+@router.patch("/admin/courses/{course_id}/unassign")
+def unassign_course_teacher(
+    course_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(admin_only),
+):
+    course = db.get(Course, course_id)
+    if not course:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Course not found.")
+    scoped_dept = _dept_for_role(current_user)
+    if scoped_dept and course.department != scoped_dept:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"You can only manage {scoped_dept} courses.")
+    course.teacher_id = None
+    db.query(CourseTeacher).filter(CourseTeacher.course_id == course.id).delete()
     db.commit()
     db.refresh(course)
     return _admin_course_out(course)

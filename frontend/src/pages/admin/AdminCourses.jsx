@@ -13,6 +13,8 @@ import {
   Clock3,
   X,
   UploadCloud,
+  UserMinus,
+  UserCheck,
 } from 'lucide-react'
 import api, { errorMessage, getScopedDept } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
@@ -165,6 +167,18 @@ export default function AdminCourses() {
       setNotice(`Course ${code} permanently deleted.`)
     } catch (error) {
       setNotice(errorMessage(error, 'Course deletion failed.'))
+    }
+  }
+
+  const handleUnassignTeacher = async (id, code) => {
+    if (!window.confirm(`Are you sure you want to unassign the teacher(s) from ${code}?`)) return
+    setNotice('')
+    try {
+      const { data } = await api.patch(`/admin/courses/${id}/unassign`)
+      setCourses((current) => current.map((course) => String(course.id) === String(id) ? { ...course, teacher_name: null, teacher_id: null, assignments: [] } : course))
+      setNotice(`Teacher(s) unassigned from ${code}.`)
+    } catch (error) {
+      setNotice(errorMessage(error, 'Failed to unassign teacher.'))
     }
   }
 
@@ -395,8 +409,25 @@ export default function AdminCourses() {
 
                 <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                   <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
-                    <div className="flex items-center gap-2 text-stone-500"><GraduationCap size={15} /> <span className="text-[11px] font-semibold uppercase tracking-[0.18em]">Teacher</span></div>
-                    <p className="mt-2 text-sm font-semibold text-stone-900">{course.teacher_name || 'Unassigned'}</p>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-stone-500">
+                        <GraduationCap size={15} /> 
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.18em]">Teacher</span>
+                      </div>
+                      {course.teacher_name && (
+                        <button
+                          type="button"
+                          onClick={() => handleUnassignTeacher(course.id, course.code)}
+                          className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 hover:underline cursor-pointer transition-colors"
+                          title={`Unassign teacher(s) from ${course.code}`}
+                        >
+                          Unassign
+                        </button>
+                      )}
+                    </div>
+                    <p className="mt-2 text-sm font-semibold text-stone-900 break-words">
+                      {course.teacher_name || <span className="text-stone-400 font-normal italic">Unassigned</span>}
+                    </p>
                   </div>
                   <div className="rounded-xl border border-stone-200 bg-stone-50 p-3">
                     <div className="flex items-center gap-2 text-stone-500"><Users size={15} /> <span className="text-[11px] font-semibold uppercase tracking-[0.18em]">Credits</span></div>
@@ -417,10 +448,28 @@ export default function AdminCourses() {
                 </div>
 
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <button type="button" onClick={() => setSelectedCourseId(String(course.id))} className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-50">
+                  <button type="button" onClick={() => setSelectedCourseId(String(course.id))} className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-50 cursor-pointer">
                     <BookOpen size={14} /> Select
                   </button>
-                  <button type="button" onClick={() => handleRemoveCourse(course.id, course.code)} className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 cursor-pointer">
+                  {course.teacher_name ? (
+                    <button
+                      type="button"
+                      onClick={() => handleUnassignTeacher(course.id, course.code)}
+                      className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 cursor-pointer transition-colors"
+                      title={`Unassign teacher(s) from ${course.code}`}
+                    >
+                      <UserMinus size={14} /> Unassign Teacher
+                    </button>
+                  ) : (
+                    <Link
+                      to={`/admin/assignments?courseId=${course.id}&dept=${course.department}&year=${course.semester?.split('-')[0] || '1'}&term=${course.semester?.split('-')[1] || '1'}&session=${course.session || '2025-2026'}`}
+                      className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 cursor-pointer transition-colors"
+                      title="Assign teacher to this course"
+                    >
+                      <UserCheck size={14} /> Assign Teacher
+                    </Link>
+                  )}
+                  <button type="button" onClick={() => handleRemoveCourse(course.id, course.code)} className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-stone-100 px-3 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-200 cursor-pointer transition-colors">
                     <X size={14} /> Remove
                   </button>
                 </div>

@@ -60,7 +60,15 @@ def onboarding_status(db: Session, user: User) -> dict | None:
 
 
 def course_out(course: Course) -> dict:
-    return {
+    teacher_names = []
+    if getattr(course, "teacher_assignments", None):
+        for a in course.teacher_assignments:
+            if getattr(a, "teacher", None) and a.teacher.name and a.teacher.name not in teacher_names:
+                teacher_names.append(a.teacher.name)
+    if not teacher_names and getattr(course, "teacher", None) and course.teacher.name:
+        teacher_names.append(course.teacher.name)
+
+    res = {
         "id": course.id,
         "code": course.code,
         "title": course.title,
@@ -71,7 +79,11 @@ def course_out(course: Course) -> dict:
         "session": course.session,
         "section": course.section,
         "is_active": course.is_active,
+        "teacher_id": getattr(course, "teacher_id", None),
     }
+    if teacher_names:
+        res["teacher_name"] = ", ".join(teacher_names)
+    return res
 
 
 __all__ = [
