@@ -131,7 +131,18 @@ export default function FaceLab({ kioskId = 'CSE' }) {
   useEffect(() => {
     let unmounted = false
     api.post('/face/kiosk/open', { kiosk_id: normalizedKioskId })
-      .then((res) => { if (!unmounted) setActiveClass(res.data) })
+      .then((res) => {
+        if (!unmounted) {
+          setActiveClass(res.data)
+          if (Array.isArray(res.data?.roster_photos) && res.data.roster_photos.length > 0) {
+            fetch('/_local_sync/sync-roster-photos', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ department: normalizedKioskId, photos: res.data.roster_photos }),
+            }).catch(() => {})
+          }
+        }
+      })
       .catch(() => {})
     return () => { unmounted = true }
   }, [normalizedKioskId])
@@ -184,16 +195,49 @@ export default function FaceLab({ kioskId = 'CSE' }) {
       inFlight = true
       try {
         const frame = await captureFrame(video, 260, 0.55)
-        const fd = new FormData()
-        fd.append('kiosk_id', normalizedKioskId)
-        if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
-        fd.append('image', frame, 'live.jpg')
-        const { data } = await api.post('/face/kiosk/liveness', fd, { timeout: 5000, skipNetworkRetry: true })
-        if (cancelled || key !== livenessKeyRef.current) return
-        consecutiveErrorsRef.current = 0
-        setLiveness(data)
-        if (!data?.liveness) {
-          timer = setTimeout(poll, LIVENESS_POLL_MS)
+        let handledLocally = false
+
+        // Fast local edge liveness check on Mac
+        try {
+          const b64 = await new Promise((resolve) => {
+            const r = new FileReader()
+            r.onload = () => resolve(r.result)
+            r.onerror = () => resolve(null)
+            r.readAsDataURL(frame)
+          })
+          if (b64) {
+            const localRes = await fetch('/_local_face/liveness', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ image_base64: b64, kiosk_id: normalizedKioskId }),
+            })
+            if (localRes.ok) {
+              const liveData = await localRes.json()
+              if (liveData?.human !== undefined) {
+                handledLocally = true
+                if (cancelled || key !== livenessKeyRef.current) return
+                consecutiveErrorsRef.current = 0
+                setLiveness(liveData)
+                if (!liveData.liveness) {
+                  timer = setTimeout(poll, LIVENESS_POLL_MS)
+                }
+              }
+            }
+          }
+        } catch (_) {}
+
+        if (!handledLocally) {
+          const fd = new FormData()
+          fd.append('kiosk_id', normalizedKioskId)
+          if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
+          fd.append('image', frame, 'live.jpg')
+          const { data } = await api.post('/face/kiosk/liveness', fd, { timeout: 5000, skipNetworkRetry: true })
+          if (cancelled || key !== livenessKeyRef.current) return
+          consecutiveErrorsRef.current = 0
+          setLiveness(data)
+          if (!data?.liveness) {
+            timer = setTimeout(poll, LIVENESS_POLL_MS)
+          }
         }
         // liveness=true → auto-scan kicks in via the effect below
       } catch (error) {
@@ -223,12 +267,58 @@ export default function FaceLab({ kioskId = 'CSE' }) {
     setPhase('scanning')
     try {
       const frame = await captureFrame(videoRef.current, 640, 0.85)
-      const fd = new FormData()
-      fd.append('kiosk_id', normalizedKioskId)
-      if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
-      fd.append('image', frame, 'kiosk-frame.jpg')
-      fd.append('threshold', 0.42)
-      const { data } = await api.post('/face/kiosk/scan', fd, { timeout: 60000, skipNetworkRetry: true })
+
+      // ── Step 1: Fast local face recognition on Mac using local picture/{dept} folder ──
+      let localMatchResult = null
+      try {
+        const b64 = await new Promise((resolve) => {
+          const r = new FileReader()
+          r.onload = () => resolve(r.result)
+          r.onerror = () => resolve(null)
+          r.readAsDataURL(frame)
+        })
+        if (b64) {
+          const localRes = await fetch('/_local_face/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              image_base64: b64,
+              department: normalizedKioskId,
+              threshold: 0.42,
+            }),
+          })
+          if (localRes.ok) {
+            const lData = await localRes.json()
+            if (lData?.matched && Array.isArray(lData.matched_rolls) && lData.matched_rolls.length > 0) {
+              localMatchResult = lData
+            }
+          }
+        }
+      } catch (localErr) {
+        console.warn('Local recognition note:', localErr)
+      }
+
+      // ── Step 2: Record attendance on the active backend (Windows if tunnel mode) ──
+      let data = null
+      if (localMatchResult?.matched) {
+        // Fast path: Only send pre-matched rolls over the tunnel! No heavy frame transfer needed.
+        const fd = new FormData()
+        fd.append('kiosk_id', normalizedKioskId)
+        if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
+        fd.append('matched_rolls', JSON.stringify(localMatchResult.matched_rolls))
+        fd.append('confidence', localMatchResult.similarity || 0.85)
+        const res = await api.post('/face/kiosk/scan', fd, { timeout: 15000, skipNetworkRetry: true })
+        data = res.data
+      } else {
+        // Fallback path: send image over network if local edge matching is offline or didn't find match
+        const fd = new FormData()
+        fd.append('kiosk_id', normalizedKioskId)
+        if (activeClass?.session_id) fd.append('session_id', activeClass.session_id)
+        fd.append('image', frame, 'kiosk-frame.jpg')
+        fd.append('threshold', 0.42)
+        const res = await api.post('/face/kiosk/scan', fd, { timeout: 60000, skipNetworkRetry: true })
+        data = res.data
+      }
 
       if (data?.matched) {
         const recognizedList = Array.isArray(data?.students) && data.students.length > 0

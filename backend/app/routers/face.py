@@ -940,6 +940,16 @@ def open_kiosk(
         "date": class_session.start_at.date().isoformat() if class_session is not None else now.date().isoformat(),
         "student_count": len(students),
         "teacher_id": class_session.teacher_id if class_session is not None else teacher_id,
+        "roster_photos": [
+            {
+                "roll": r.roll,
+                "department": r.department or kiosk_department,
+                "photo_path": r.photo_path,
+                "sample_paths": json.loads(r.face_sample_paths or "[]"),
+            }
+            for r, _, _ in students
+            if r.photo_path or r.face_sample_paths
+        ],
     }
 
 
@@ -981,73 +991,69 @@ async def scan_kiosk(
     image: Optional[UploadFile] = File(None),
     image_base64: Optional[str] = Form(None),
     threshold: float = Form(DEFAULT_SIMILARITY_THRESHOLD),
+    matched_rolls: Optional[str] = Form(None),
+    roll: Optional[str] = Form(None),
+    confidence: Optional[float] = Form(None),
     db: Session = Depends(get_db),
 ):
-    """Match a kiosk camera frame against registered students, then resolve
-    the student's active routine, course, and specific teacher at the current time.
+    """Match a kiosk camera frame against registered students, or accept pre-matched rolls
+    from local kiosk edge recognition, then resolve the student's active routine, course,
+    and specific teacher at the current time.
     """
-    tracking_key = _kiosk_tracking_key(kiosk_id, session_id)
-    query_bytes = _decode_image_payload(image, image_base64)
-    face_svc = get_face_service()
-    live_embedding = await run_in_threadpool(face_svc.consume_liveness, tracking_key)
-    if live_embedding is None:
-        return {
-            "matched": False,
-            "similarity": None,
-            "similarity_percent": None,
-            "threshold": threshold,
-            "message": "Face Not Recognized. Please show your QR code",
-        }
+    kiosk_department = _resolve_kiosk_department(kiosk_id)
+    scan_threshold = min(threshold, 0.42)
 
-    query_embs: list[np.ndarray] = []
-    if query_bytes:
+    # ── Fast path: Pre-recognized student roll(s) from local Mac kiosk ─────────
+    target_rolls: list[str] = []
+    if matched_rolls:
         try:
-            if hasattr(face_svc, "extract_all_embeddings"):
-                raw_list = await run_in_threadpool(face_svc.extract_all_embeddings, query_bytes)
-                for item in raw_list:
-                    emb = item.get("embedding") if isinstance(item, dict) else item
-                    if emb is not None and getattr(emb, "ndim", 0) == 1 and len(emb) >= 2:
-                        query_embs.append(np.asarray(emb, dtype=np.float32))
-            else:
-                emb = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
-                if emb is not None:
-                    query_embs = [np.asarray(emb, dtype=np.float32)]
-        except RuntimeError as exc:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
-        except Exception as exc:
-            logger.warning("Could not extract embeddings from query frame: %s", exc)
-
-    if not query_embs and query_bytes:
-        try:
-            single = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
-            if single is not None:
-                query_embs = [np.asarray(single, dtype=np.float32)]
+            parsed = json.loads(matched_rolls)
+            if isinstance(parsed, list):
+                target_rolls.extend([str(r).strip() for r in parsed if str(r).strip()])
+            elif isinstance(parsed, str) and parsed.strip():
+                target_rolls.append(parsed.strip())
         except Exception:
-            pass
+            for part in matched_rolls.split(","):
+                clean = part.strip()
+                if clean:
+                    target_rolls.append(clean)
+    if roll and roll.strip() and roll.strip() not in target_rolls:
+        target_rolls.append(roll.strip())
 
-    if not query_embs and live_embedding is not None and getattr(live_embedding, "ndim", 0) == 1 and len(live_embedding) > 10:
-        query_embs = [np.asarray(live_embedding, dtype=np.float32)]
+    matched_students: dict[int, dict] = {}
 
-    if not query_embs:
-        return {
-            "matched": False,
-            "similarity": None,
-            "similarity_percent": None,
-            "threshold": threshold,
-            "message": "Face Not Recognized. Please show your QR code",
-        }
+    if target_rolls:
+        for r_roll in target_rolls:
+            query = select(StudentProfile, User).join(User, User.id == StudentProfile.user_id).where(StudentProfile.roll == r_roll)
+            if kiosk_department:
+                res = db.execute(query.where(StudentProfile.department == kiosk_department)).first()
+                if not res:
+                    res = db.execute(query).first()
+            else:
+                res = db.execute(query).first()
 
-    if (
-        live_embedding is not None
-        and getattr(live_embedding, "ndim", 0) == 1
-        and len(live_embedding) >= 2
-    ):
-        matched_live = any(
-            compute_similarity(q, live_embedding) >= 0.35
-            for q in query_embs
-            if getattr(q, "ndim", 0) == 1 and len(q) == len(live_embedding)
-        )
-        if not matched_live:
+            if res:
+                prof, u = res
+                matched_students[u.id] = {
+                    "user": u,
+                    "profile": prof,
+                    "similarity": float(confidence or 0.85),
+                }
+
+        if not matched_students:
+            return {
+                "matched": False,
+                "similarity": None,
+                "similarity_percent": None,
+                "threshold": scan_threshold,
+                "message": "Face Not Recognized. Please show your QR code",
+            }
+    else:
+        tracking_key = _kiosk_tracking_key(kiosk_id, session_id)
+        query_bytes = _decode_image_payload(image, image_base64)
+        face_svc = get_face_service()
+        live_embedding = await run_in_threadpool(face_svc.consume_liveness, tracking_key)
+        if live_embedding is None:
             return {
                 "matched": False,
                 "similarity": None,
@@ -1056,72 +1062,125 @@ async def scan_kiosk(
                 "message": "Face Not Recognized. Please show your QR code",
             }
 
-    scan_threshold = min(threshold, 0.42)
-
-    kiosk_department = _resolve_kiosk_department(kiosk_id)
-    course = None
-    if session_id is not None:
-        class_session = db.get(ClassSession, session_id)
-        if class_session is not None:
-            course = db.get(Course, class_session.course_id)
-    if course is None:
-        course = db.scalar(select(Course).where(Course.is_active.is_(True)).order_by(Course.id))
-
-    candidates = (
-        _eligible_students(db, department=kiosk_department)
-        if kiosk_department
-        else (_eligible_students(db, course.id) if course is not None else _eligible_students(db))
-    )
-
-    candidate_embs: list[tuple[StudentRoster, StudentProfile, User, list[np.ndarray]]] = []
-    for roster, profile, matched_user in candidates:
-        try:
-            stored_embs = _get_roster_embeddings(face_svc, roster)
-            if stored_embs:
-                candidate_embs.append((roster, profile, matched_user, stored_embs))
-        except Exception as exc:
-            if isinstance(exc, RuntimeError):
+        query_embs: list[np.ndarray] = []
+        if query_bytes:
+            try:
+                if hasattr(face_svc, "extract_all_embeddings"):
+                    raw_list = await run_in_threadpool(face_svc.extract_all_embeddings, query_bytes)
+                    for item in raw_list:
+                        emb = item.get("embedding") if isinstance(item, dict) else item
+                        if emb is not None and getattr(emb, "ndim", 0) == 1 and len(emb) >= 2:
+                            query_embs.append(np.asarray(emb, dtype=np.float32))
+                else:
+                    emb = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
+                    if emb is not None:
+                        query_embs = [np.asarray(emb, dtype=np.float32)]
+            except RuntimeError as exc:
                 raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
-            logger.warning("Failed processing photo for roster roll %s: %s", roster.roll, exc)
+            except Exception as exc:
+                logger.warning("Could not extract embeddings from query frame: %s", exc)
 
-    if not candidate_embs:
-        return {
-            "matched": False,
-            "similarity": None,
-            "similarity_percent": None,
-            "threshold": scan_threshold,
-            "message": "Face Not Recognized. Please show your QR code",
-        }
+        if not query_embs and query_bytes:
+            try:
+                single = await run_in_threadpool(face_svc.extract_embedding, query_bytes)
+                if single is not None:
+                    query_embs = [np.asarray(single, dtype=np.float32)]
+            except Exception:
+                pass
 
-    # Match each detected face in the frame against registered candidate gallery
-    matched_students: dict[int, dict] = {}
-    for q_emb in query_embs:
-        best_sim = -1.0
-        best_cand = None
-        for roster, profile, matched_user, stored_embs in candidate_embs:
-            for stored_emb in stored_embs:
-                sim = compute_similarity(q_emb, stored_emb)
-                if sim > best_sim:
-                    best_sim = sim
-                    best_cand = (profile, matched_user)
+        if not query_embs and live_embedding is not None and getattr(live_embedding, "ndim", 0) == 1 and len(live_embedding) > 10:
+            query_embs = [np.asarray(live_embedding, dtype=np.float32)]
 
-        if best_cand is not None and best_sim >= scan_threshold:
-            profile, matched_user = best_cand
-            if matched_user.id not in matched_students or best_sim > matched_students[matched_user.id]["similarity"]:
-                matched_students[matched_user.id] = {
-                    "user": matched_user,
-                    "profile": profile,
-                    "similarity": best_sim,
+        if not query_embs:
+            return {
+                "matched": False,
+                "similarity": None,
+                "similarity_percent": None,
+                "threshold": threshold,
+                "message": "Face Not Recognized. Please show your QR code",
+            }
+
+        if (
+            live_embedding is not None
+            and getattr(live_embedding, "ndim", 0) == 1
+            and len(live_embedding) >= 2
+        ):
+            matched_live = any(
+                compute_similarity(q, live_embedding) >= 0.35
+                for q in query_embs
+                if getattr(q, "ndim", 0) == 1 and len(q) == len(live_embedding)
+            )
+            if not matched_live:
+                return {
+                    "matched": False,
+                    "similarity": None,
+                    "similarity_percent": None,
+                    "threshold": threshold,
+                    "message": "Face Not Recognized. Please show your QR code",
                 }
 
-    if not matched_students:
-        return {
-            "matched": False,
-            "similarity": None,
-            "similarity_percent": None,
-            "threshold": scan_threshold,
-            "message": "Face Not Recognized. Please show your QR code",
-        }
+        course = None
+        if session_id is not None:
+            class_session = db.get(ClassSession, session_id)
+            if class_session is not None:
+                course = db.get(Course, class_session.course_id)
+        if course is None:
+            course = db.scalar(select(Course).where(Course.is_active.is_(True)).order_by(Course.id))
+
+        candidates = (
+            _eligible_students(db, department=kiosk_department)
+            if kiosk_department
+            else (_eligible_students(db, course.id) if course is not None else _eligible_students(db))
+        )
+
+        candidate_embs: list[tuple[StudentRoster, StudentProfile, User, list[np.ndarray]]] = []
+        for roster, profile, matched_user in candidates:
+            try:
+                stored_embs = _get_roster_embeddings(face_svc, roster)
+                if stored_embs:
+                    candidate_embs.append((roster, profile, matched_user, stored_embs))
+            except Exception as exc:
+                if isinstance(exc, RuntimeError):
+                    raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+                logger.warning("Failed processing photo for roster roll %s: %s", roster.roll, exc)
+
+        if not candidate_embs:
+            return {
+                "matched": False,
+                "similarity": None,
+                "similarity_percent": None,
+                "threshold": scan_threshold,
+                "message": "Face Not Recognized. Please show your QR code",
+            }
+
+        # Match each detected face in the frame against registered candidate gallery
+        for q_emb in query_embs:
+            best_sim = -1.0
+            best_cand = None
+            for roster, profile, matched_user, stored_embs in candidate_embs:
+                for stored_emb in stored_embs:
+                    sim = compute_similarity(q_emb, stored_emb)
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_cand = (profile, matched_user)
+
+            if best_cand is not None and best_sim >= scan_threshold:
+                profile, matched_user = best_cand
+                if matched_user.id not in matched_students or best_sim > matched_students[matched_user.id]["similarity"]:
+                    matched_students[matched_user.id] = {
+                        "user": matched_user,
+                        "profile": profile,
+                        "similarity": best_sim,
+                    }
+
+        if not matched_students:
+            return {
+                "matched": False,
+                "similarity": None,
+                "similarity_percent": None,
+                "threshold": scan_threshold,
+                "message": "Face Not Recognized. Please show your QR code",
+            }
 
     now_dt = datetime.now()
     students_output = []
