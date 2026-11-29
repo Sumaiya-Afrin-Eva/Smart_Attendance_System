@@ -15,6 +15,7 @@ import logging
 import os
 import sys
 import time
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ import numpy as np
 
 # Ensure backend root is on sys.path
 SCRIPT_DIR = Path(__file__).resolve().parent
-BACKEND_DIR = SCRIPT_DIR.parent.parent
+BACKEND_DIR = SCRIPT_DIR.parent
 PROJECT_ROOT = BACKEND_DIR.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
@@ -41,6 +42,18 @@ logger = logging.getLogger("local_face_worker")
 PORT = int(os.environ.get("LOCAL_FACE_PORT", 8009))
 PICTURE_ROOT = PROJECT_ROOT / "picture"
 
+
+def _normalize_dept(val: str | None) -> str:
+    if not val:
+        return "CSE"
+    compact = re.sub(r"[^A-Za-z0-9]", "", str(val).strip()).upper()
+    if compact.startswith("KIOSK"):
+        compact = compact[5:]
+    if compact.endswith("KIOSK"):
+        compact = compact[:-5]
+    return compact if compact and compact not in {"MAIN", "DEFAULT"} else "CSE"
+
+
 # Cache of pre-computed embeddings: { dept: { roll: [embedding1, embedding2, ...] } }
 _GALLERY_CACHE: dict[str, dict[str, list[np.ndarray]]] = {}
 _LAST_CACHE_UPDATE: dict[str, float] = {}
@@ -48,7 +61,7 @@ _LAST_CACHE_UPDATE: dict[str, float] = {}
 
 def _load_department_gallery(department: str) -> dict[str, list[np.ndarray]]:
     """Scan picture/{department}/ and compute/cache embeddings for all student photos."""
-    dept = department.strip().upper()
+    dept = _normalize_dept(department)
     dept_dir = PICTURE_ROOT / dept
     if not dept_dir.is_dir():
         # Fallback to case-insensitive match
@@ -191,7 +204,7 @@ class LocalFaceHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/scan":
-            dept = (payload.get("department") or payload.get("kiosk_id") or "CSE").strip().upper()
+            dept = _normalize_dept(payload.get("department") or payload.get("kiosk_id") or "CSE")
             threshold = float(payload.get("threshold", 0.42))
             img = decode_image(payload)
             if img is None:

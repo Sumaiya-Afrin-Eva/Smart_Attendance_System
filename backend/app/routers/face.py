@@ -21,7 +21,7 @@ import jwt
 import numpy as np
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -374,10 +374,15 @@ def _resolve_active_class_for_student(db: Session, student: User, now: datetime)
         if not _is_in_time_window(start_time, end_time, current_minutes, grace=grace):
             continue
 
+        from .routine import _clean_course_code
+        clean_code = _clean_course_code(routine.course_code or "")
         course = db.scalar(
             select(Course)
             .where(
-                func.upper(func.trim(Course.code)) == func.upper(func.trim(routine.course_code)),
+                or_(
+                    func.upper(func.trim(Course.code)) == func.upper(func.trim(routine.course_code)),
+                    func.upper(func.trim(Course.code)) == clean_code.upper(),
+                ),
                 func.upper(func.trim(Course.department)) == func.upper(func.trim(profile.department)),
                 Course.semester == profile.current_semester,
                 Course.is_active.is_(True),
@@ -402,7 +407,8 @@ def _resolve_active_class_for_student(db: Session, student: User, now: datetime)
                 Enrollment.semester == course.semester,
             )
         )
-        if not roster_match or not enrollment_match:
+        # If the student is enrolled, in roster, or the slot matches the student's current active dept/term
+        if not roster_match and not enrollment_match and (not profile.current_semester or routine.semester != profile.current_semester):
             continue
 
         section_match = 1 if (profile.section or "").upper() == (routine.section or "").upper() else 0
@@ -1001,7 +1007,10 @@ async def scan_kiosk(
     and specific teacher at the current time.
     """
     kiosk_department = _resolve_kiosk_department(kiosk_id)
-    scan_threshold = min(threshold, 0.42)
+    try:
+        scan_threshold = min(float(threshold), 0.42)
+    except Exception:
+        scan_threshold = 0.42
 
     # ── Fast path: Pre-recognized student roll(s) from local Mac kiosk ─────────
     target_rolls: list[str] = []
@@ -1024,13 +1033,37 @@ async def scan_kiosk(
 
     if target_rolls:
         for r_roll in target_rolls:
-            query = select(StudentProfile, User).join(User, User.id == StudentProfile.user_id).where(StudentProfile.roll == r_roll)
+            clean_roll = r_roll.strip()
+            query = select(StudentProfile, User).join(User, User.id == StudentProfile.user_id).where(
+                or_(
+                    StudentProfile.roll == clean_roll,
+                    func.trim(StudentProfile.roll) == clean_roll,
+                    func.lower(StudentProfile.roll) == clean_roll.lower(),
+                )
+            )
+            res = None
             if kiosk_department:
-                res = db.execute(query.where(StudentProfile.department == kiosk_department)).first()
-                if not res:
-                    res = db.execute(query).first()
-            else:
+                res = db.execute(query.where(func.upper(StudentProfile.department) == kiosk_department.upper())).first()
+            if not res:
                 res = db.execute(query).first()
+
+            if not res:
+                roster_res = db.execute(
+                    select(StudentRoster, User)
+                    .join(User, User.id == StudentRoster.user_id)
+                    .where(
+                        or_(
+                            StudentRoster.roll == clean_roll,
+                            func.trim(StudentRoster.roll) == clean_roll,
+                            func.lower(StudentRoster.roll) == clean_roll.lower(),
+                        )
+                    )
+                ).first()
+                if roster_res:
+                    _, u = roster_res
+                    prof = u.profile
+                    if prof:
+                        res = (prof, u)
 
             if res:
                 prof, u = res
@@ -1053,14 +1086,6 @@ async def scan_kiosk(
         query_bytes = _decode_image_payload(image, image_base64)
         face_svc = get_face_service()
         live_embedding = await run_in_threadpool(face_svc.consume_liveness, tracking_key)
-        if live_embedding is None:
-            return {
-                "matched": False,
-                "similarity": None,
-                "similarity_percent": None,
-                "threshold": threshold,
-                "message": "Face Not Recognized. Please show your QR code",
-            }
 
         query_embs: list[np.ndarray] = []
         if query_bytes:
