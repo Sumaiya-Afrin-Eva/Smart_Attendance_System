@@ -257,7 +257,7 @@ export default function MyAttendance() {
                             </span>
                             {r.start_at && (
                               <span className="block font-mono text-[11px] text-stone-400">
-                                Class: {formatTime(r.start_at)}{r.end_at ? ` – ${formatTime(r.end_at)}` : ''}
+                                Absent Window
                               </span>
                             )}
                           </div>
