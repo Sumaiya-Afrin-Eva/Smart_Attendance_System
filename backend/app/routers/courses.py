@@ -92,6 +92,14 @@ def _admin_course_out(course: Course) -> dict:
                     teacher_map[t_id]["section"] = "Both"
         assignments = list(teacher_map.values())
 
+    if not assignments and course.teacher_id and getattr(course, "teacher", None) and course.teacher.name:
+        assignments.append({
+            "teacherId": str(course.teacher_id),
+            "section": "Both",
+            "role": "Instructor",
+            "teacherName": course.teacher.name,
+        })
+
     if not teacher_names and getattr(course, "teacher", None) and course.teacher.name:
         teacher_names.append(course.teacher.name)
 
@@ -1691,6 +1699,7 @@ def assign_course_teacher(
 @router.patch("/admin/courses/{course_id}/unassign")
 def unassign_course_teacher(
     course_id: int,
+    body: dict | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(admin_only),
 ):
@@ -1700,8 +1709,40 @@ def unassign_course_teacher(
     scoped_dept = _dept_for_role(current_user)
     if scoped_dept and course.department != scoped_dept:
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"You can only manage {scoped_dept} courses.")
-    course.teacher_id = None
-    db.query(CourseTeacher).filter(CourseTeacher.course_id == course.id).delete()
+
+    target_teacher_id = None
+    if body:
+        t_val = body.get("teacher_id") or body.get("teacherId")
+        if t_val is not None:
+            try:
+                target_teacher_id = int(t_val)
+            except (ValueError, TypeError):
+                pass
+        if target_teacher_id is None:
+            t_name = body.get("teacher_name") or body.get("teacherName")
+            if t_name and isinstance(t_name, str):
+                matched = db.scalar(
+                    select(User).where(User.name == t_name.strip(), User.role.in_(["teacher", "admin"]))
+                )
+                if matched:
+                    target_teacher_id = matched.id
+
+    if target_teacher_id is not None:
+        # Unassign specific teacher from this course
+        db.query(CourseTeacher).filter(
+            CourseTeacher.course_id == course.id,
+            CourseTeacher.teacher_id == target_teacher_id
+        ).delete()
+        if course.teacher_id == target_teacher_id:
+            remaining = db.scalar(
+                select(CourseTeacher.teacher_id).where(CourseTeacher.course_id == course.id)
+            )
+            course.teacher_id = remaining if remaining else None
+    else:
+        # Unassign all teachers from this course
+        course.teacher_id = None
+        db.query(CourseTeacher).filter(CourseTeacher.course_id == course.id).delete()
+
     db.commit()
     db.refresh(course)
     return _admin_course_out(course)

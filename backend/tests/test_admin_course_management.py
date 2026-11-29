@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app import ai_extraction
 from app.database import SessionLocal, Base, engine
 from app.main import app, ensure_seed_settings
-from app.models import Attendance, ClassSession, Course, CourseRosterAssignment, Enrollment, FaceSample, StudentProfile, StudentRoster, User
+from app.models import Attendance, ClassSession, Course, CourseRosterAssignment, CourseTeacher, Enrollment, FaceSample, StudentProfile, StudentRoster, User
 from app.security import create_token
 
 
@@ -697,3 +697,67 @@ def test_admin_course_shows_teacher_name_and_can_unassign():
     assert res2.status_code == 200
     listed2 = next(c for c in res2.json() if c['id'] == c_id)
     assert 'teacher_name' not in listed2
+
+
+def test_admin_course_unassign_specific_teacher_from_multiple():
+    reset_db()
+    client = TestClient(app)
+    token = get_admin_token()
+
+    with SessionLocal() as db:
+        teacher1 = db.scalar(select(User).where(User.email == 'teacher1@kuet.ac.bd'))
+        teacher2 = User(email='teacher2@kuet.ac.bd', name='Teacher Two', role='teacher', password_hash='x')
+        db.add(teacher2)
+        db.commit()
+        db.refresh(teacher2)
+        course = Course(
+            code='CSE 3201',
+            title='Operating Systems',
+            department='CSE',
+            semester='3-2',
+            course_type='Theory',
+            credit=3.0,
+            teacher_id=teacher1.id
+        )
+        db.add(course)
+        db.commit()
+        db.refresh(course)
+        c_id = course.id
+        t1_id = teacher1.id
+        t2_id = teacher2.id
+
+        db.add(CourseTeacher(course_id=c_id, teacher_id=t1_id, section='A', role='Instructor'))
+        db.add(CourseTeacher(course_id=c_id, teacher_id=t2_id, section='B', role='Instructor'))
+        db.commit()
+
+    # 1. Course list shows both teachers
+    res = client.get('/api/admin/courses', headers={'Authorization': f'Bearer {token}'})
+    assert res.status_code == 200
+    listed = next(c for c in res.json() if c['id'] == c_id)
+    assert 'Teacher One' in listed['teacher_name']
+    assert 'Teacher Two' in listed['teacher_name']
+    assert len(listed['assignments']) == 2
+
+    # 2. Unassign only teacher 1 by ID
+    unassign_res = client.patch(
+        f'/api/admin/courses/{c_id}/unassign',
+        json={'teacher_id': t1_id},
+        headers={'Authorization': f'Bearer {token}'}
+    )
+    assert unassign_res.status_code == 200
+    data = unassign_res.json()
+    assert 'Teacher One' not in data.get('teacher_name', '')
+    assert 'Teacher Two' in data.get('teacher_name', '')
+    assert len(data['assignments']) == 1
+
+    # 3. Unassign teacher 2 by name
+    unassign_res2 = client.patch(
+        f'/api/admin/courses/{c_id}/unassign',
+        json={'teacher_name': 'Teacher Two'},
+        headers={'Authorization': f'Bearer {token}'}
+    )
+    assert unassign_res2.status_code == 200
+    data2 = unassign_res2.json()
+    assert 'teacher_name' not in data2
+    assert len(data2['assignments']) == 0
+

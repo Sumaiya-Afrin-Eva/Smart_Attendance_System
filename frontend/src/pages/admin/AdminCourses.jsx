@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import {
   BookOpen,
@@ -15,6 +15,7 @@ import {
   UploadCloud,
   UserMinus,
   UserCheck,
+  ChevronDown,
 } from 'lucide-react'
 import api, { errorMessage, getScopedDept } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
@@ -31,9 +32,95 @@ const emptyCourseForm = {
   session: '',
 }
 
+function UnassignDropdown({ course, onUnassign, onClose, className = '' }) {
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) {
+        onClose()
+      }
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('mousedown', handleOutsideClick)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [onClose])
+
+  const assignedTeachers = useMemo(() => {
+    if (course.assignments && course.assignments.length > 0) {
+      const map = new Map()
+      for (const a of course.assignments) {
+        const name = a.teacherName
+        const id = a.teacherId
+        if (name && !map.has(id || name)) {
+          map.set(id || name, { id, name })
+        }
+      }
+      if (map.size > 0) return Array.from(map.values())
+    }
+    if (course.teacher_name) {
+      return course.teacher_name.split(',').map((name, i) => ({
+        id: course.teacher_id && i === 0 ? String(course.teacher_id) : null,
+        name: name.trim(),
+      })).filter(t => t.name)
+    }
+    return []
+  }, [course])
+
+  const count = assignedTeachers.length
+
+  return (
+    <div
+      ref={ref}
+      className={`absolute z-30 min-w-[260px] max-w-[340px] rounded-2xl border border-stone-200 bg-white p-2 shadow-xl animate-in fade-in zoom-in-95 duration-100 ${className}`}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="px-3 py-2 border-b border-stone-100">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-stone-400">Unassign Teacher</p>
+        <p className="text-xs font-semibold text-stone-800 truncate">{course.code} - {course.title}</p>
+      </div>
+
+      <div className="py-1 space-y-0.5">
+        {assignedTeachers.map((teacher, idx) => (
+          <button
+            key={teacher.id || idx}
+            type="button"
+            onClick={() => onUnassign(course.id, course.code, teacher.id, teacher.name)}
+            className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-medium text-stone-700 hover:bg-rose-50 hover:text-rose-700 transition-colors cursor-pointer group"
+          >
+            <UserMinus size={14} className="shrink-0 text-stone-400 group-hover:text-rose-600 transition-colors" />
+            <span className="truncate">Unassign <span className="font-semibold text-stone-900 group-hover:text-rose-700">{teacher.name}</span></span>
+          </button>
+        ))}
+
+        {count > 1 && (
+          <>
+            <div className="my-1 border-t border-stone-100" />
+            <button
+              type="button"
+              onClick={() => onUnassign(course.id, course.code, null, null)}
+              className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-xs font-bold text-rose-700 hover:bg-rose-100/80 transition-colors cursor-pointer"
+            >
+              <Users size={14} className="shrink-0 text-rose-600" />
+              <span>Unassign both teachers</span>
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function AdminCourses() {
   const { user } = useAuth()
   const scopedDept = getScopedDept(user)
+  const [openUnassignMenu, setOpenUnassignMenu] = useState(null)
   const [meta, setMeta] = useState({ departments: [], semesters: [] })
   const [courses, setCourses] = useState([])
   const [teachers, setTeachers] = useState([])
@@ -170,13 +257,25 @@ export default function AdminCourses() {
     }
   }
 
-  const handleUnassignTeacher = async (id, code) => {
-    if (!window.confirm(`Are you sure you want to unassign the teacher(s) from ${code}?`)) return
+  const handleUnassignTeacher = async (id, code, teacherId = null, teacherName = null) => {
+    const confirmMsg = teacherName
+      ? `Are you sure you want to unassign ${teacherName} from ${code}?`
+      : `Are you sure you want to unassign all teachers from ${code}?`
+    if (!window.confirm(confirmMsg)) return
+
+    setOpenUnassignMenu(null)
     setNotice('')
     try {
-      const { data } = await api.patch(`/admin/courses/${id}/unassign`)
-      setCourses((current) => current.map((course) => String(course.id) === String(id) ? { ...course, teacher_name: null, teacher_id: null, assignments: [] } : course))
-      setNotice(`Teacher(s) unassigned from ${code}.`)
+      const payload = {}
+      if (teacherId) payload.teacher_id = Number(teacherId)
+      if (teacherName) payload.teacher_name = teacherName
+      const { data } = await api.patch(`/admin/courses/${id}/unassign`, payload)
+      setCourses((current) => current.map((course) => String(course.id) === String(id) ? data : course))
+      setNotice(
+        teacherName
+          ? `${teacherName} unassigned from ${code}.`
+          : `Teacher(s) unassigned from ${code}.`
+      )
     } catch (error) {
       setNotice(errorMessage(error, 'Failed to unassign teacher.'))
     }
@@ -415,14 +514,24 @@ export default function AdminCourses() {
                         <span className="text-[11px] font-semibold uppercase tracking-[0.18em]">Teacher</span>
                       </div>
                       {course.teacher_name && (
-                        <button
-                          type="button"
-                          onClick={() => handleUnassignTeacher(course.id, course.code)}
-                          className="text-[11px] font-semibold text-rose-600 hover:text-rose-800 hover:underline cursor-pointer transition-colors"
-                          title={`Unassign teacher(s) from ${course.code}`}
-                        >
-                          Unassign
-                        </button>
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={() => setOpenUnassignMenu(openUnassignMenu === `top-${course.id}` ? null : `top-${course.id}`)}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-600 hover:text-rose-800 hover:underline cursor-pointer transition-colors"
+                            title={`Unassign teacher(s) from ${course.code}`}
+                          >
+                            Unassign <ChevronDown size={12} />
+                          </button>
+                          {openUnassignMenu === `top-${course.id}` && (
+                            <UnassignDropdown
+                              course={course}
+                              onUnassign={handleUnassignTeacher}
+                              onClose={() => setOpenUnassignMenu(null)}
+                              className="right-0 top-full mt-1.5"
+                            />
+                          )}
+                        </div>
                       )}
                     </div>
                     <p className="mt-2 text-sm font-semibold text-stone-900 break-words">
@@ -452,14 +561,24 @@ export default function AdminCourses() {
                     <BookOpen size={14} /> Select
                   </button>
                   {course.teacher_name ? (
-                    <button
-                      type="button"
-                      onClick={() => handleUnassignTeacher(course.id, course.code)}
-                      className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 cursor-pointer transition-colors"
-                      title={`Unassign teacher(s) from ${course.code}`}
-                    >
-                      <UserMinus size={14} /> Unassign Teacher
-                    </button>
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setOpenUnassignMenu(openUnassignMenu === `bottom-${course.id}` ? null : `bottom-${course.id}`)}
+                        className="inline-flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 cursor-pointer transition-colors"
+                        title={`Unassign teacher(s) from ${course.code}`}
+                      >
+                        <UserMinus size={14} /> Unassign Teacher <ChevronDown size={14} />
+                      </button>
+                      {openUnassignMenu === `bottom-${course.id}` && (
+                        <UnassignDropdown
+                          course={course}
+                          onUnassign={handleUnassignTeacher}
+                          onClose={() => setOpenUnassignMenu(null)}
+                          className="left-0 top-full mt-1.5"
+                        />
+                      )}
+                    </div>
                   ) : (
                     <Link
                       to={`/admin/assignments?courseId=${course.id}&dept=${course.department}&year=${course.semester?.split('-')[0] || '1'}&term=${course.semester?.split('-')[1] || '1'}&session=${course.session || '2025-2026'}`}
