@@ -557,9 +557,7 @@ export default function AdminCourses() {
                 </div>
 
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <button type="button" onClick={() => setSelectedCourseId(String(course.id))} className="inline-flex items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-700 hover:bg-stone-50 cursor-pointer">
-                    <BookOpen size={14} /> Select
-                  </button>
+
                   {course.teacher_name ? (
                     <div className="relative">
                       <button
