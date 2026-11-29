@@ -1220,6 +1220,7 @@ async def scan_kiosk(
         matched_user: User = item["user"]
         similarity: float = item["similarity"]
 
+        kiosk_session = db.get(ClassSession, session_id) if session_id is not None else None
         resolved_course, resolved_teacher_id, resolved_routine = _resolve_active_class_for_student(db, matched_user, now_dt)
         class_session = None
         current_course = None
@@ -1228,6 +1229,10 @@ async def scan_kiosk(
                 db, resolved_course, resolved_teacher_id, now_dt, student_count=1, routine=resolved_routine
             )
             current_course = resolved_course
+        elif kiosk_session is not None and kiosk_session.course is not None:
+            class_session = kiosk_session
+            current_course = kiosk_session.course
+            resolved_teacher_id = kiosk_session.teacher_id
         else:
             current_course = db.scalar(
                 select(Course)
@@ -1314,7 +1319,8 @@ async def scan_kiosk(
         names_str = ", ".join(s["name"] for s in students_output)
         msg = f"Attendance recorded for {total_count} students: {names_str}" if any_new_marked else f"{total_count} faces recognized (attendance already marked)."
     else:
-        msg = "Attendance was already marked for this class." if primary_student["already_marked"] else "Face Recognized"
+        c_code = primary_course.code if primary_course else "this class"
+        msg = f"Attendance was already marked for {c_code}." if primary_student["already_marked"] else f"Face Recognized ({c_code})"
 
     return {
         "matched": True,
