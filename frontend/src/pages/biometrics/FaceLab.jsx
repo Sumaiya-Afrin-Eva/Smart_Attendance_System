@@ -358,9 +358,15 @@ export default function FaceLab({ kioskId = 'CSE' }) {
         }, 1000)
         scheduleReset(QR_RESET_DELAY_MS)
       }
-    } catch {
-      setBanner({ text: 'Face Not Recognized. Please show your QR code', ok: false })
-      speak('Face Not Recognized. Please show your QR code')
+    } catch (err) {
+      const isNetworkErr = !err?.response || err?.code === 'ERR_NETWORK' || err?.response?.status >= 500
+      const errMsg = isNetworkErr 
+        ? 'Server / Tunnel unreachable. Check connection.'
+        : 'Face Not Recognized. Please show your QR code'
+      setBanner({ text: errMsg, ok: false })
+      if (!isNetworkErr) {
+        speak('Face Not Recognized. Please show your QR code')
+      }
       setPhase('qr')
       autoScanRef.current = false
       setQrSecondsLeft(5)
